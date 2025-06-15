@@ -7,8 +7,7 @@ const PORT = process.env.PORT || 3000; // Render использует PORT
 
 // === Настройки ===
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwufpfsXKLzGfNE7QqzzOMlnOi2-7w7FdrkwFgO2-xKDXd44QOjxEmbGZdD0bOSEyfd/exec';
-
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbx8cdJcn9bxQSR2VB4CuOZKSFI8lhnci4J0HMC_S7-G8DeeORD2WiBksFDFdsUb8jg/exec';
 app.use(bodyParser.json());
 
 app.post('/webhook', async (req, res) => {
