@@ -3,17 +3,18 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Render использует PORT
+const PORT = process.env.PORT || 3000;
 
-// === Настройки ===
+// === Конфигурация ===
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzPVuBpwsUA42TuapvbJgnAf1_Yf25f6ZSPD17DeBnr67xu7KhiWaGVCVBskuikhfIn/exec';
+
 app.use(bodyParser.json());
 
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
-  // === Обработка нажатий на кнопки ===
+  // Обработка callback_query — нажатия на inline-кнопки
   if (body.callback_query) {
     const callbackQuery = body.callback_query;
     const callbackData = callbackQuery.data;
@@ -21,14 +22,14 @@ app.post('/webhook', async (req, res) => {
     const chatId = callbackQuery.message.chat.id;
 
     try {
-      // Ответ на нажатие
+      // Ответ на callback, чтобы убрать часики в Telegram
       await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
         callback_query_id: callbackQuery.id,
         text: '✅ Выбор зарегистрирован',
         show_alert: false
       });
 
-      // Удаление кнопок
+      // Убираем кнопки после нажатия
       await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
         chat_id: chatId,
         message_id: messageId,
@@ -38,48 +39,54 @@ app.post('/webhook', async (req, res) => {
       console.error('Ошибка при ответе или удалении кнопок:', err.message);
     }
 
-    // Определение действия
+    // Определяем, что нажали и какую строку нужно обновить
     let responseText = '';
     let row = null;
 
     if (callbackData.startsWith('accept_')) {
       responseText = 'Принято в работу';
-      row = parseInt(callbackData.replace('accept_', ''), 10);
+      row = parseInt(callbackData.split('_')[1], 10);
     } else if (callbackData.startsWith('cancel_')) {
       responseText = 'Отмена';
-      row = parseInt(callbackData.replace('cancel_', ''), 10);
+      row = parseInt(callbackData.split('_')[1], 10);
     } else if (callbackData.startsWith('done_')) {
       responseText = 'Выполнено';
-      row = parseInt(callbackData.replace('done_', ''), 10);
+      row = parseInt(callbackData.split('_')[1], 10);
     } else if (callbackData.startsWith('waiting_')) {
       responseText = 'Ожидает поставки комплектующих';
-      row = parseInt(callbackData.replace('waiting_', ''), 10);
+      row = parseInt(callbackData.split('_')[1], 10);
     }
 
-    try {
-      if (row) {
+    if (row) {
+      try {
+        // Отправляем в Google Apps Script
         await axios.post(WEB_APP_URL, {
           row: row,
           response: responseText
         });
 
         console.log(`📩 Ответ "${responseText}" отправлен для заявки #${row}`);
-      } else {
+      } catch (error) {
+        console.error('❌ Ошибка при отправке в Web App:', error.message);
+      }
+    } else {
+      // На всякий случай, если нет row, отправляем по message_id
+      try {
         await axios.post(WEB_APP_URL, {
           message_id: messageId,
           response: responseText
         });
 
         console.log(`📩 Ответ "${responseText}" отправлен для message_id: ${messageId}`);
+      } catch (error) {
+        console.error('❌ Ошибка при отправке в Web App (message_id):', error.message);
       }
-    } catch (error) {
-      console.error('❌ Ошибка при отправке в Web App:', error.message);
     }
 
     return res.sendStatus(200);
   }
 
-  // === Обработка обычных сообщений ===
+  // Обработка обычных сообщений, например команда /13
   if (body.message) {
     const message = body.message;
     const from = message.from.first_name || message.from.username || 'неизвестный';
@@ -88,7 +95,7 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`📩 Новое сообщение от ${from}: ${text}`);
 
-    // Обработка команды типа /13
+    // Команда вида /13 — показываем кнопки
     const match = text.match(/^\/(\d{1,4})$/);
     if (match) {
       const row = parseInt(match[1], 10);
