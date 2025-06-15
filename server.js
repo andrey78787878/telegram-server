@@ -26,6 +26,18 @@ app.post('/webhook', async (req, res) => {
     let responseText = '';
     let row = null;
 
+    const protectedActions = ['accept_', 'cancel_', 'done_', 'working_', 'waiting_'];
+    const needsProtection = protectedActions.some(action => callbackData.startsWith(action));
+
+    if (needsProtection && !allowedUsernames.includes(username)) {
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+        callback_query_id: callbackQuery.id,
+        text: '⛔ У вас нет доступа к этой кнопке',
+        show_alert: true
+      });
+      return res.sendStatus(200);
+    }
+
     if (callbackData.startsWith('accept_')) {
       responseText = 'Принято в работу';
       row = parseInt(callbackData.split('_')[1], 10);
@@ -62,16 +74,6 @@ app.post('/webhook', async (req, res) => {
         console.error('Ошибка при повторном показе кнопок:', err.message);
       }
 
-      return res.sendStatus(200);
-    }
-
-    // Проверка прав
-    if ((callbackData.startsWith('accept_') || callbackData.startsWith('cancel_') || callbackData.startsWith('done_')) && !allowedUsernames.includes(username)) {
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-        callback_query_id: callbackQuery.id,
-        text: '⛔ У вас нет доступа к этой кнопке',
-        show_alert: true
-      });
       return res.sendStatus(200);
     }
 
