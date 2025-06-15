@@ -8,6 +8,8 @@ const PORT = process.env.PORT || 3000;
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzPVuBpwsUA42TuapvbJgnAf1_Yf25f6ZSPD17DeBnr67xu7KhiWaGVCVBskuikhfIn/exec';
 
+const allowedUsernames = ['Andrey Ткасh', '@Olim19', '@Andrey_Tkach_MB', '@AzzeR133'];
+
 app.use(bodyParser.json());
 
 app.post('/webhook', async (req, res) => {
@@ -18,6 +20,8 @@ app.post('/webhook', async (req, res) => {
     const callbackData = callbackQuery.data;
     const messageId = callbackQuery.message.message_id;
     const chatId = callbackQuery.message.chat.id;
+    const user = callbackQuery.from;
+    const username = user.username ? `@${user.username}` : user.first_name;
 
     let responseText = '';
     let row = null;
@@ -61,6 +65,16 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
+    // Проверка прав
+    if ((callbackData.startsWith('accept_') || callbackData.startsWith('cancel_') || callbackData.startsWith('done_')) && !allowedUsernames.includes(username)) {
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+        callback_query_id: callbackQuery.id,
+        text: '⛔ У вас нет доступа к этой кнопке',
+        show_alert: true
+      });
+      return res.sendStatus(200);
+    }
+
     try {
       await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
         callback_query_id: callbackQuery.id,
@@ -82,7 +96,6 @@ app.post('/webhook', async (req, res) => {
         console.error('❌ Ошибка при отправке в Web App:', error.message);
       }
 
-      // Меняем кнопку в зависимости от ответа
       let newReplyMarkup = {};
       if (responseText === 'Принято в работу') {
         newReplyMarkup = {
