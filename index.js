@@ -3,7 +3,7 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000; // Render использует переменную PORT
 
 // === Настройки ===
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
