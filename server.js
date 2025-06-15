@@ -14,79 +14,75 @@ app.use(bodyParser.json());
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
-  // Обработка callback_query — нажатия на inline-кнопки
   if (body.callback_query) {
     const callbackQuery = body.callback_query;
     const callbackData = callbackQuery.data;
     const messageId = callbackQuery.message.message_id;
     const chatId = callbackQuery.message.chat.id;
 
-    try {
-      // Ответ на callback, чтобы убрать часики в Telegram
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-        callback_query_id: callbackQuery.id,
-        text: '✅ Выбор зарегистрирован',
-        show_alert: false
-      });
-
-      // Убираем кнопки после нажатия
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: {}
-      });
-    } catch (err) {
-      console.error('Ошибка при ответе или удалении кнопок:', err.message);
-    }
-
-    // Определяем, что нажали и какую строку нужно обновить
     let responseText = '';
     let row = null;
+    let newMarkup = {};
 
     if (callbackData.startsWith('accept_')) {
       responseText = 'Принято в работу';
       row = parseInt(callbackData.split('_')[1], 10);
+      newMarkup = {
+        inline_keyboard: [
+          [{ text: '🟢 В работе', callback_data: 'inprogress' }]
+        ]
+      };
+    } else if (callbackData.startsWith('waiting_')) {
+      responseText = 'Ожидает поставки комплектующих';
+      row = parseInt(callbackData.split('_')[1], 10);
+      newMarkup = {
+        inline_keyboard: [
+          [{ text: '🕐 Ожидает поставки', callback_data: 'waiting_dummy' }]
+        ]
+      };
     } else if (callbackData.startsWith('cancel_')) {
       responseText = 'Отмена';
       row = parseInt(callbackData.split('_')[1], 10);
     } else if (callbackData.startsWith('done_')) {
       responseText = 'Выполнено';
       row = parseInt(callbackData.split('_')[1], 10);
-    } else if (callbackData.startsWith('waiting_')) {
-      responseText = 'Ожидает поставки комплектующих';
-      row = parseInt(callbackData.split('_')[1], 10);
     }
 
-    if (row) {
-      try {
-        // Отправляем в Google Apps Script
-        await axios.post(WEB_APP_URL, {
-          row: row,
-          response: responseText
-        });
+    try {
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+        callback_query_id: callbackQuery.id,
+        text: '✅ Выбор зарегистрирован',
+        show_alert: false
+      });
 
-        console.log(`📩 Ответ "${responseText}" отправлен для заявки #${row}`);
-      } catch (error) {
-        console.error('❌ Ошибка при отправке в Web App:', error.message);
-      }
-    } else {
-      // На всякий случай, если нет row, отправляем по message_id
-      try {
-        await axios.post(WEB_APP_URL, {
+      if (responseText === 'Принято в работу' || responseText === 'Ожидает поставки комплектующих') {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
+          chat_id: chatId,
           message_id: messageId,
-          response: responseText
+          reply_markup: JSON.stringify(newMarkup)
         });
-
-        console.log(`📩 Ответ "${responseText}" отправлен для message_id: ${messageId}`);
-      } catch (error) {
-        console.error('❌ Ошибка при отправке в Web App (message_id):', error.message);
+      } else {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: {}
+        });
       }
+
+      if (row) {
+        await axios.post(WEB_APP_URL, { row, response: responseText });
+        console.log(`📩 Ответ "${responseText}" отправлен для заявки #${row}`);
+      } else {
+        await axios.post(WEB_APP_URL, { message_id: messageId, response: responseText });
+        console.log(`📩 Ответ "${responseText}" отправлен для message_id: ${messageId}`);
+      }
+    } catch (error) {
+      console.error('❌ Ошибка:', error.message);
     }
 
     return res.sendStatus(200);
   }
 
-  // Обработка обычных сообщений, например команда /13
   if (body.message) {
     const message = body.message;
     const from = message.from.first_name || message.from.username || 'неизвестный';
@@ -95,7 +91,6 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`📩 Новое сообщение от ${from}: ${text}`);
 
-    // Команда вида /13 — показываем кнопки
     const match = text.match(/^\/(\d{1,4})$/);
     if (match) {
       const row = parseInt(match[1], 10);
