@@ -3,7 +3,7 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000; // Render использует PORT
 
 // === Настройки ===
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
@@ -21,15 +21,24 @@ app.post('/webhook', async (req, res) => {
     const messageId = callbackQuery.message.message_id;
 
     try {
+      // Ответ на нажатие
       await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
         callback_query_id: callbackQuery.id,
         text: '✅ Выбор зарегистрирован',
         show_alert: false
       });
+
+      // Удаление кнопок
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
+        chat_id: callbackQuery.message.chat.id,
+        message_id: messageId,
+        reply_markup: {} // пустой объект = удалить клавиатуру
+      });
     } catch (err) {
-      console.error('Ошибка отправки callbackQuery:', err.message);
+      console.error('Ошибка при ответе или удалении кнопок:', err.message);
     }
 
+    // Определение действия
     let responseText = '';
     if (callbackData.startsWith('accept_')) {
       responseText = 'Принято в работу';
