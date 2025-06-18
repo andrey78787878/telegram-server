@@ -1,4 +1,4 @@
-const express = require('express');
+""const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const cron = require('node-cron');
@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycby3Vs4zvVCMZbHgDmjelfkU3Orpbv5rpW-NGHqUA0LfMe1a-uePbCOM00kpEBJ1CI6s/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyn3vj1h2RnCMG0RLiKe-Qzr2p5t4rhiyVrzsZalRA-72F_vtqBm-eLkFHjVqUmGiir/exec';
 
 const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB'];
 const photoRequests = new Map();
@@ -126,11 +126,20 @@ app.post('/webhook', async (req, res) => {
 
       sumRequests.set(chatId, { row, messageId });
 
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      const sumMsg = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         chat_id: chatId,
         text: `📩 Фото получено для заявки #${row}. Пожалуйста, укажите сумму работ в ответ на это сообщение.`,
         reply_to_message_id: messageId
       });
+
+      const sumMsgId = sumMsg.data.result.message_id;
+      setTimeout(() => {
+        axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
+          chat_id: chatId,
+          message_id: sumMsgId,
+          text: '📩 Фото успешно получено. (свернуто)',
+        });
+      }, 60000);
 
       photoRequests.delete(chatId);
     } catch (err) {
@@ -173,4 +182,3 @@ cron.schedule('0 9 * * *', async () => {
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
 });
-
