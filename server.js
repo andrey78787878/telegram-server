@@ -14,6 +14,7 @@ const photoRequests = new Map();
 const sumRequests = new Map();
 const photoMessageMap = new Map();
 const finalMessageMap = new Map();
+const tempMessages = new Map();
 
 app.use(bodyParser.json());
 
@@ -51,11 +52,12 @@ app.post('/webhook', async (req, res) => {
       responseText = 'Выполнено';
       row = parseInt(callbackData.split('_')[1], 10);
       photoRequests.set(chatId, { row, messageId });
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      const requestMsg = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         chat_id: chatId,
         text: '📷 Пожалуйста, отправьте фото как изображение, не как файл.',
         reply_to_message_id: messageId
       });
+      tempMessages.set(chatId, [requestMsg.data.result.message_id]);
     } else if (callbackData.startsWith('waiting_')) {
       responseText = 'Ожидает поставки комплектующих';
       row = parseInt(callbackData.split('_')[1], 10);
@@ -130,10 +132,12 @@ app.post('/webhook', async (req, res) => {
       photoRequests.delete(chatId);
       photoMessageMap.set(chatId, photoMessageId);
 
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      const sumMsg = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         chat_id: chatId,
         text: `📩 Фото получено для заявки #${row}. Пожалуйста, введите сумму работ в сообщении (например, 230000).`
       });
+
+      tempMessages.set(chatId, [...(tempMessages.get(chatId) || []), sumMsg.data.result.message_id]);
 
       setTimeout(async () => {
         try {
@@ -171,6 +175,19 @@ app.post('/webhook', async (req, res) => {
     const finalMsgId = finalMsg.data.result.message_id;
     finalMessageMap.set(chatId, { finalMsgId, row, sum, fileUrl, executor, messageId });
     sumRequests.delete(chatId);
+
+    const tempMsgIds = tempMessages.get(chatId) || [];
+    for (const msgId of tempMsgIds) {
+      try {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
+          chat_id: chatId,
+          message_id: msgId
+        });
+      } catch (e) {
+        console.warn('Ошибка удаления временного сообщения:', e.message);
+      }
+    }
+    tempMessages.delete(chatId);
 
     setTimeout(async () => {
       try {
