@@ -7,12 +7,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzgFfmcQ71dzuSa70pyyA0umzTDxBT7YY2eUUfHG8mF2PvlAVeEmeEVObfTEKf8gId1/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyn3vj1h2RnCMG0RLiKe-Qzr2p5t4rhiyVrzsZalRA-72F_vtqBm-eLkFHjVqUmGiir/exec';
 
 const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB', '@Olim19', '@AzzeR133'];
 const photoRequests = new Map();
 const sumRequests = new Map();
 const photoMessageMap = new Map();
+const finalMessageMap = new Map();
 
 app.use(bodyParser.json());
 
@@ -125,7 +126,7 @@ app.post('/webhook', async (req, res) => {
         username: username
       });
 
-      sumRequests.set(chatId, { row, messageId, fileUrl });
+      sumRequests.set(chatId, { row, messageId, fileUrl, executor: username });
       photoRequests.delete(chatId);
       photoMessageMap.set(chatId, photoMessageId);
 
@@ -155,25 +156,45 @@ app.post('/webhook', async (req, res) => {
       console.error('Ошибка при обработке фото:', err.message);
     }
   } else if (body.message && sumRequests.has(body.message.chat.id)) {
-    const { chat: { id: chatId }, text, from } = body.message;
-    const { row, messageId } = sumRequests.get(chatId);
-    const username = from.username ? `@${from.username}` : from.first_name;
-
+    const { chat: { id: chatId }, text, from, message_id: sumMsgId } = body.message;
+    const { row, messageId, fileUrl, executor } = sumRequests.get(chatId);
     const sum = parseInt(text.replace(/\D/g, '')) || 0;
 
-    await axios.post(WEB_APP_URL, {
-      row,
-      sum,
-      username
-    });
+    await axios.post(WEB_APP_URL, { row, sum });
 
-    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    const finalMsg = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       chat_id: chatId,
-      text: `✅ Заявка #${row} закрыта.\n💰 Сумма работ: ${sum} сум\n👤 Исполнитель: ${username}`,
+      text: `✅ Заявка #${row} закрыта.\n💰 Сумма работ: ${sum} сум\n👤 Исполнитель: ${executor}`,
       reply_to_message_id: messageId
     });
 
+    const finalMsgId = finalMsg.data.result.message_id;
+    finalMessageMap.set(chatId, { finalMsgId, row, sum, fileUrl, executor, messageId });
     sumRequests.delete(chatId);
+
+    setTimeout(async () => {
+      try {
+        const data = finalMessageMap.get(chatId);
+        if (!data) return;
+
+        const { finalMsgId, row, sum, fileUrl, executor, messageId } = data;
+
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
+          chat_id: chatId,
+          message_id: finalMsgId
+        });
+
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
+          chat_id: chatId,
+          message_id: messageId,
+          text: `📌 Заявка #${row} закрыта.\n📎 Фото: ${fileUrl}\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено`
+        });
+
+        finalMessageMap.delete(chatId);
+      } catch (err) {
+        console.error('Ошибка при удалении финального сообщения:', err.message);
+      }
+    }, 15 * 60 * 1000);
   }
 
   res.sendStatus(200);
