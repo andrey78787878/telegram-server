@@ -1,4 +1,4 @@
-""const express = require('express');
+const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
 const cron = require('node-cron');
@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyn3vj1h2RnCMG0RLiKe-Qzr2p5t4rhiyVrzsZalRA-72F_vtqBm-eLkFHjVqUmGiir/exec';
 
-const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB'];
+const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB', '@Olim19', '@AzzeR133'];
 const photoRequests = new Map();
 const sumRequests = new Map();
 
@@ -172,7 +172,10 @@ app.post('/webhook', async (req, res) => {
 
 cron.schedule('0 9 * * *', async () => {
   try {
-    await axios.post(WEB_APP_URL, { action: 'checkReminders' });
+    await axios.post(WEB_APP_URL, {
+      action: 'checkReminders',
+      mention: '@Olim19 @AzzeR133'
+    });
     console.log('🔔 Утренние напоминания отправлены');
   } catch (err) {
     console.error('Ошибка при отправке напоминаний:', err.message);
