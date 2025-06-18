@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzPVuBpwsUA42TuapvbJgnAf1_Yf25f6ZSPD17DeBnr67xu7KhiWaGVCVBskuikhfIn/exec';
 
-const allowedUsernames = ['Andrey Ткасh', '@Olim19', '@Andrey_Tkach_MB', '@AzzeR133'];
+const allowedUsernames = ['Andrey Ткасh', '', '@Andrey_Tkach_MB', ];
 
 app.use(bodyParser.json());
 
