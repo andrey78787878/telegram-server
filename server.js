@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbw1FIUrFtl0oCl3TbYcj_msDtIIjWVaVjGhTLXdVJj6SCwkDPNcS_PncVS-GBwcxlOV/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyn3vj1h2RnCMG0RLiKe-Qzr2p5t4rhiyVrzsZalRA-72F_vtqBm-eLkFHjVqUmGiir/exec';
 
 const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB'];
 const photoRequests = new Map();
@@ -43,19 +43,30 @@ app.post('/webhook', async (req, res) => {
     } else if (callbackData.startsWith('cancel_')) {
       responseText = 'Отмена';
       row = parseInt(callbackData.split('_')[1], 10);
+    } else if (callbackData.startsWith('waiting_')) {
+      responseText = 'Ожидает поставки комплектующих';
+      row = parseInt(callbackData.split('_')[1], 10);
     } else if (callbackData.startsWith('done_')) {
-      responseText = 'Выполнено';
       row = parseInt(callbackData.split('_')[1], 10);
 
-      // Запрос фото
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+        callback_query_id: callbackId,
+        text: '✅ Выбор зарегистрирован'
+      });
+
+      await axios.post(WEB_APP_URL, {
+        row,
+        response: 'Выполнено'
+      });
+
       photoRequests.set(chatId, { row, messageId });
+
       await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         chat_id: chatId,
         text: '📷 Пожалуйста, отправьте фото как изображение, не как файл.'
       });
-    } else if (callbackData.startsWith('waiting_')) {
-      responseText = 'Ожидает поставки комплектующих';
-      row = parseInt(callbackData.split('_')[1], 10);
+
+      return res.sendStatus(200);
     } else if (callbackData.startsWith('working_')) {
       row = parseInt(callbackData.split('_')[1], 10);
       const keyboard = {
@@ -105,10 +116,10 @@ app.post('/webhook', async (req, res) => {
   }
 
   if (body.message && body.message.photo && photoRequests.has(body.message.chat.id)) {
-    const { chat: { id: chatId }, photo, message_id } = body.message;
+    const { chat: { id: chatId }, photo } = body.message;
     const largestPhoto = photo[photo.length - 1];
     const fileId = largestPhoto.file_id;
-    const { row, messageId } = photoRequests.get(chatId);
+    const { row } = photoRequests.get(chatId);
 
     try {
       const fileRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
