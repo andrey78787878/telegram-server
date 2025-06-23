@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZOpnwn8fzbTb0rYyK8HWKV45-Lih7MKGhPtYvn24UXgdPWLQTHxY_1nbSwOwcBH72/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxas3twVhJ4mFYmGyFdtX5v74tWMUlJMGxBJUI8rrtzGsXbEKXyZK3yCy51mwtxdFAK/exec';
 const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB', '@Olim19', '@AzzeR133'];
 
 const photoRequests = new Map();
@@ -50,7 +50,9 @@ app.post('/webhook', async (req, res) => {
         text: '📷 Пожалуйста, отправьте фото как изображение, не как файл.',
         reply_to_message_id: msgId
       });
-      tempMessages.set(chatId, [r.data.result.message_id]);
+      const temp = tempMessages.get(chatId) || [];
+      temp.push(r.data.result.message_id);
+      tempMessages.set(chatId, temp);
     } else if (callbackData.startsWith('waiting_')) {
       responseText = 'Ожидает поставки комплектующих';
       row = +callbackData.split('_')[1];
@@ -133,6 +135,7 @@ app.post('/webhook', async (req, res) => {
   if (body.message && sumRequests.has(body.message.chat.id)) {
     const chatId = body.message.chat.id;
     const text = body.message.text;
+    const userMsgId = body.message.message_id;
     const { row, msgId, fileUrl, username } = sumRequests.get(chatId);
     const sum = parseInt(text.replace(/\D/g, '')) || 0;
 
@@ -158,6 +161,7 @@ app.post('/webhook', async (req, res) => {
     });
 
     const temp = tempMessages.get(chatId) || [];
+    temp.push(userMsgId);
     for (const mid of temp) {
       setTimeout(() => {
         axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
@@ -212,5 +216,3 @@ cron.schedule('0 4 * * *', async () => {
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
 });
-
-
