@@ -90,6 +90,12 @@ app.post('/webhook', async (req, res) => {
           chat_id, message_id:data.finalId,
           text: `📌 Заявка #${data.row} закрыта.\n📎 Фото: ${data.fileUrl}\n💰 Сумма: ${data.sum} сум\n👤 Исполнитель: ${data.username}\n✅ Статус: Выполнено`
         });
+
+        // Обновим колонку Q с message_id в Google Sheet
+        await axios.post(WEB_APP_URL, {
+          row: data.row,
+          message_id: data.finalId
+        });
       } catch(e){ console.error(e.message); }
     }, 60000);
 
