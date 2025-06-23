@@ -122,7 +122,7 @@ app.post('/webhook', async (req, res) => {
       chat_id: chatId,
       text: `📩 Фото получено для заявки #${row}. Пожалуйста, введите сумму работ.`
     });
-    tempMessages.get(chatId)?.push(sumReq.data.result.message_id) || tempMessages.set(chatId, [sumReq.data.result.message_id]);
+    tempMessages.set(chatId, [body.message.message_id, sumReq.data.result.message_id]);
 
     return res.sendStatus(200);
   }
@@ -147,6 +147,13 @@ app.post('/webhook', async (req, res) => {
       text: `📌 Заявка #${row} закрыта.\n📎 Фото: ${fileUrl}\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
     });
 
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      chat_id: chatId,
+      reply_to_message_id: msgId,
+      parse_mode: 'HTML',
+      text: `✅ Заявка #${row} закрыта.\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
+    });
+
     const temp = tempMessages.get(chatId) || [];
     for (const mid of temp) {
       setTimeout(() => {
@@ -156,6 +163,7 @@ app.post('/webhook', async (req, res) => {
         });
       }, 60000);
     }
+
     tempMessages.delete(chatId);
     sumRequests.delete(chatId);
     return res.sendStatus(200);
@@ -201,3 +209,4 @@ cron.schedule('0 4 * * *', async () => {
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
 });
+
