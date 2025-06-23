@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxGVkikmhC9pVoP5QE_QCRm-t5SsE0LTli89xt0csx8lacsLH1NalSzMmMYpVT3exMm/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZOpnwn8fzbTb0rYyK8HWKV45-Lih7MKGhPtYvn24UXgdPWLQTHxY_1nbSwOwcBH72/exec';
 const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB', '@Olim19', '@AzzeR133'];
 
 const photoRequests = new Map();
@@ -19,7 +19,6 @@ app.use(bodyParser.json());
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
-  // 1. Обработка callback-кнопок
   if (body.callback_query) {
     const { data: callbackData, message, from, id: callbackId } = body.callback_query;
     const chatId = message.chat.id;
@@ -103,7 +102,6 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 2. Фото от пользователя
   if (body.message && body.message.photo && photoRequests.has(body.message.chat.id)) {
     const chatId = body.message.chat.id;
     const { row, msgId } = photoRequests.get(chatId);
@@ -129,7 +127,6 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 3. Сумма от пользователя
   if (body.message && sumRequests.has(body.message.chat.id)) {
     const chatId = body.message.chat.id;
     const text = body.message.text;
@@ -164,7 +161,6 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 4. Сервисные сообщения (текст, фото и т.п.)
   if (body.message && body.message.chat && body.message.message_id) {
     const chatId = body.message.chat.id;
     const messageId = body.message.message_id;
@@ -183,9 +179,19 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-cron.schedule('0 5 * * *', async () => {
+cron.schedule('0 4 * * *', async () => {
   try {
-    await axios.post(WEB_APP_URL, { action: 'checkReminders' });
+    const res = await axios.post(WEB_APP_URL, { action: 'checkReminders' });
+    const reminders = res.data.reminders || [];
+    for (const rem of reminders) {
+      const { chat_id, message_id, text } = rem;
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        chat_id,
+        text,
+        reply_to_message_id: message_id,
+        parse_mode: 'HTML'
+      });
+    }
     console.log('🔔 Утренние напоминания отправлены');
   } catch (err) {
     console.error('Ошибка напоминаний:', err.message);
