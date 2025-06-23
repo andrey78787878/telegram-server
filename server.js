@@ -122,7 +122,10 @@ app.post('/webhook', async (req, res) => {
       chat_id: chatId,
       text: `📩 Фото получено для заявки #${row}. Пожалуйста, введите сумму работ.`
     });
-    tempMessages.set(chatId, [body.message.message_id, sumReq.data.result.message_id]);
+
+    const temp = tempMessages.get(chatId) || [];
+    temp.push(body.message.message_id, sumReq.data.result.message_id);
+    tempMessages.set(chatId, temp);
 
     return res.sendStatus(200);
   }
@@ -160,7 +163,7 @@ app.post('/webhook', async (req, res) => {
         axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
           chat_id: chatId,
           message_id: mid
-        });
+        }).catch(err => console.error('Ошибка удаления сообщения:', err.message));
       }, 60000);
     }
 
@@ -209,4 +212,5 @@ cron.schedule('0 4 * * *', async () => {
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
 });
+
 
