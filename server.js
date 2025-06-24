@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzM2qk1iTx0PQnFJBg9LyX4DbUb_HEAUdxhko-4OxiWfzRGEpI5Vy0RwOM6Uzj7ONY/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxO5u1GA7PPX6Kw2ufwVcOHot1FOPSYznFS9jWmvqwPfhdpFFkWH_9ASjlBue24Pgw-/exec';
 const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB', '@Olim19', '@AzzeR133'];
 
 const photoRequests = new Map();
