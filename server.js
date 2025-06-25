@@ -17,183 +17,165 @@ const tempMessages = new Map();
 app.use(bodyParser.json());
 
 app.post('/webhook', async (req, res) => {
+  res.sendStatus(200); // Telegram должен сразу получить 200
   const body = req.body;
 
-  if (body.callback_query) {
-    const { data: callbackData, message, from, id: callbackId } = body.callback_query;
-    const chatId = message.chat.id;
-    const msgId = message.message_id;
-    const username = from.username ? `@${from.username}` : from.first_name;
-    let row, responseText;
+  try {
+    // 1. Обработка нажатий на кнопки
+    if (body.callback_query) {
+      const { data: callbackData, message, from, id: callbackId } = body.callback_query;
+      const chatId = message.chat.id;
+      const msgId = message.message_id;
+      const username = from.username ? `@${from.username}` : from.first_name;
+      let row, responseText;
 
-    if (!allowedUsernames.includes(username) && /^(accept_|cancel_|done_|working_|waiting_)/.test(callbackData)) {
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-        callback_query_id: callbackId,
-        text: '⛔ У вас нет доступа к этой кнопке',
-        show_alert: true
-      });
-      return res.sendStatus(200);
-    }
-
-    if (callbackData.startsWith('accept_')) {
-      responseText = 'Принято в работу';
-      row = +callbackData.split('_')[1];
-    } else if (callbackData.startsWith('cancel_')) {
-      responseText = 'Отмена';
-      row = +callbackData.split('_')[1];
-    } else if (callbackData.startsWith('done_')) {
-      responseText = 'Выполнено';
-      row = +callbackData.split('_')[1];
-      photoRequests.set(chatId, { row, msgId });
-      const r = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-        chat_id: chatId,
-        text: '📷 Пожалуйста, отправьте фото как изображение, не как файл.',
-        reply_to_message_id: msgId
-      });
-      const temp = tempMessages.get(chatId) || [];
-      temp.push(r.data.result.message_id);
-      tempMessages.set(chatId, temp);
-    } else if (callbackData.startsWith('waiting_')) {
-      responseText = 'Ожидает поставки комплектующих';
-      row = +callbackData.split('_')[1];
-    } else if (callbackData.startsWith('working_')) {
-      row = +callbackData.split('_')[1];
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '✅ Выполнено', callback_data: `done_${row}` },
-            { text: '❌ Отменено', callback_data: `cancel_${row}` }
-          ],
-          [
-            { text: '⏳ Ожидает поставки комплектующих', callback_data: `waiting_${row}` }
-          ]
-        ]
-      };
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
-        chat_id: chatId,
-        message_id: msgId,
-        reply_markup: JSON.stringify(keyboard)
-      });
-      return res.sendStatus(200);
-    }
-
-    if (responseText && row) {
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-        callback_query_id: callbackId,
-        text: '✅ Выбор зарегистрирован'
-      });
-
-      await axios.post(WEB_APP_URL, { row, response: responseText, message_id: msgId });
-
-      let newMarkup = {};
-      if (responseText === 'Принято в работу') {
-        newMarkup = { inline_keyboard: [[{ text: '🟢 В работе', callback_data: `working_${row}` }]] };
-      } else if (responseText === 'Ожидает поставки комплектующих') {
-        newMarkup = { inline_keyboard: [[{ text: '⏳ Ожидает поставки комплектующих', callback_data: `working_${row}` }]] };
+      if (!allowedUsernames.includes(username) && /^(accept_|cancel_|done_|working_|waiting_)/.test(callbackData)) {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+          callback_query_id: callbackId,
+          text: '⛔ У вас нет доступа к этой кнопке',
+          show_alert: true
+        });
+        return;
       }
 
-      if (Object.keys(newMarkup).length) {
+      if (callbackData.startsWith('accept_')) {
+        responseText = 'Принято в работу';
+        row = +callbackData.split('_')[1];
+      } else if (callbackData.startsWith('cancel_')) {
+        responseText = 'Отмена';
+        row = +callbackData.split('_')[1];
+      } else if (callbackData.startsWith('done_')) {
+        responseText = 'Выполнено';
+        row = +callbackData.split('_')[1];
+        photoRequests.set(chatId, { row, msgId });
+        const reply = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+          chat_id: chatId,
+          text: '📷 Пожалуйста, отправьте фото как изображение, не как файл.',
+          reply_to_message_id: msgId
+        });
+        tempMessages.set(chatId, [reply.data.result.message_id]);
+      } else if (callbackData.startsWith('waiting_')) {
+        responseText = 'Ожидает поставки комплектующих';
+        row = +callbackData.split('_')[1];
+      } else if (callbackData.startsWith('working_')) {
+        row = +callbackData.split('_')[1];
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: '✅ Выполнено', callback_data: `done_${row}` },
+              { text: '❌ Отменено', callback_data: `cancel_${row}` }
+            ],
+            [
+              { text: '⏳ Ожидает поставки комплектующих', callback_data: `waiting_${row}` }
+            ]
+          ]
+        };
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
           chat_id: chatId,
           message_id: msgId,
-          reply_markup: JSON.stringify(newMarkup)
+          reply_markup: JSON.stringify(keyboard)
         });
+        return;
+      }
+
+      if (responseText && row) {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+          callback_query_id: callbackId,
+          text: '✅ Выбор зарегистрирован'
+        });
+
+        await axios.post(WEB_APP_URL, { row, response: responseText, message_id: msgId });
+
+        let newMarkup = {};
+        if (responseText === 'Принято в работу') {
+          newMarkup = { inline_keyboard: [[{ text: '🟢 В работе', callback_data: `working_${row}` }]] };
+        } else if (responseText === 'Ожидает поставки комплектующих') {
+          newMarkup = { inline_keyboard: [[{ text: '⏳ Ожидает поставки комплектующих', callback_data: `working_${row}` }]] };
+        }
+
+        if (Object.keys(newMarkup).length) {
+          await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
+            chat_id: chatId,
+            message_id: msgId,
+            reply_markup: JSON.stringify(newMarkup)
+          });
+        }
       }
     }
 
-    return res.sendStatus(200);
-  }
+    // 2. Фото от пользователя
+    if (body.message && body.message.photo && photoRequests.has(body.message.chat.id)) {
+      const chatId = body.message.chat.id;
+      const { row, msgId } = photoRequests.get(chatId);
+      const fileId = body.message.photo.pop().file_id;
+      const user = body.message.from;
+      const username = user.username ? `@${user.username}` : user.first_name;
 
-  if (body.message && body.message.photo && photoRequests.has(body.message.chat.id)) {
-    const chatId = body.message.chat.id;
-    const { row, msgId } = photoRequests.get(chatId);
-    const largest = body.message.photo.pop();
-    const fileId = largest.file_id;
-    const user = body.message.from;
-    const username = user.username ? `@${user.username}` : user.first_name;
+      const fileRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
+      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileRes.data.result.file_path}`;
 
-    const fileRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
-    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileRes.data.result.file_path}`;
+      await axios.post(WEB_APP_URL, { row, response: 'Выполнено', photo: fileUrl, username, message_id: msgId });
 
-    await axios.post(WEB_APP_URL, { row, response: 'Выполнено', photo: fileUrl, username, message_id: msgId });
+      sumRequests.set(chatId, { row, msgId, fileUrl, username });
+      photoRequests.delete(chatId);
 
-    sumRequests.set(chatId, { row, msgId, fileUrl, username });
-    photoRequests.delete(chatId);
+      const reply = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        chat_id: chatId,
+        text: `📩 Фото получено для заявки #${row}. Пожалуйста, введите сумму работ.`
+      });
 
-    const sumReq = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      chat_id: chatId,
-      text: `📩 Фото получено для заявки #${row}. Пожалуйста, введите сумму работ.`
-    });
-
-    const temp = tempMessages.get(chatId) || [];
-    temp.push(body.message.message_id, sumReq.data.result.message_id);
-    tempMessages.set(chatId, temp);
-
-    return res.sendStatus(200);
-  }
-
-  if (body.message && sumRequests.has(body.message.chat.id)) {
-    const chatId = body.message.chat.id;
-    const text = body.message.text;
-    const userMsgId = body.message.message_id;
-    const { row, msgId, fileUrl, username } = sumRequests.get(chatId);
-    const sum = parseInt(text.replace(/\D/g, '')) || 0;
-
-    const deadlineRes = await axios.post(WEB_APP_URL, { row, requestDeadline: true });
-    const deadline = new Date(deadlineRes.data.deadline);
-    const now = new Date();
-    const diff = Math.ceil((now - deadline) / (1000 * 60 * 60 * 24));
-    const status = diff <= 0 ? '🟢 Выполнено в срок' : `🔴 Просрочка: ${diff} дн.`;
-
-    await axios.post(WEB_APP_URL, { row, sum });
-
-    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
-      chat_id: chatId,
-      message_id: msgId,
-      text: `📌 Заявка #${row} закрыта.\n📎 Фото: ${fileUrl}\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
-    });
-
-    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      chat_id: chatId,
-      reply_to_message_id: msgId,
-      parse_mode: 'HTML',
-      text: `✅ Заявка #${row} закрыта.\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
-    });
-
-    const temp = tempMessages.get(chatId) || [];
-    temp.push(userMsgId);
-    for (const mid of temp) {
-      setTimeout(() => {
-        axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
-          chat_id: chatId,
-          message_id: mid
-        }).catch(err => console.error('Ошибка удаления сообщения:', err.message));
-      }, 60000);
+      tempMessages.set(chatId, [body.message.message_id, reply.data.result.message_id]);
     }
 
-    tempMessages.delete(chatId);
-    sumRequests.delete(chatId);
-    return res.sendStatus(200);
-  }
+    // 3. Сумма от пользователя
+    if (body.message && sumRequests.has(body.message.chat.id)) {
+      const chatId = body.message.chat.id;
+      const text = body.message.text;
+      const userMsgId = body.message.message_id;
+      const { row, msgId, fileUrl, username } = sumRequests.get(chatId);
+      const sum = parseInt(text.replace(/\D/g, '')) || 0;
 
-  if (body.message && body.message.chat && body.message.message_id) {
-    const chatId = body.message.chat.id;
-    const messageId = body.message.message_id;
+      const deadlineRes = await axios.post(WEB_APP_URL, { row, requestDeadline: true });
+      const deadline = new Date(deadlineRes.data.deadline);
+      const now = new Date();
+      const diff = Math.ceil((now - deadline) / (1000 * 60 * 60 * 24));
+      const status = diff <= 0 ? '🟢 Выполнено в срок' : `🔴 Просрочка: ${diff} дн.`;
 
-    if (!tempMessages.has(chatId)) tempMessages.set(chatId, []);
-    tempMessages.get(chatId).push(messageId);
+      await axios.post(WEB_APP_URL, { row, sum });
 
-    setTimeout(() => {
-      axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
         chat_id: chatId,
-        message_id: messageId
-      }).catch(err => console.error('Ошибка удаления сообщения:', err.message));
-    }, 60000);
-  }
+        message_id: msgId,
+        text: `📌 Заявка #${row} закрыта.\n📎 Фото: ${fileUrl}\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
+      });
 
-  res.sendStatus(200);
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        chat_id: chatId,
+        reply_to_message_id: msgId,
+        parse_mode: 'HTML',
+        text: `✅ Заявка #${row} закрыта.\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
+      });
+
+      const temp = tempMessages.get(chatId) || [];
+      temp.push(userMsgId);
+      for (const mid of temp) {
+        setTimeout(() => {
+          axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
+            chat_id: chatId,
+            message_id: mid
+          }).catch(err => console.error('Ошибка удаления сообщения:', err.message));
+        }, 60000);
+      }
+
+      tempMessages.delete(chatId);
+      sumRequests.delete(chatId);
+    }
+  } catch (err) {
+    console.error('❌ Ошибка в webhook:', err.message);
+  }
 });
 
+// Напоминания
 cron.schedule('0 4 * * *', async () => {
   try {
     const res = await axios.post(WEB_APP_URL, { action: 'checkReminders' });
