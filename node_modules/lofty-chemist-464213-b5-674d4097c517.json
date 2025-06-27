@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "lofty-chemist-464213-b5",
+  "private_key_id": "674d4097c5179701139b8c8c51b9eed0ec4eb174",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDDGShdnpPUXPCq\nZrdX0vaC+NXf6rB06c6yt5NgJrwwi0MDOMP2fr2zpgxZvJDcYtPNsCYB/eCH3TMF\n3cAlmoL3AJoCcAF/6JfdufAHgKTlJCp2kGpDLsZI7C9kOjIGLvUdrIvPoYf5YqeL\nJH9iKzlUo8GLTBOcRyXUez5p4Cdvj+z4h/M/Q84y1WJ2P5pavF9pGDShpPskaMaE\nUK8A0Yr2LMskjWumrPlgKQ273Y2ba3twsN3Z3QgVUgzx1FSriPll0STpekuskdgP\nH9xnXN65wr36R+rArhsJ1XZ3fiGm/kuabs33vucU5IcpzotbVrWlQnGtoao+RBzc\nohWfrrAtAgMBAAECggEAFeen9NT2b6BMxDEaskFlPKDQMJ8i10meE8pRQXkv5Xpp\nWH4B4JXr2jURS20Ezb3J3p0Bs3UMBe0jyquSZJZz0GRQpmfpfzFABdzX0pvSx8h2\n/Q9rYuYoTK06B/SRw8h3bHDAVNxjzjARtClxpPXJ7tMhCrEMvZ3uZSw+Pnh0rQ2H\nVXRZvvMjWfbRtorfimQINvLJ7STHGpcvvFwk+Pm0AV0eOhr+lgHGV/HIk4V+OEhQ\nGwHUbZPwlwCwiODLT+W1A9vWRA75mWz/v2xh7QitcerXu3HMV4mf703N6XWIgVEH\nccyYiCM2Vt9nwjpVi7jwXSQ2ezbD0bQlCj6VN8GSyQKBgQDqdnYtjxgAcToIeASF\nPRWm4aL65MTGR+r+IYfAt9ZgoB2+934J7u6CoQGqVo1NYOemcGfBiGzpsXceCbi7\n/8wSh5jJLg3a2pE0Z4qXzMo6QUu/fv7Ep4g0RLGpk19KNtvkeye+CV/AF/5s88Lh\nBBXKyFrG0XpMuMiHSv4LU19vBQKBgQDVBQQQ+4p3ywvv9shUoEef/ljQf2tYEMfX\nWCbYjdN+6RSr/SU00fALyrniHGXolKylSHGySZRvPv5FUPBNG2p8O1EmtKyq+gsa\n9ItvpJ12kcPiqjwnNWQFgqMwN/WvaFuAwqU9AxKNYhjU5PQX/+3TOnjsfKB4oiAn\nbvwbIAT1CQKBgH93CYZ5LbZH2CH0hZid/eBs+LrnliapwJKKThAyoYSEZ8eDK21h\nDR/NQmeFiGpRzX5Jy86GSZe+2CBnbpweU6abOy/cLsIVYy2XQNyIBEUpbHHeK8lj\nvwOTePbU3NAvBNqxLYj99aUsJjC7UO4d128X/2npRlDhgHs1BOnJWK+1AoGARt4r\nUycMEvx3FTcpwJWuHnk0vPCXGq5Cfc7y5XqRkRgj63AFb8QkMxgXrTS7ZpwHr9kh\nEipOepAfcZoSx+RGEdx+C/1xsFQNW8NdnB/MzwSBgagW6QhnJTon5kPHtbpnLrgS\n1vBtvKGVF0awOkfHrE04q5xumpN9VQEkWDXX0FkCgYBgMOh3NdYj2roYek4byQSI\ntj/V88FlahdsyRQq7dWj3NwtvCuVHtOs/v1s/g1+WeKy2sDqJ95xmUp3DJW/Ah1c\nGrPKE9gF7idwvc0EDh6B0Fs6RCfPe120ewo0RzM8Arsk7rMHTOI7V+vAtDd3hLJV\nnFcoSKpuUqeIuvNQq4UmqA==\n-----END PRIVATE KEY-----\n",
+  "client_email": "bot-680@lofty-chemist-464213-b5.iam.gserviceaccount.com",
+  "client_id": "104352579230236750600",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/bot-680%40lofty-chemist-464213-b5.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
