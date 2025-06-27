@@ -1,157 +1,134 @@
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const FormData = require('form-data');
-const fs = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
-const { v4: uuidv4 } = require('uuid');
+const express = require("express");
+const axios = require("axios");
+const bodyParser = require("body-parser");
+const fs = require("fs");
+const { google } = require("googleapis");
+const { Readable } = require("stream");
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}`;
-const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL;
-const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
+const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyBl5bQ5ju5NbFMZQpgOzkVHdxpfBWn_ZZFK4G8d9P3AjUKLHHwO9SlXqqHgwaO4KAh/exec";
+const FOLDER_ID = "YOUR_GOOGLE_DRIVE_FOLDER_ID";
 
-// Загрузка сервисного аккаунта
 const auth = new google.auth.GoogleAuth({
-  keyFile: 'service-account.json',
-  scopes: ['https://www.googleapis.com/auth/drive.file']
+  keyFile: "service-account.json",
+  scopes: ["https://www.googleapis.com/auth/drive"]
 });
 
-const drive = google.drive({ version: 'v3', auth });
+async function uploadToDrive(fileUrl) {
+  const authClient = await auth.getClient();
+  const drive = google.drive({ version: "v3", auth: authClient });
 
-app.post('/webhook', async (req, res) => {
+  const response = await axios.get(fileUrl, { responseType: "arraybuffer" });
+  const buffer = Buffer.from(response.data);
+  const fileName = `photo_${Date.now()}.jpg`;
+
+  const fileMetadata = {
+    name: fileName,
+    parents: [FOLDER_ID],
+  };
+
+  const media = {
+    mimeType: "image/jpeg",
+    body: Readable.from(buffer),
+  };
+
+  const uploaded = await drive.files.create({
+    resource: fileMetadata,
+    media,
+    fields: "id",
+  });
+
+  await drive.permissions.create({
+    fileId: uploaded.data.id,
+    requestBody: {
+      role: "reader",
+      type: "anyone",
+    },
+  });
+
+  const file = await drive.files.get({
+    fileId: uploaded.data.id,
+    fields: "webViewLink",
+  });
+
+  return file.data;
+}
+
+app.post("/", async (req, res) => {
   const body = req.body;
+
+  // Inline кнопки — обновление статуса
   if (body.callback_query) {
-    const callback = body.callback_query;
-    const [action, row] = callback.data.split(':');
-    const message_id = callback.message.message_id;
-    const chat_id = callback.message.chat.id;
-    const username = callback.from.username;
+    const callbackData = body.callback_query.data;
+    const chat_id = body.callback_query.message.chat.id;
+    const message_id = body.callback_query.message.message_id;
 
-    const responseMap = {
-      accepted: 'Принято в работу',
-      in_progress: 'В процессе',
-      waiting: 'Ожидает поставки',
-      cancel: 'Отмена',
-      done: 'Выполнено'
-    };
+    const statuses = ["Принято в работу", "В работе", "Ожидает поставки", "Ожидает подрядчика", "Выполнено", "Отмена"];
 
-    const responseText = responseMap[action] || 'Статус неизвестен';
+    if (statuses.includes(callbackData)) {
+      // Обновляем статус в Google Таблице
+      await axios.post(GOOGLE_SCRIPT_URL, {
+        row: null,
+        response: callbackData,
+        message_id
+      });
 
-    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-      callback_query_id: callback.id,
-      text: `Вы выбрали: ${responseText}`
-    });
-
-    if (action === 'done') {
+      // Ответ пользователю
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
-        text: '📸 Пожалуйста, загрузите фото выполненных работ.'
+        text: callbackData === "Выполнено" ? "Пожалуйста, отправьте фото выполненных работ в ответ на это сообщение." : `Статус обновлён на: ${callbackData}`,
+        reply_to_message_id: message_id
       });
     }
 
-    await axios.post(GOOGLE_SCRIPT_URL, {
-      row,
-      message_id,
-      username,
-      response: responseText
-    });
+    return res.sendStatus(200);
   }
 
+  // Обработка фото
   if (body.message && body.message.photo) {
     const chat_id = body.message.chat.id;
-    const username = body.message.from.username;
-    const message_id = body.message.message_id;
-    const photo = body.message.photo[body.message.photo.length - 1];
+    const message_id = body.message.reply_to_message?.message_id || null;
+    const fileId = body.message.photo.at(-1).file_id;
 
-    const file_id = photo.file_id;
-    const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${file_id}`);
-    const file_path = fileRes.data.result.file_path;
-    const fileUrl = `${TELEGRAM_FILE_API}/${file_path}`;
+    if (!message_id) return res.sendStatus(200);
 
-    const fileName = `photo_${uuidv4()}.jpg`;
-    const tempPath = path.join(__dirname, fileName);
+    try {
+      const { data: fileInfo } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+      const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${fileInfo.result.file_path}`;
 
-    const writer = fs.createWriteStream(tempPath);
-    const response = await axios.get(fileUrl, { responseType: 'stream' });
-    response.data.pipe(writer);
+      const response = await uploadToDrive(fileUrl);
+      const publicUrl = response.webViewLink;
 
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
+      // Найти строку по message_id
+      const sheetResponse = await axios.get(`${GOOGLE_SCRIPT_URL}?message_id=${message_id}`);
+      const { rowIndex } = sheetResponse.data;
 
-    const fileMetadata = {
-      name: fileName,
-      parents: [FOLDER_ID]
-    };
+      if (rowIndex == null) return res.sendStatus(200);
 
-    const media = {
-      mimeType: 'image/jpeg',
-      body: fs.createReadStream(tempPath)
-    };
+      await axios.post(GOOGLE_SCRIPT_URL, {
+        row: rowIndex,
+        photo: publicUrl,
+        response: "Выполнено"
+      });
 
-    const fileUpload = await drive.files.create({
-      resource: fileMetadata,
-      media,
-      fields: 'id'
-    });
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id,
+        text: "✅ Фото получено и прикреплено к заявке."
+      });
+    } catch (error) {
+      console.error("Ошибка при загрузке фото:", error);
+    }
 
-    const fileId = fileUpload.data.id;
-    await drive.permissions.create({
-      fileId,
-      requestBody: {
-        role: 'reader',
-        type: 'anyone'
-      }
-    });
-
-    const publicUrl = `https://drive.google.com/file/d/${fileId}/view?usp=sharing`;
-
-    await axios.post(GOOGLE_SCRIPT_URL, {
-      row: null,
-      message_id,
-      username,
-      photo: publicUrl,
-      response: 'Выполнено'
-    });
-
-    fs.unlinkSync(tempPath);
+    return res.sendStatus(200);
   }
 
   res.sendStatus(200);
 });
 
-// Пример отправки сообщения с кнопками (если нужно):
-async function sendMessageWithButtons(chat_id, row) {
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '🟢 Принято в работу', callback_data: `accepted:${row}` },
-        { text: '🔄 В процессе', callback_data: `in_progress:${row}` },
-      ],
-      [
-        { text: '⏳ Ожидает поставки', callback_data: `waiting:${row}` },
-        { text: '❌ Отмена', callback_data: `cancel:${row}` },
-      ],
-      [
-        { text: '✅ Выполнено', callback_data: `done:${row}` },
-      ]
-    ]
-  };
-
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id,
-    text: '📋 Заявка создана. Выберите статус:',
-    reply_markup: keyboard
-  });
-}
-
 app.listen(3000, () => {
-  console.log('✅ Сервер запущен на порту 3000');
+  console.log("✅ Сервер запущен на порту 3000");
 });
