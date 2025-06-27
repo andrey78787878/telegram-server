@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwM-GEoQ_wSJBYEtugbEdhbXjg2L4aj6xnJepNu2B1tQJTAVRV6cGg48uaLdCnb2TMu/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyBl5bQ5ju5NbFMZQpgOzkVHdxpfBWn_ZZFK4G8d9P3AjUKLHHwO9SlXqqHgwaO4KAh/exec";
 const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
 
 const auth = new google.auth.GoogleAuth({
@@ -70,14 +70,12 @@ app.post("/", async (req, res) => {
     const statuses = ["Принято в работу", "В работе", "Ожидает поставки", "Ожидает подрядчика", "Выполнено", "Отмена"];
 
     if (statuses.includes(callbackData)) {
-      // Обновляем статус в Google Таблице
       await axios.post(GOOGLE_SCRIPT_URL, {
         row: null,
         response: callbackData,
         message_id
       });
 
-      // Ответ пользователю
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
         text: callbackData === "Выполнено" ? "Пожалуйста, отправьте фото выполненных работ в ответ на это сообщение." : `Статус обновлён на: ${callbackData}`,
@@ -100,10 +98,12 @@ app.post("/", async (req, res) => {
       const { data: fileInfo } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
       const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${fileInfo.result.file_path}`;
 
+      // ⏳ Добавим задержку, чтобы Telegram успел подготовить файл
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
       const response = await uploadToDrive(fileUrl);
       const publicUrl = response.webViewLink;
 
-      // Найти строку по message_id
       const sheetResponse = await axios.get(`${GOOGLE_SCRIPT_URL}?message_id=${message_id}`);
       const { rowIndex } = sheetResponse.data;
 
