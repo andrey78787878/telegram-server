@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwRVFxHQ6-H1g3zu2KZz7GkqlvBPQXFrjEgrR1FHhzxBmrrp2UnsCyXByc3U2X19DI/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwM-GEoQ_wSJBYEtugbEdhbXjg2L4aj6xnJepNu2B1tQJTAVRV6cGg48uaLdCnb2TMu/exec";
 const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
 
 const auth = new google.auth.GoogleAuth({
