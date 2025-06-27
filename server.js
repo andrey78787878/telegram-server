@@ -1,122 +1,100 @@
+// server.js
 const express = require('express');
-const bodyParser = require('body-parser');
 const axios = require('axios');
-const cron = require('node-cron');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
+const { google } = require('googleapis');
 
 const TELEGRAM_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzlq2uo60JPKSQaEvOo-3JYH6FigA3TG-dbhl52yN1NJgJl5a1sIJTbqEyb833bSk-J/exec';
-const allowedUsernames = ['Andrey Ткасh', '@Andrey_Tkach_MB', '@Olim19', '@AzzeR133'];
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwn2n371K5QiB4E-9oxAvYSlhFo2REweegLEqgTjtfLqB689qUQR2VHWhzzv4oJkPKl/exec';
+const DRIVE_FOLDER_ID = '1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF';
 
-const photoRequests = new Map();
-const sumRequests = new Map();
-const tempMessages = new Map();
-
+const app = express();
 app.use(bodyParser.json());
 
+const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+const KEYFILEPATH = path.join(__dirname, 'service-account.json');
+const auth = new google.auth.GoogleAuth({
+  keyFile: KEYFILEPATH,
+  scopes: SCOPES,
+});
+const drive = google.drive({ version: 'v3', auth });
+
+const sumRequests = new Map();
+const photoRequests = new Map();
+const tempMessages = new Map();
+
 app.post('/webhook', async (req, res) => {
-  res.sendStatus(200); // Telegram должен сразу получить 200
   const body = req.body;
+  console.log('📥 Incoming:', JSON.stringify(body));
 
-  try {
-    // 1. Обработка нажатий на кнопки
-    if (body.callback_query) {
-      const { data: callbackData, message, from, id: callbackId } = body.callback_query;
-      const chatId = message.chat.id;
-      const msgId = message.message_id;
-      const username = from.username ? `@${from.username}` : from.first_name;
-      let row, responseText;
+  if (body.callback_query) {
+    const data = body.callback_query.data;
+    const chatId = body.callback_query.message.chat.id;
+    const msgId = body.callback_query.message.message_id;
+    const row = parseInt(data.split(':')[1]);
+    const action = data.split(':')[0];
+    const username = body.callback_query.from.username ? `@${body.callback_query.from.username}` : body.callback_query.from.first_name;
 
-      if (!allowedUsernames.includes(username) && /^(accept_|cancel_|done_|working_|waiting_)/.test(callbackData)) {
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-          callback_query_id: callbackId,
-          text: '⛔ У вас нет доступа к этой кнопке',
-          show_alert: true
-        });
-        return;
-      }
+    if (action === 'done') {
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        chat_id: chatId,
+        text: `📸 Пожалуйста, отправьте фото выполненной работы.`
+      });
 
-      if (callbackData.startsWith('accept_')) {
-        responseText = 'Принято в работу';
-        row = +callbackData.split('_')[1];
-      } else if (callbackData.startsWith('cancel_')) {
-        responseText = 'Отмена';
-        row = +callbackData.split('_')[1];
-      } else if (callbackData.startsWith('done_')) {
-        responseText = 'Выполнено';
-        row = +callbackData.split('_')[1];
-        photoRequests.set(chatId, { row, msgId });
-        const reply = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-          chat_id: chatId,
-          text: '📷 Пожалуйста, отправьте фото как изображение, не как файл.',
-          reply_to_message_id: msgId
-        });
-        tempMessages.set(chatId, [reply.data.result.message_id]);
-      } else if (callbackData.startsWith('waiting_')) {
-        responseText = 'Ожидает поставки комплектующих';
-        row = +callbackData.split('_')[1];
-      } else if (callbackData.startsWith('working_')) {
-        row = +callbackData.split('_')[1];
-        const keyboard = {
-          inline_keyboard: [
-            [
-              { text: '✅ Выполнено', callback_data: `done_${row}` },
-              { text: '❌ Отменено', callback_data: `cancel_${row}` }
-            ],
-            [
-              { text: '⏳ Ожидает поставки комплектующих', callback_data: `waiting_${row}` }
-            ]
-          ]
-        };
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
-          chat_id: chatId,
-          message_id: msgId,
-          reply_markup: JSON.stringify(keyboard)
-        });
-        return;
-      }
-
-      if (responseText && row) {
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-          callback_query_id: callbackId,
-          text: '✅ Выбор зарегистрирован'
-        });
-
-        await axios.post(WEB_APP_URL, { row, response: responseText, message_id: msgId });
-
-        let newMarkup = {};
-        if (responseText === 'Принято в работу') {
-          newMarkup = { inline_keyboard: [[{ text: '🟢 В работе', callback_data: `working_${row}` }]] };
-        } else if (responseText === 'Ожидает поставки комплектующих') {
-          newMarkup = { inline_keyboard: [[{ text: '⏳ Ожидает поставки комплектующих', callback_data: `working_${row}` }]] };
-        }
-
-        if (Object.keys(newMarkup).length) {
-          await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageReplyMarkup`, {
-            chat_id: chatId,
-            message_id: msgId,
-            reply_markup: JSON.stringify(newMarkup)
-          });
-        }
-      }
+      photoRequests.set(chatId, { row, msgId });
     }
 
-    // 2. Фото от пользователя
-    if (body.message && body.message.photo && photoRequests.has(body.message.chat.id)) {
-      const chatId = body.message.chat.id;
-      const { row, msgId } = photoRequests.get(chatId);
-      const fileId = body.message.photo.pop().file_id;
-      const user = body.message.from;
-      const username = user.username ? `@${user.username}` : user.first_name;
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+      callback_query_id: body.callback_query.id
+    });
+    return res.sendStatus(200);
+  }
 
+  if (body.message && body.message.photo && photoRequests.has(body.message.chat.id)) {
+    const chatId = body.message.chat.id;
+    const { row, msgId } = photoRequests.get(chatId);
+    const fileId = body.message.photo.pop().file_id;
+    const user = body.message.from;
+    const username = user.username ? `@${user.username}` : user.first_name;
+
+    try {
       const fileRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
-      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileRes.data.result.file_path}`;
+      const filePath = fileRes.data.result.file_path;
+      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
 
-      await axios.post(WEB_APP_URL, { row, response: 'Выполнено', photo: fileUrl, username, message_id: msgId });
+      const response = await axios.get(fileUrl, { responseType: 'stream' });
+      const uploadRes = await drive.files.create({
+        requestBody: {
+          name: `photo_${Date.now()}.jpg`,
+          parents: [DRIVE_FOLDER_ID],
+        },
+        media: {
+          mimeType: 'image/jpeg',
+          body: response.data,
+        },
+      });
 
-      sumRequests.set(chatId, { row, msgId, fileUrl, username });
+      await drive.permissions.create({
+        fileId: uploadRes.data.id,
+        requestBody: {
+          role: 'reader',
+          type: 'anyone',
+        },
+      });
+
+      const photoLink = `https://drive.google.com/uc?id=${uploadRes.data.id}`;
+
+      await axios.post(WEB_APP_URL, {
+        row,
+        response: 'Выполнено',
+        photo: photoLink,
+        username,
+        message_id: msgId
+      });
+
+      sumRequests.set(chatId, { row, msgId, fileUrl: photoLink, username });
       photoRequests.delete(chatId);
 
       const reply = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -125,76 +103,47 @@ app.post('/webhook', async (req, res) => {
       });
 
       tempMessages.set(chatId, [body.message.message_id, reply.data.result.message_id]);
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error('Ошибка при загрузке фото:', error);
+      return res.sendStatus(500);
     }
-
-    // 3. Сумма от пользователя
-    if (body.message && sumRequests.has(body.message.chat.id)) {
-      const chatId = body.message.chat.id;
-      const text = body.message.text;
-      const userMsgId = body.message.message_id;
-      const { row, msgId, fileUrl, username } = sumRequests.get(chatId);
-      const sum = parseInt(text.replace(/\D/g, '')) || 0;
-
-      const deadlineRes = await axios.post(WEB_APP_URL, { row, requestDeadline: true });
-      const deadline = new Date(deadlineRes.data.deadline);
-      const now = new Date();
-      const diff = Math.ceil((now - deadline) / (1000 * 60 * 60 * 24));
-      const status = diff <= 0 ? '🟢 Выполнено в срок' : `🔴 Просрочка: ${diff} дн.`;
-
-      await axios.post(WEB_APP_URL, { row, sum });
-
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText`, {
-        chat_id: chatId,
-        message_id: msgId,
-        text: `📌 Заявка #${row} закрыта.\n📎 Фото: ${fileUrl}\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
-      });
-
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-        chat_id: chatId,
-        reply_to_message_id: msgId,
-        parse_mode: 'HTML',
-        text: `✅ Заявка #${row} закрыта.\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n${status}`
-      });
-
-      const temp = tempMessages.get(chatId) || [];
-      temp.push(userMsgId);
-      for (const mid of temp) {
-        setTimeout(() => {
-          axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
-            chat_id: chatId,
-            message_id: mid
-          }).catch(err => console.error('Ошибка удаления сообщения:', err.message));
-        }, 60000);
-      }
-
-      tempMessages.delete(chatId);
-      sumRequests.delete(chatId);
-    }
-  } catch (err) {
-    console.error('❌ Ошибка в webhook:', err.message);
   }
+
+  if (body.message && body.message.text && sumRequests.has(body.message.chat.id)) {
+    const chatId = body.message.chat.id;
+    const amount = body.message.text.trim();
+    const { row, msgId, fileUrl, username } = sumRequests.get(chatId);
+
+    await axios.post(WEB_APP_URL, {
+      row,
+      amount,
+      photo: fileUrl,
+      username,
+      message_id: msgId
+    });
+
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      chat_id: chatId,
+      text: `✅ Заявка #${row} закрыта.\n💰 Сумма: ${amount} сум\n👤 Исполнитель: ${username}`
+    });
+
+    const msgIds = tempMessages.get(chatId) || [];
+    for (const id of msgIds) {
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteMessage`, {
+        chat_id: chatId,
+        message_id: id
+      });
+    }
+
+    sumRequests.delete(chatId);
+    tempMessages.delete(chatId);
+    return res.sendStatus(200);
+  }
+
+  res.sendStatus(200);
 });
 
-// Напоминания
-cron.schedule('0 4 * * *', async () => {
-  try {
-    const res = await axios.post(WEB_APP_URL, { action: 'checkReminders' });
-    const reminders = res.data.reminders || [];
-    for (const rem of reminders) {
-      const { chat_id, message_id, text } = rem;
-      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-        chat_id,
-        text,
-        reply_to_message_id: message_id,
-        parse_mode: 'HTML'
-      });
-    }
-    console.log('🔔 Утренние напоминания отправлены');
-  } catch (err) {
-    console.error('Ошибка напоминаний:', err.message);
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Сервер запущен на порту ${PORT}`);
+app.listen(3000, () => {
+  console.log('✅ Сервер запущен на порту 3000');
 });
