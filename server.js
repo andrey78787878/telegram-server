@@ -1,193 +1,151 @@
-const express = require("express");
-const axios = require("axios");
-const bodyParser = require("body-parser");
-const fs = require("fs");
-const { google } = require("googleapis");
-const { Readable } = require("stream");
+const express = require('express');
+const bodyParser = require('body-parser');
+const axios = require('axios');
+const https = require('https');
+const { google } = require('googleapis');
+const fs = require('fs');
+const multer = require('multer');
+const path = require('path');
 
 const app = express();
-app.use(bodyParser.json());
+const PORT = 3000;
 
+// ====== Настройки ======
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby_gOrwjaB7LgGJcCarpUM8SsyhWzUtMJSN3kddZKm5AToFlWQsErAKxNu9l2UC2JRE/exec";
+const SPREADSHEET_ID = '1u48GTrioEVs_3P3fxcX0e7pKZmYwZyE8HioWJHgRZTc'; // <- Замените при необходимости
+const SHEET_NAME = 'Заявки';
 const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
 
-const getTelegramFileUrl = (filePath) =>
-  `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+const httpsAgent = new https.Agent({ rejectUnauthorized: false }); // ⚠ Только для отладки
 
+// ====== Middleware ======
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// ====== Авторизация Google ======
 const auth = new google.auth.GoogleAuth({
-  keyFile: "service-account.json",
-  scopes: ["https://www.googleapis.com/auth/drive"]
+  keyFile: 'credentials.json',
+  scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
 });
 
-const executorWaitingMap = new Map();
+const sheets = google.sheets({ version: 'v4', auth });
+const drive = google.drive({ version: 'v3', auth });
 
-async function uploadToDrive(fileUrl) {
-  const authClient = await auth.getClient();
-  const drive = google.drive({ version: "v3", auth: authClient });
+// ====== Хранилище multer для временных файлов ======
+const upload = multer({ dest: 'uploads/' });
 
-  const response = await axios.get(fileUrl, { responseType: "arraybuffer" });
-  const buffer = Buffer.from(response.data);
-  const fileName = `photo_${Date.now()}.jpg`;
+// ====== Удаление сообщений через 60 секунд ======
+const scheduleDeletion = (chatId, messageId) => {
+  setTimeout(() => {
+    axios.post(`${TELEGRAM_API}/deleteMessage`, {
+      chat_id: chatId,
+      message_id: messageId,
+    }, { httpsAgent }).catch(err => {
+      console.error('Ошибка при удалении сообщения:', err.response?.data || err.message);
+    });
+  }, 60000);
+};
 
-  const fileMetadata = {
-    name: fileName,
-    parents: [FOLDER_ID],
-  };
+// ====== Хендлер Webhook от Telegram ======
+app.post('/webhook', async (req, res) => {
+  try {
+    const body = req.body;
 
-  const media = {
-    mimeType: "image/jpeg",
-    body: Readable.from(buffer),
-  };
+    if (body.message) {
+      const chatId = body.message.chat.id;
+      const text = body.message.text;
 
-  const uploaded = await drive.files.create({
-    resource: fileMetadata,
-    media,
-    fields: "id",
-  });
+      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: `Вы отправили: ${text}`,
+      }, { httpsAgent });
 
-  await drive.permissions.create({
-    fileId: uploaded.data.id,
-    requestBody: {
-      role: "reader",
-      type: "anyone",
-    },
-  });
-
-  const file = await drive.files.get({
-    fileId: uploaded.data.id,
-    fields: "webViewLink",
-  });
-
-  return file.data;
-}
-
-app.post("/", async (req, res) => {
-  const body = req.body;
-
-  if (body.callback_query) {
-    const callbackData = body.callback_query.data;
-    const chat_id = body.callback_query.message.chat.id;
-    const message_id = body.callback_query.message.message_id;
-
-    const statuses = [
-      "Принято в работу",
-      "В работе",
-      "Ожидает поставки",
-      "Ожидает подрядчика",
-      "Выполнено",
-      "Отмена"
-    ];
-
-    if (callbackData === "Принято в работу") {
-      const sheetResponse = await axios.get(`${GOOGLE_SCRIPT_URL}?message_id=${message_id}`);
-      const { rowIndex } = sheetResponse.data;
-
-      if (rowIndex != null) {
-        executorWaitingMap.set(`${chat_id}_${message_id}`, { rowIndex });
-
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id,
-          text: "Пожалуйста, введите имя и/или компанию исполнителя:",
-          reply_to_message_id: message_id
-        });
-      }
-
-      return res.sendStatus(200);
+      scheduleDeletion(chatId, body.message.message_id);
+      scheduleDeletion(chatId, sent.data.result.message_id);
     }
 
-    if (statuses.includes(callbackData)) {
-      await axios.post(GOOGLE_SCRIPT_URL, {
-        row: null,
-        response: callbackData,
-        message_id
-      });
+    if (body.callback_query) {
+      const chatId = body.callback_query.message.chat.id;
+      const messageId = body.callback_query.message.message_id;
+      const data = body.callback_query.data;
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: callbackData === "Выполнено"
-          ? "Пожалуйста, отправьте фото выполненных работ в ответ на это сообщение."
-          : `Статус обновлён на: ${callbackData}`,
-        reply_to_message_id: message_id
-      });
+      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+        callback_query_id: body.callback_query.id,
+      }, { httpsAgent });
+
+      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: `Вы нажали: ${data}`,
+      }, { httpsAgent });
+
+      scheduleDeletion(chatId, messageId);
+      scheduleDeletion(chatId, sent.data.result.message_id);
     }
 
-    return res.sendStatus(200);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('Ошибка в /webhook:', err.response?.data || err.message);
+    res.sendStatus(500);
   }
-
-  if (body.message && body.message.text) {
-    const chat_id = body.message.chat.id;
-    const reply_id = body.message.reply_to_message?.message_id;
-
-    if (reply_id) {
-      const key = `${chat_id}_${reply_id}`;
-      const executorData = executorWaitingMap.get(key);
-
-      if (executorData) {
-        const executorName = body.message.text;
-        const { rowIndex } = executorData;
-
-        executorWaitingMap.delete(key);
-
-        await axios.post(GOOGLE_SCRIPT_URL, {
-          row: rowIndex,
-          executor: executorName,
-          response: "В работе"
-        });
-
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id,
-          text: `Статус обновлён на: В работе\nИсполнитель: ${executorName}`,
-          reply_to_message_id: reply_id
-        });
-      }
-    }
-
-    return res.sendStatus(200);
-  }
-
-  if (body.message && body.message.photo) {
-    const chat_id = body.message.chat.id;
-    const message_id = body.message.reply_to_message?.message_id || null;
-    const fileId = body.message.photo.at(-1).file_id;
-
-    if (!message_id) return res.sendStatus(200);
-
-    try {
-      const { data: fileInfo } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-      const fileUrl = getTelegramFileUrl(fileInfo.result.file_path);
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      const response = await uploadToDrive(fileUrl);
-      const publicUrl = response.webViewLink;
-
-      const sheetResponse = await axios.get(`${GOOGLE_SCRIPT_URL}?message_id=${message_id}`);
-      const { rowIndex } = sheetResponse.data;
-
-      if (rowIndex == null) return res.sendStatus(200);
-
-      await axios.post(GOOGLE_SCRIPT_URL, {
-        row: rowIndex,
-        photo: publicUrl,
-        response: "Выполнено"
-      });
-
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: "✅ Фото получено и прикреплено к заявке."
-      });
-    } catch (error) {
-      console.error("Ошибка при загрузке фото:", error);
-    }
-
-    return res.sendStatus(200);
-  }
-
-  res.sendStatus(200);
 });
 
-app.listen(3000, () => {
-  console.log("✅ Сервер запущен на порту 3000");
+// ====== Загрузка фото и запись в Google Таблицу ======
+app.post('/upload', upload.single('photo'), async (req, res) => {
+  try {
+    const filePath = req.file.path;
+    const fileMetadata = {
+      name: req.file.originalname,
+      parents: [FOLDER_ID],
+    };
+    const media = {
+      mimeType: req.file.mimetype,
+      body: fs.createReadStream(filePath),
+    };
+
+    const file = await drive.files.create({
+      resource: fileMetadata,
+      media: media,
+      fields: 'id',
+    });
+
+    const fileId = file.data.id;
+
+    await drive.permissions.create({
+      fileId,
+      requestBody: {
+        role: 'reader',
+        type: 'anyone',
+      },
+    });
+
+    const publicUrl = `https://drive.google.com/uc?id=${fileId}`;
+    const rowIndex = req.body.row;
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!O${rowIndex}`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [[publicUrl]],
+      },
+    });
+
+    fs.unlinkSync(filePath);
+    res.status(200).send('Файл загружен и ссылка записана');
+  } catch (err) {
+    console.error('Ошибка в /upload:', err.response?.data || err.message);
+    res.status(500).send('Ошибка при загрузке файла');
+  }
+});
+
+// ====== Запуск сервера ======
+app.get('/', (req, res) => {
+  res.send('Бот работает!');
+});
+
+app.listen(PORT, () => {
+  console.log(`Сервер запущен на http://localhost:${PORT}`);
 });
