@@ -144,8 +144,7 @@ app.post("/", async (req, res) => {
 
         await sendTempMessage({
           chat_id,
-          text: `Статус обновлён на: В работе
-Исполнитель: ${executorName}`,
+          text: `Статус обновлён на: В работе\nИсполнитель: ${executorName}`,
           reply_to_message_id: reply_id
         });
       } else if (commentData) {
