@@ -1,4 +1,3 @@
-
 const express = require("express");
 const axios = require("axios");
 const bodyParser = require("body-parser");
@@ -11,7 +10,7 @@ app.use(bodyParser.json());
 
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyH2Xe5Z5UvLRi-ABwcXMFuYOYeJ1LwlaZ9njBy19RbQIIMSQJ6tKjyfLvd4CG4USGc/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzn1rDiKtRHdqbfk67Gcm6Ub5teSDKAn3WIGTF4wgSARCAoKURsuhcQZLLgptDHGv6V/exec";
 const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
 
 const auth = new google.auth.GoogleAuth({
@@ -19,7 +18,8 @@ const auth = new google.auth.GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/drive"]
 });
 
-const executorWaitingMap = new Map(); // Временное хранилище исполнителей
+const executorWaitingMap = new Map();
+const commentWaitingMap = new Map();
 
 async function uploadToDrive(fileUrl) {
   const authClient = await auth.getClient();
@@ -61,10 +61,23 @@ async function uploadToDrive(fileUrl) {
   return file.data;
 }
 
+async function sendTempMessage(params) {
+  const res = await axios.post(`${TELEGRAM_API}/sendMessage`, params);
+  const sentId = res.data.result.message_id;
+
+  setTimeout(() => {
+    axios.post(`${TELEGRAM_API}/deleteMessage`, {
+      chat_id: params.chat_id,
+      message_id: sentId
+    }).catch(() => {});
+  }, 60000);
+
+  return res;
+}
+
 app.post("/", async (req, res) => {
   const body = req.body;
 
-  // Обработка inline кнопок
   if (body.callback_query) {
     const callbackData = body.callback_query.data;
     const chat_id = body.callback_query.message.chat.id;
@@ -79,7 +92,7 @@ app.post("/", async (req, res) => {
       if (rowIndex != null) {
         executorWaitingMap.set(`${chat_id}_${message_id}`, { rowIndex });
 
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        await sendTempMessage({
           chat_id,
           text: "Пожалуйста, введите имя и/или компанию исполнителя:",
           reply_to_message_id: message_id
@@ -96,9 +109,11 @@ app.post("/", async (req, res) => {
         message_id
       });
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      await sendTempMessage({
         chat_id,
-        text: callbackData === "Выполнено" ? "Пожалуйста, отправьте фото выполненных работ в ответ на это сообщение." : `Статус обновлён на: ${callbackData}`,
+        text: callbackData === "Выполнено" ?
+          "Пожалуйста, отправьте фото выполненных работ в ответ на это сообщение." :
+          `Статус обновлён на: ${callbackData}`,
         reply_to_message_id: message_id
       });
     }
@@ -106,7 +121,6 @@ app.post("/", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // Обработка ввода исполнителя
   if (body.message && body.message.text) {
     const chat_id = body.message.chat.id;
     const reply_id = body.message.reply_to_message?.message_id;
@@ -114,6 +128,7 @@ app.post("/", async (req, res) => {
     if (reply_id) {
       const key = `${chat_id}_${reply_id}`;
       const executorData = executorWaitingMap.get(key);
+      const commentData = commentWaitingMap.get(key);
 
       if (executorData) {
         const executorName = body.message.text;
@@ -127,10 +142,26 @@ app.post("/", async (req, res) => {
           response: "В работе"
         });
 
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        await sendTempMessage({
           chat_id,
           text: `Статус обновлён на: В работе
 Исполнитель: ${executorName}`,
+          reply_to_message_id: reply_id
+        });
+      } else if (commentData) {
+        const commentText = body.message.text;
+        const { rowIndex } = commentData;
+
+        commentWaitingMap.delete(key);
+
+        await axios.post(GOOGLE_SCRIPT_URL, {
+          row: rowIndex,
+          comment: commentText
+        });
+
+        await sendTempMessage({
+          chat_id,
+          text: "✅ Комментарий добавлен к заявке.",
           reply_to_message_id: reply_id
         });
       }
@@ -139,7 +170,6 @@ app.post("/", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // Обработка фото
   if (body.message && body.message.photo) {
     const chat_id = body.message.chat.id;
     const message_id = body.message.reply_to_message?.message_id || null;
@@ -167,9 +197,18 @@ app.post("/", async (req, res) => {
         response: "Выполнено"
       });
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      await sendTempMessage({
         chat_id,
-        text: "✅ Фото получено и прикреплено к заявке."
+        text: "✅ Фото получено и прикреплено к заявке.",
+        reply_to_message_id: message_id
+      });
+
+      commentWaitingMap.set(`${chat_id}_${message_id}`, { rowIndex });
+
+      await sendTempMessage({
+        chat_id,
+        text: "Пожалуйста, добавьте комментарий по заявке (опишите, что было сделано):",
+        reply_to_message_id: message_id
       });
     } catch (error) {
       console.error("Ошибка при загрузке фото:", error);
