@@ -1,3 +1,4 @@
+
 const express = require("express");
 const axios = require("axios");
 const bodyParser = require("body-parser");
@@ -17,6 +18,8 @@ const auth = new google.auth.GoogleAuth({
   keyFile: "service-account.json",
   scopes: ["https://www.googleapis.com/auth/drive"]
 });
+
+const executorWaitingMap = new Map(); // Временное хранилище исполнителей
 
 async function uploadToDrive(fileUrl) {
   const authClient = await auth.getClient();
@@ -61,13 +64,30 @@ async function uploadToDrive(fileUrl) {
 app.post("/", async (req, res) => {
   const body = req.body;
 
-  // Inline кнопки — обновление статуса
+  // Обработка inline кнопок
   if (body.callback_query) {
     const callbackData = body.callback_query.data;
     const chat_id = body.callback_query.message.chat.id;
     const message_id = body.callback_query.message.message_id;
 
     const statuses = ["Принято в работу", "В работе", "Ожидает поставки", "Ожидает подрядчика", "Выполнено", "Отмена"];
+
+    if (callbackData === "Принято в работу") {
+      const sheetResponse = await axios.get(`${GOOGLE_SCRIPT_URL}?message_id=${message_id}`);
+      const { rowIndex } = sheetResponse.data;
+
+      if (rowIndex != null) {
+        executorWaitingMap.set(`${chat_id}_${message_id}`, { rowIndex });
+
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id,
+          text: "Пожалуйста, введите имя и/или компанию исполнителя:",
+          reply_to_message_id: message_id
+        });
+      }
+
+      return res.sendStatus(200);
+    }
 
     if (statuses.includes(callbackData)) {
       await axios.post(GOOGLE_SCRIPT_URL, {
@@ -86,6 +106,39 @@ app.post("/", async (req, res) => {
     return res.sendStatus(200);
   }
 
+  // Обработка ввода исполнителя
+  if (body.message && body.message.text) {
+    const chat_id = body.message.chat.id;
+    const reply_id = body.message.reply_to_message?.message_id;
+
+    if (reply_id) {
+      const key = `${chat_id}_${reply_id}`;
+      const executorData = executorWaitingMap.get(key);
+
+      if (executorData) {
+        const executorName = body.message.text;
+        const { rowIndex } = executorData;
+
+        executorWaitingMap.delete(key);
+
+        await axios.post(GOOGLE_SCRIPT_URL, {
+          row: rowIndex,
+          executor: executorName,
+          response: "В работе"
+        });
+
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id,
+          text: `Статус обновлён на: В работе
+Исполнитель: ${executorName}`,
+          reply_to_message_id: reply_id
+        });
+      }
+    }
+
+    return res.sendStatus(200);
+  }
+
   // Обработка фото
   if (body.message && body.message.photo) {
     const chat_id = body.message.chat.id;
@@ -98,7 +151,6 @@ app.post("/", async (req, res) => {
       const { data: fileInfo } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
       const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${fileInfo.result.file_path}`;
 
-      // ⏳ Добавим задержку, чтобы Telegram успел подготовить файл
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       const response = await uploadToDrive(fileUrl);
