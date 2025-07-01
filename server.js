@@ -1,4 +1,3 @@
-// server.js
 const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
@@ -18,6 +17,15 @@ const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4
 
 const sessions = new Map();
 
+const cleanupMessage = (chat_id, message_id) => {
+  setTimeout(() => {
+    axios.post(`${TELEGRAM_API}/deleteMessage`, {
+      chat_id,
+      message_id
+    }).catch((err) => console.error("Failed to delete message:", err.response?.data || err));
+  }, 60000);
+};
+
 app.post("/webhook", async (req, res) => {
   const body = req.body;
   console.log("Incoming update:", JSON.stringify(body, null, 2));
@@ -36,11 +44,15 @@ app.post("/webhook", async (req, res) => {
         row,
         message_id
       });
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+
+      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
         text: "Пожалуйста, отправьте фото выполненных работ в ответ на это сообщение.",
         reply_to_message_id: message_id
       });
+
+      cleanupMessage(chat_id, message_id);
+      cleanupMessage(chat_id, sent.data.result.message_id);
     }
   }
 
@@ -49,6 +61,7 @@ app.post("/webhook", async (req, res) => {
     const chat_id = body.message.chat.id;
     const from_user = body.message.from.username || "без имени";
     const row = session.row;
+    const incoming_id = body.message.message_id;
 
     if (session.step === "awaiting_photo" && body.message.photo) {
       const file_id = body.message.photo.pop().file_id;
@@ -63,21 +76,27 @@ app.post("/webhook", async (req, res) => {
       session.step = "awaiting_sum";
       sessions.set(chat_id, session);
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
         text: "Теперь укажите сумму затрат.",
-        reply_to_message_id: body.message.message_id
+        reply_to_message_id: incoming_id
       });
+
+      cleanupMessage(chat_id, incoming_id);
+      cleanupMessage(chat_id, sent.data.result.message_id);
     } else if (session.step === "awaiting_sum" && body.message.text) {
       session.sum = body.message.text;
       session.step = "awaiting_comment";
       sessions.set(chat_id, session);
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
         text: "Добавьте комментарий к выполненной заявке.",
-        reply_to_message_id: body.message.message_id
+        reply_to_message_id: incoming_id
       });
+
+      cleanupMessage(chat_id, incoming_id);
+      cleanupMessage(chat_id, sent.data.result.message_id);
     } else if (session.step === "awaiting_comment" && body.message.text) {
       session.comment = body.message.text;
 
@@ -93,10 +112,13 @@ app.post("/webhook", async (req, res) => {
 
       sessions.delete(chat_id);
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      const final = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
         text: `Заявка #${row} закрыта.\n💰 Сумма: ${session.sum} сум\n👤 Исполнитель: @${from_user}\n🔴 Просрочка: 1 дн.`
       });
+
+      cleanupMessage(chat_id, incoming_id);
+      cleanupMessage(chat_id, final.data.result.message_id);
     }
   }
 
@@ -142,3 +164,4 @@ async function uploadToDrive(fileUrl, fileName) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
