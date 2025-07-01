@@ -27,6 +27,43 @@ const cleanupMessage = (chat_id, message_id) => {
   }, 60000);
 };
 
+const getFileLink = async (fileId) => {
+  const res = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+  return `${TELEGRAM_FILE_API}/${res.data.result.file_path}`;
+};
+
+const uploadToDrive = async (url, filename) => {
+  const res = await fetch(url);
+  const buffer = await res.buffer();
+
+  const auth = new google.auth.GoogleAuth({
+    keyFile: "credentials.json",
+    scopes: ["https://www.googleapis.com/auth/drive"]
+  });
+  const drive = google.drive({ version: "v3", auth: await auth.getClient() });
+
+  const file = await drive.files.create({
+    requestBody: {
+      name: filename,
+      parents: [FOLDER_ID]
+    },
+    media: {
+      mimeType: "image/jpeg",
+      body: Buffer.from(buffer)
+    }
+  });
+
+  await drive.permissions.create({
+    fileId: file.data.id,
+    requestBody: {
+      role: "reader",
+      type: "anyone"
+    }
+  });
+
+  return `https://drive.google.com/uc?id=${file.data.id}`;
+};
+
 app.post("/webhook", async (req, res) => {
   const body = req.body;
   console.log("Incoming update:", JSON.stringify(body, null, 2));
@@ -35,133 +72,77 @@ app.post("/webhook", async (req, res) => {
     const data = body.callback_query.data;
     const chat_id = body.callback_query.message.chat.id;
     const message_id = body.callback_query.message.message_id;
+    const from_user = body.callback_query.from.username || "без имени";
 
     if (data.startsWith("accept_")) {
       const row = data.split("_")[1];
-      const status = "Выполнено";
 
-      sessions.set(chat_id, {
-        step: "awaiting_photo",
+      await axios.post(GOOGLE_SCRIPT_URL, {
         row,
+        response: "Принято в работу",
+        username: `@${from_user}`,
         message_id
       });
 
       const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
-        text: "Пожалуйста, отправьте фото выполненных работ в ответ на это сообщение.",
+        text: `Заявка #${row} принята в работу ✅`,
+        reply_to_message_id: message_id
+      });
+
+      cleanupMessage(chat_id, message_id);
+      cleanupMessage(chat_id, sent.data.result.message_id);
+    } else if (data.startsWith("cancel_")) {
+      const row = data.split("_")[1];
+
+      await axios.post(GOOGLE_SCRIPT_URL, {
+        row,
+        response: "Отмена",
+        username: `@${from_user}`,
+        message_id
+      });
+
+      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id,
+        text: `Заявка #${row} отменена ❌`,
         reply_to_message_id: message_id
       });
 
       cleanupMessage(chat_id, message_id);
       cleanupMessage(chat_id, sent.data.result.message_id);
     }
-  }
-
-  if (body.message && sessions.has(body.message.chat.id)) {
-    const session = sessions.get(body.message.chat.id);
+  } else if (body.message?.photo) {
     const chat_id = body.message.chat.id;
     const from_user = body.message.from.username || "без имени";
-    const row = session.row;
-    const incoming_id = body.message.message_id;
+    const photo = body.message.photo.pop();
+    const fileId = photo.file_id;
+    const caption = body.message.caption || "";
+    const rowMatch = caption.match(/#(\d+)/);
+    const row = rowMatch ? rowMatch[1] : null;
 
-    if (session.step === "awaiting_photo" && body.message.photo) {
-      const file_id = body.message.photo.pop().file_id;
-      const fileInfo = await axios.get(`${TELEGRAM_API}/getFile?file_id=${file_id}`);
-      const filePath = fileInfo.data.result.file_path;
-      const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
-      const fileName = `photo_${Date.now()}.jpg`;
-
-      const driveLink = await uploadToDrive(fileUrl, fileName);
-
-      session.photo = driveLink;
-      session.step = "awaiting_sum";
-      sessions.set(chat_id, session);
-
-      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: "Теперь укажите сумму затрат.",
-        reply_to_message_id: incoming_id
-      });
-
-      cleanupMessage(chat_id, incoming_id);
-      cleanupMessage(chat_id, sent.data.result.message_id);
-    } else if (session.step === "awaiting_sum" && body.message.text) {
-      session.sum = body.message.text;
-      session.step = "awaiting_comment";
-      sessions.set(chat_id, session);
-
-      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: "Добавьте комментарий к выполненной заявке.",
-        reply_to_message_id: incoming_id
-      });
-
-      cleanupMessage(chat_id, incoming_id);
-      cleanupMessage(chat_id, sent.data.result.message_id);
-    } else if (session.step === "awaiting_comment" && body.message.text) {
-      session.comment = body.message.text;
+    if (row) {
+      const fileLink = await getFileLink(fileId);
+      const gDriveUrl = await uploadToDrive(fileLink, `photo_${row}.jpg`);
 
       await axios.post(GOOGLE_SCRIPT_URL, {
         row,
-        response: "Выполнено",
-        photo: session.photo,
-        sum: session.sum,
-        comment: session.comment,
-        username: `@${from_user}`,
-        message_id: session.message_id
+        photo: gDriveUrl,
+        username: `@${from_user}`
       });
 
-      sessions.delete(chat_id);
-
-      const final = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      const msg = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id,
-        text: `Заявка #${row} закрыта.\n💰 Сумма: ${session.sum} сум\n👤 Исполнитель: @${from_user}\n🔴 Просрочка: 1 дн.`
+        text: `Фото по заявке #${row} загружено и сохранено.`
       });
 
-      cleanupMessage(chat_id, incoming_id);
-      cleanupMessage(chat_id, final.data.result.message_id);
+      cleanupMessage(chat_id, msg.data.result.message_id);
+      cleanupMessage(chat_id, body.message.message_id);
     }
   }
 
   res.sendStatus(200);
 });
 
-async function uploadToDrive(fileUrl, fileName) {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: path.join(__dirname, "service-account.json"),
-    scopes: ["https://www.googleapis.com/auth/drive"]
-  });
-  const drive = google.drive({ version: "v3", auth: await auth.getClient() });
-
-  const response = await fetch(fileUrl);
-  const buffer = await response.buffer();
-
-  const fileMetadata = {
-    name: fileName,
-    parents: [FOLDER_ID]
-  };
-  const media = {
-    mimeType: "image/jpeg",
-    body: Buffer.from(buffer)
-  };
-
-  const file = await drive.files.create({
-    resource: fileMetadata,
-    media,
-    fields: "id"
-  });
-
-  const fileId = file.data.id;
-  await drive.permissions.create({
-    fileId,
-    requestBody: {
-      role: "reader",
-      type: "anyone"
-    }
-  });
-
-  return `https://drive.google.com/file/d/${fileId}/view?usp=sharing`;
-}
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
