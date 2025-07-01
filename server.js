@@ -23,7 +23,7 @@ const auth = new google.auth.GoogleAuth({
 
 const drive = google.drive({ version: "v3", auth });
 
-const userStates = {};
+const userSteps = new Map();
 
 app.post("/webhook", async (req, res) => {
   const body = req.body;
@@ -54,88 +54,78 @@ app.post("/webhook", async (req, res) => {
 
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "Статус обновлён: Принято в работу",
-        });
-      } else if (action === "done") {
-        userStates[chatId] = { step: "photo", row, message_id: messageId, username };
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chatId,
-          text: "Пожалуйста, отправьте фото."
+          text: `Выбор пользователя зафиксирован: Принято в работу.`,
         });
       }
-    } else if (msg?.photo && userStates[chatId]?.step === "photo") {
-      const photos = msg.photo;
-      const fileId = photos[photos.length - 1].file_id;
-      const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-      const filePath = fileRes.data.result.file_path;
-      const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
+    } else if (msg?.photo || msg?.text) {
+      const step = userSteps.get(chatId);
 
-      const fileName = `photo_${Date.now()}.jpg`;
-      const response = await axios.get(fileUrl, { responseType: "stream" });
-      const bufferStream = new stream.PassThrough();
-      response.data.pipe(bufferStream);
+      if (step?.type === "photo" && msg.photo) {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+        const filePath = fileRes.data.result.file_path;
+        const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
 
-      const uploadRes = await drive.files.create({
-        requestBody: {
-          name: fileName,
-          parents: [FOLDER_ID],
-        },
-        media: {
-          mimeType: "image/jpeg",
-          body: bufferStream,
-        },
-        fields: "id",
-      });
+        const fileName = `photo_${Date.now()}.jpg`;
+        const response = await axios.get(fileUrl, { responseType: "stream" });
+        const bufferStream = new stream.PassThrough();
+        response.data.pipe(bufferStream);
 
-      const fileIdUploaded = uploadRes.data.id;
+        const uploadRes = await drive.files.create({
+          requestBody: {
+            name: fileName,
+            parents: [FOLDER_ID],
+          },
+          media: {
+            mimeType: "image/jpeg",
+            body: bufferStream,
+          },
+          fields: "id",
+        });
 
-      await drive.permissions.create({
-        fileId: fileIdUploaded,
-        requestBody: {
-          role: "reader",
-          type: "anyone",
-        },
-      });
+        const driveFileId = uploadRes.data.id;
+        await drive.permissions.create({
+          fileId: driveFileId,
+          requestBody: { role: "reader", type: "anyone" },
+        });
 
-      const fileLink = `https://drive.google.com/uc?id=${fileIdUploaded}`;
+        const fileLink = `https://drive.google.com/uc?id=${driveFileId}`;
+        step.data.photo = fileLink;
 
-      userStates[chatId].photo = fileLink;
-      userStates[chatId].step = "sum";
+        userSteps.set(chatId, { ...step, type: "sum" });
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "Фото загружено. Теперь введите сумму."
-      });
-    } else if (msg?.text && userStates[chatId]?.step === "sum") {
-      userStates[chatId].sum = msg.text;
-      userStates[chatId].step = "comment";
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: "Укажите сумму (в сумах):",
+        });
+      } else if (step?.type === "sum" && msg.text) {
+        step.data.sum = msg.text;
+        userSteps.set(chatId, { ...step, type: "comment" });
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "Спасибо. Теперь введите комментарий."
-      });
-    } else if (msg?.text && userStates[chatId]?.step === "comment") {
-      const { row, message_id, username, photo, sum } = userStates[chatId];
-      const comment = msg.text;
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: "Добавьте комментарий:",
+        });
+      } else if (step?.type === "comment" && msg.text) {
+        step.data.comment = msg.text;
+        const { row, photo, sum, comment, username } = step.data;
 
-      await axios.post(GOOGLE_SCRIPT_URL, {
-        row,
-        message_id,
-        response: "Выполнено",
-        photo,
-        sum,
-        comment,
-        username,
-      });
+        await axios.post(GOOGLE_SCRIPT_URL, {
+          row,
+          photo,
+          sum,
+          comment,
+          username,
+        });
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `Заявка #${row} закрыта. 💰 Сумма: ${sum} сум\n👤 Исполнитель: @${username}`
-      });
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `Заявка #${row} закрыта. 💰 Сумма: ${sum} сум 👤 Исполнитель: @${username}`,
+        });
 
-      delete userStates[chatId];
+        userSteps.delete(chatId);
+      }
     }
-
     res.sendStatus(200);
   } catch (err) {
     console.error("Ошибка обработки запроса:", err);
@@ -146,3 +136,4 @@ app.post("/webhook", async (req, res) => {
 app.listen(3000, () => {
   console.log("Сервер запущен на порту 3000");
 });
+
