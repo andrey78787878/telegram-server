@@ -142,13 +142,15 @@ app.post("/webhook", async (req, res) => {
 app.listen(PORT, async () => {
   console.log(`✅ Server listening on ${PORT}`);
 
-  // 🔧 Установка webhook после старта сервера
- const WEBHOOK_URL = "https://telegram-server-3cyz.onrender.com/webhook"; // ⬅️ ЗАМЕНИ на свою ссылку
+  const WEBHOOK_URL = "https://telegram-server-3cyz.onrender.com/webhook";
 
   try {
-    const res = await axios.post(`${TELEGRAM_API}/setWebhook?url=${encodeURIComponent(WEBHOOK_URL)}`);
+    const res = await axios.post(`${TELEGRAM_API}/setWebhook`, null, {
+      params: { url: WEBHOOK_URL }
+    });
     console.log("✅ Webhook установлен:", res.data);
   } catch (err) {
     console.error("❌ Ошибка установки webhook:", err.response?.data || err.message);
   }
 });
+
