@@ -1,27 +1,37 @@
 const express = require("express");
-const bodyParser = require("body-parser");
 const axios = require("axios");
-const cron = require("node-cron");
-
-const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby_gOrwjaB7LgGJcCarpUM8SsyhWzUtMJSN3kddZKm5AToFlWQsErAKxNu9l2UC2JRE/exec";
-const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
-
+const bodyParser = require("body-parser");
+const { uploadToDrive } = require("./utils/driveUploader");
+const { updateStatus, updateCompletionData } = require("./utils/spreadsheet");
 const app = express();
-const PORT = process.env.PORT || 10000;
-
 app.use(bodyParser.json());
 
+const TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN";
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
 app.post("/webhook", async (req, res) => {
-  console.log("Received webhook:", req.body);
+  const message = req.body.message || req.body.callback_query?.message;
+  const callbackData = req.body.callback_query?.data;
+  const chatId = message.chat.id;
+  const messageId = message.message_id;
+
+  if (callbackData === "in_progress") {
+    await updateStatus(messageId, "В работе", "@username");
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text: "Выбор зафиксирован: заявка принята в работу.",
+    });
+  }
+
+  if (callbackData === "done") {
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text: "Отправьте фото выполненных работ.",
+    });
+    // дальнейшая логика обработки фото, суммы и комментария
+  }
+
   res.sendStatus(200);
 });
 
-cron.schedule("0 9 * * *", () => {
-  console.log("Выполняется ежедневная задача в 9 утра.");
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(3000, () => console.log("Server running on port 3000"));
