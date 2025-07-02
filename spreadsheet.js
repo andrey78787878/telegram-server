@@ -1,5 +1,5 @@
 const { google } = require("googleapis");
-const credentials = require("../config");
+const { GOOGLE_SCRIPT_URL } = require("./config");
 
 const auth = new google.auth.GoogleAuth({
   credentials,
