@@ -5,32 +5,31 @@ const bodyParser = require("body-parser");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q"; // ← замени на свой
+// 🔐 ВСТАВЬ СЮДА СВОЙ ТОКЕН
+const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+const WEBHOOK_URL = "https://telegram-server-3cyz.onrender.com/webhook"; // ← URL твоего Render сервера
 
 app.use(bodyParser.json());
 
 // Проверка сервера
 app.get("/", (req, res) => {
-  res.send("🤖 Telegram бот работает");
+  res.send("🤖 Telegram бот работает!");
 });
 
-// Главный обработчик webhook
+// Webhook обработчик
 app.post("/webhook", async (req, res) => {
-  console.log("📥 Получен webhook:", JSON.stringify(req.body, null, 2));
-
-  const message = req.body.message || req.body.callback_query?.message;
-  const callbackQuery = req.body.callback_query;
-
-  if (!message) {
-    console.log("❗ Нет message в теле запроса");
-    return res.sendStatus(200);
-  }
-
-  const chatId = message.chat.id;
-  const text = message.text;
+  const body = req.body;
+  console.log("📩 Webhook payload:", JSON.stringify(body, null, 2));
 
   try {
+    const message = body.message || body.callback_query?.message;
+    const chatId = message.chat.id;
+    const text = body.message?.text;
+    const callbackQuery = body.callback_query;
+
+    // Команда /start
     if (text === "/start") {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -41,7 +40,10 @@ app.post("/webhook", async (req, res) => {
           ]
         }
       });
-    } else if (callbackQuery) {
+    }
+
+    // Обработка кнопки
+    if (callbackQuery) {
       const callbackData = callbackQuery.data;
       const callbackId = callbackQuery.id;
 
@@ -50,28 +52,26 @@ app.post("/webhook", async (req, res) => {
       if (callbackData === "accept") {
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
           callback_query_id: callbackId,
-          text: "Заявка принята!",
+          text: "✅ Заявка принята!",
           show_alert: false
         });
 
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "✅ Заявка принята в работу!"
+          text: "🟢 Заявка принята в работу!"
         });
       }
     }
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Ошибка обработки запроса:", err);
+    console.error("❌ Ошибка обработки:", err);
     res.sendStatus(500);
   }
 });
 
 // Установка webhook
 async function setWebhook() {
-  const WEBHOOK_URL = "https://telegram-server-3cyz.onrender.com/webhook"; // ← проверь свой URL
-
   try {
     const res = await axios.post(`${TELEGRAM_API}/setWebhook`, {
       url: WEBHOOK_URL
