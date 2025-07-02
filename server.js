@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 10000;
 
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzHx2W12QKGmzh8MWwNYMyeWu0tVw-PZbm3R5Oq2yz5yU5Cpe1M0m_lOiNeSXcwGNww/exec"; // ← Убедись, что этот URL публичен
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyFKlzM5JgcBOss238ofdwi_TcC4TIGMPOwpFb86yvV9YDHoXnjqYIs9U2EMg-TX2ql/exec"; // ← Убедись, что этот URL публичен
 
 app.use(bodyParser.json());
 
