@@ -11,7 +11,7 @@ const {
   FOLDER_ID,
   PORT
 } = require("./config");
-const { updateGoogleSheet } = require("./spreadsheet");
+const { updateGoogleSheet } = require("./utils/spreadsheet");
 const {
   sendMessage,
   sendPhoto,
