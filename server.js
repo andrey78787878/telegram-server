@@ -10,7 +10,7 @@ const {
   GOOGLE_SCRIPT_URL,
   FOLDER_ID
 } = require("./config");
-const { updateGoogleSheet } = require("./googleSheets");
+const { updateGoogleSheet } = require("./spreadsheet");
 const {
   sendMessage,
   sendPhoto,
@@ -147,4 +147,5 @@ app.post("/webhook", async (req, res) => {
 // ✅ Правильный запуск с учетом Render
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server listening on ${PORT}`));
+
 
