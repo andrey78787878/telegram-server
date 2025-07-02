@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { GOOGLE_SCRIPT_URL } = require("./config");
+const { GOOGLE_SCRIPT_URL } = require("../config");
 
 async function updateGoogleSheet(data) {
   try {
