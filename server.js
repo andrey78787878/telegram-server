@@ -139,6 +139,11 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
+app.post("/webhook", (req, res) => {
+  console.log("Webhook payload:", JSON.stringify(req.body));
+  res.sendStatus(200);
+});
+
 app.listen(PORT, async () => {
   console.log(`✅ Server listening on ${PORT}`);
 
