@@ -8,7 +8,7 @@ const app = express();
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxlBSrezVPwtPkSSuKQkzoHM0v5lm4mcc5AGBCOIwsu7PzmZ16WN4Rc6KB44PLBuRuG/exec";
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzHx2W12QKGmzh8MWwNYMyeWu0tVw-PZbm3R5Oq2yz5yU5Cpe1M0m_lOiNeSXcwGNww/exec";
 
 app.use(express.json());
 
