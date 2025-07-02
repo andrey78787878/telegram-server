@@ -7,7 +7,7 @@ app.use(bodyParser.json());
 
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby_gOrwjaB7LgGJcCarpUM8SsyhWzUtMJSN3kddZKm5AToFlWQsErAKxNu9l2UC2JRE/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbycSasX2wGVcyWqF0LtvesXjP7BSGtfL1hknVx93n4Roxh-3uQ8poyt_lqEt-TU0sLk/exec";
 
 app.post("/webhook", async (req, res) => {
   const callbackQuery = req.body.callback_query;
