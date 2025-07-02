@@ -5,7 +5,7 @@ const bodyParser = require("body-parser");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-const BOT_TOKEN = "ТВОЙ_ТОКЕН_ЗДЕСЬ"; // ← замени на свой
+const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q"; // ← замени на свой
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 app.use(bodyParser.json());
