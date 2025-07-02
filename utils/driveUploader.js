@@ -2,7 +2,7 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const FormData = require("form-data");
-const { TELEGRAM_API, TELEGRAM_FILE_API, FOLDER_ID } = require("./config");
+const { TELEGRAM_API, TELEGRAM_FILE_API, BOT_TOKEN, GOOGLE_DRIVE_FOLDER_ID } = require('../config');
 
 async function downloadTelegramFile(fileId, fileName) {
   const filePathRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
