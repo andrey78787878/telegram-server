@@ -8,7 +8,8 @@ const {
   TELEGRAM_API,
   TELEGRAM_FILE_API,
   GOOGLE_SCRIPT_URL,
-  FOLDER_ID
+  FOLDER_ID,
+  PORT
 } = require("./config");
 const { updateGoogleSheet } = require("./spreadsheet");
 const {
@@ -27,7 +28,6 @@ app.post("/webhook", async (req, res) => {
   const chatId = message.chat.id;
 
   try {
-    // Обработка колбэков от кнопок
     if (callbackQuery) {
       const data = callbackQuery.data;
       const messageId = message.message_id;
@@ -96,22 +96,17 @@ app.post("/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // Обработка фото
     if (message.photo) {
       const fileId = message.photo[message.photo.length - 1].file_id;
       const messageId = message.reply_to_message?.message_id;
-
       if (!messageId) return res.sendStatus(200);
 
-      // Получение файла
       const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
       const filePath = fileRes.data.result.file_path;
       const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
 
-      // Скачивание файла
       const photoRes = await axios.get(fileUrl, { responseType: "stream" });
 
-      // Загрузка на Google Диск
       const form = new FormData();
       form.append("photo", photoRes.data, {
         filename: `done-${Date.now()}.jpg`
@@ -144,8 +139,16 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ✅ Правильный запуск с учетом Render
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server listening on ${PORT}`));
+app.listen(PORT, async () => {
+  console.log(`✅ Server listening on ${PORT}`);
 
+  // 🔧 Установка webhook после старта сервера
+  const WEBHOOK_URL = "https://telegram-server-3cyz.onrender.com"; // ⬅️ ЗАМЕНИ на свою ссылку
 
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/setWebhook`, { url: WEBHOOK_URL });
+    console.log("✅ Webhook установлен:", res.data);
+  } catch (err) {
+    console.error("❌ Ошибка установки webhook:", err.response?.data || err.message);
+  }
+});
