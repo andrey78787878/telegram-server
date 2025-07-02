@@ -5,10 +5,10 @@ const { uploadToDrive } = require("./utils/driveUploader");
 const { deleteMessageAfterDelay } = require("./utils/messageUtils");
 const app = express();
 
-const BOT_TOKEN = "YOUR_BOT_TOKEN";
+const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const WEB_APP_URL = "YOUR_GAS_WEB_APP_URL";
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxlBSrezVPwtPkSSuKQkzoHM0v5lm4mcc5AGBCOIwsu7PzmZ16WN4Rc6KB44PLBuRuG/exec";
 
 app.use(express.json());
 
