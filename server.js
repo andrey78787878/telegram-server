@@ -8,13 +8,13 @@ const { buildFollowUpButtons } = require('./messageUtils');
 const app = express();
 app.use(express.json());
 
-// Новый URL твоего Google Apps Script
+// Твой Google Apps Script URL
 const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyS1vPiaxs488I28pRPcwG_OMVd3eBRX0dqk2tPc8d8HwASxEUXi3mJsps4o-n033-3/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbxeXikOhZy-HlXNTh4Dpz7FWqBf1pRi6DWpzGQlFQr8TSV46KUU_-FJF976oQrxpHAx/exec';
 
-// Храним состояния по ключу chatId:userId
+// Храним состояния пользователей: ключ - chatId:userId
 const userStates = {};
 
 app.post('/webhook', async (req, res) => {
@@ -23,6 +23,7 @@ app.post('/webhook', async (req, res) => {
   const body = req.body;
 
   try {
+    // Обработка callback_query от кнопок
     if (body.callback_query) {
       const { data, message, from } = body.callback_query;
       const chatId = message.chat.id;
@@ -62,7 +63,7 @@ app.post('/webhook', async (req, res) => {
           message_id: messageId,
           text: newText,
           parse_mode: 'HTML',
-          reply_markup: buttons,  // передаём объект с кнопками
+          reply_markup: buttons,
         });
 
         await axios.post(GAS_URL, {
@@ -112,6 +113,7 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
+    // Получение фото от пользователя
     if (body.message && body.message.photo) {
       const chatId = body.message.chat.id;
       const userId = body.message.from.id;
@@ -171,6 +173,7 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
+    // Получение текста — сумма или комментарий
     if (body.message && body.message.text) {
       const chatId = body.message.chat.id;
       const userId = body.message.from.id;
@@ -216,6 +219,8 @@ app.post('/webhook', async (req, res) => {
           sum: state.sum,
           comment: state.comment,
           message_id: state.message_id,
+          photoUrl: state.photoUrl,
+          status: 'Выполнено'
         };
 
         console.log('Отправляем данные в GAS:', payload);
@@ -245,10 +250,10 @@ app.post('/webhook', async (req, res) => {
           message_id: state.message_id,
           text: finalText,
           parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [] }, // Убираем кнопки
+          reply_markup: { inline_keyboard: [] },
         });
 
-        // Удаляем промежуточные сообщения через 60 секунд
+        // Удаляем сервисные сообщения через 60 секунд
         const allToDelete = [...(state.serviceMessages || []), body.message.message_id];
         allToDelete.forEach(msgId => {
           setTimeout(() => {
@@ -275,4 +280,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Сервер запущен на порту ${PORT}`);
 });
-
