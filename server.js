@@ -8,10 +8,11 @@ const { buildFollowUpButtons } = require('./messageUtils');
 const app = express();
 app.use(express.json());
 
+// Новый URL твоего Google Apps Script
 const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyiYYTXGbezDWwKT9kuHoVE5NjZ1C2dKmDQRwUTwITI0p3m9wF-ZI9L2cbh_O9VbQH0/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyS1vPiaxs488I28pRPcwG_OMVd3eBRX0dqk2tPc8d8HwASxEUXi3mJsps4o-n033-3/exec';
 
 // Храним состояния по ключу chatId:userId
 const userStates = {};
@@ -61,7 +62,7 @@ app.post('/webhook', async (req, res) => {
           message_id: messageId,
           text: newText,
           parse_mode: 'HTML',
-          reply_markup: buttons,  // <- Объект, не строка
+          reply_markup: buttons,  // передаём объект с кнопками
         });
 
         await axios.post(GAS_URL, {
@@ -165,8 +166,7 @@ app.post('/webhook', async (req, res) => {
           text: 'Теперь введите сумму выполненных работ (только число):',
         });
 
-        // Записываем только ID сообщения бота для последующего удаления
-        userStates[userKey].serviceMessages.push(reply.data.result.message_id);
+        userStates[userKey].serviceMessages.push(body.message.message_id, reply.data.result.message_id);
         return res.sendStatus(200);
       }
     }
@@ -183,9 +183,9 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      console.log(`Текущий шаг пользователя: step=${state.step}, получен текст: "${text}"`);
-
       if (state.step === 'waiting_sum') {
+        console.log(`Получена сумма: ${text} от @${state.username} для заявки №${state.row}`);
+
         if (!/^\d+$/.test(text)) {
           await axios.post(`${TELEGRAM_API}/sendMessage`, {
             chat_id: chatId,
@@ -202,11 +202,12 @@ app.post('/webhook', async (req, res) => {
           text: 'Добавьте комментарий (или введите "-" если без комментария):',
         });
 
-        userStates[userKey].serviceMessages.push(reply.data.result.message_id);
+        userStates[userKey].serviceMessages.push(body.message.message_id, reply.data.result.message_id);
         return res.sendStatus(200);
       }
 
       if (state.step === 'waiting_comment') {
+        console.log(`Получен комментарий: ${text} от @${state.username} для заявки №${state.row}`);
         state.comment = text;
 
         const payload = {
@@ -261,9 +262,6 @@ app.post('/webhook', async (req, res) => {
         delete userStates[userKey];
         return res.sendStatus(200);
       }
-
-      // Если получили текст на другом шаге — просто подтверждаем
-      return res.sendStatus(200);
     }
 
     res.sendStatus(200);
