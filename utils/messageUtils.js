@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzv0rnfV8dRQaSUs97riFH_-taEqDsSDd1Hl5BkehGfCbIjti_jWLhTNiuXppJMYAo/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwlJy3XL7EF7rcou2fe7O4uC2cVlmeYfM87D-M6ji4KyU0Ds0sp_SiOuT643vIhCwps/exec";
 const CHAT_CLEANUP_DELAY_MS = 60000;
 
 // Временное хранилище
