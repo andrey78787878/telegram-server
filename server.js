@@ -3,7 +3,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
-const { buildInitialButtons, buildFollowUpButtons } = require('./messageUtils');
+const { buildFollowUpButtons } = require('./messageUtils'); // функция для создания кнопок
 
 const app = express();
 app.use(express.json());
@@ -13,14 +13,15 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbyiYYTXGbezDWwKT9kuHoVE5NjZ1C2dKmDQRwUTwITI0p3m9wF-ZI9L2cbh_O9VbQH0/exec';
 
-const userStates = {}; // Хранит промежуточные состояния пользователя
+const userStates = {}; // хранение состояний пользователей
 
 app.post('/webhook', async (req, res) => {
   console.log('Получен запрос /webhook:', JSON.stringify(req.body).slice(0, 1000));
+
   const body = req.body;
 
   try {
-    // === CALLBACK QUERY ===
+    // Обработка callback_query (нажатия на inline кнопки)
     if (body.callback_query) {
       const { data, message, from } = body.callback_query;
       const chatId = message.chat.id;
@@ -30,19 +31,21 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`Callback query received. Data: ${data}, chatId: ${chatId}, username: @${username}`);
 
-      // Разбираем callback_data вида action_row, например: "inprogress_138", "done_138"
+      // Парсим действие и номер заявки из callback_data (ожидаем формат action_row, например "accept_138")
       const [action, row] = data.split('_');
       if (!row) {
-        console.warn('Не удалось определить номер заявки из callback_data:', data);
+        console.warn('Не удалось найти номер заявки в callback_data.');
         return res.sendStatus(200);
       }
 
+      // Обработка кнопки "Принято в работу" (accept, inprogress, in_progress)
       if (action === 'accept' || action === 'inprogress' || action === 'in_progress') {
-        // Обновляем сообщение: добавляем статус "В работе" и исполнителя,
-        // меняем кнопки на три новые
         const newText = `${fullMessage}\n\n🟢 В работе\n👷 Исполнитель: @${username}`;
-        const buttons = buildFollowUpButtons(row);
+        const buttons = buildFollowUpButtons(row); // массив массивов с кнопками
 
+        console.log('Обновляем сообщение с кнопками:', buttons);
+
+        // Отправляем запрос на редактирование сообщения с новым текстом и кнопками
         await axios.post(`${TELEGRAM_API}/editMessageText`, {
           chat_id: chatId,
           message_id: messageId,
@@ -50,6 +53,7 @@ app.post('/webhook', async (req, res) => {
           reply_markup: { inline_keyboard: buttons }
         });
 
+        // Отправляем данные в Google Apps Script для обновления статуса
         await axios.post(GAS_URL, {
           status: 'В работе',
           row,
@@ -59,8 +63,8 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (action === 'done' || action === 'completed') {
-        // Запускаем процесс сбора фото, суммы, комментария
+      // Кнопка "Выполнено"
+      if (action === 'done' || action === 'completed' || data === 'completed') {
         userStates[chatId] = {
           step: 'waiting_photo',
           row,
@@ -80,8 +84,9 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (action === 'delayed' || action === 'cancelled') {
-        const statusText = action === 'delayed' ? 'Ожидает поставки' : 'Отменено';
+      // Кнопки "Ожидает поставки" и "Отмена"
+      if (action === 'delayed' || action === 'cancelled' || data === 'delayed' || data === 'cancelled') {
+        const statusText = (action === 'delayed' || data === 'delayed') ? 'Ожидает поставки' : 'Отменено';
 
         console.log(`Обновляем статус заявки №${row} на "${statusText}"`);
 
@@ -98,7 +103,7 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // === PHOTO ===
+    // Обработка фотографий от пользователя
     if (body.message && body.message.photo) {
       const chatId = body.message.chat.id;
       const state = userStates[chatId];
@@ -153,7 +158,7 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // === TEXT ===
+    // Обработка текста от пользователя (сумма и комментарий)
     if (body.message && body.message.text) {
       const chatId = body.message.chat.id;
       const text = body.message.text;
@@ -223,7 +228,7 @@ app.post('/webhook', async (req, res) => {
           parse_mode: 'HTML'
         });
 
-        // Удаляем промежуточные сообщения (через 60 секунд)
+        // Удаляем промежуточные сообщения через 60 секунд
         const allToDelete = [...(state.serviceMessages || []), body.message.message_id];
         allToDelete.forEach(msgId => {
           setTimeout(() => {
@@ -239,4 +244,15 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    res
+    // Любые другие апдейты просто подтверждаем
+    res.sendStatus(200);
+
+  } catch (err) {
+    console.error('Ошибка:', err);
+    res.sendStatus(500);
+  }
+});
+
+app.listen(3000, () => {
+  console.log('Сервер запущен на порту 3000');
+});
