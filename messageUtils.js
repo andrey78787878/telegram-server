@@ -31,7 +31,7 @@ async function editInlineKeyboard(chatId, messageId, keyboard) {
     return await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
       chat_id: chatId,
       message_id: messageId,
-      reply_markup: keyboard,
+      reply_markup: JSON.stringify(keyboard),
     });
   } catch (error) {
     console.error('Ошибка editInlineKeyboard:', error.response?.data || error.message);
@@ -46,7 +46,7 @@ async function editMessageText(chatId, messageId, text, keyboard) {
       message_id: messageId,
       text,
       parse_mode: 'HTML',
-      reply_markup: keyboard,
+      reply_markup: JSON.stringify(keyboard),
     });
   } catch (error) {
     console.error('Ошибка editMessageText:', error.response?.data || error.message);
