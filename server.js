@@ -102,22 +102,32 @@ async function sendMessage(chat_id, text, buttons) {
     chat_id,
     text,
     parse_mode: "HTML",
-    reply_markup: buttons ? { inline_keyboard: [buttons] } : undefined,
+    reply_markup: buttons ? { inline_keyboard: buttons } : undefined,
   });
   return res.data.result;
 }
 
 async function editMessage(chat_id, message_id, text, buttons) {
   try {
-    await axios.post(`${TELEGRAM_API}/editMessageText`, {
+    const payload = {
       chat_id,
       message_id,
       text,
       parse_mode: "HTML",
-      reply_markup: buttons ? { inline_keyboard: [buttons] } : undefined,
-    });
+    };
+
+    if (buttons) {
+      payload.reply_markup = {
+        inline_keyboard: buttons,
+      };
+    }
+
+    await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
   } catch (err) {
-    console.error("❌ Ошибка при редактировании сообщения:", err.response?.data || err.message);
+    const desc = err.response?.data?.description || err.message;
+    if (!desc.includes("message is not modified")) {
+      console.error("❌ Ошибка при редактировании сообщения:", err.response?.data || err.message);
+    }
   }
 }
 
@@ -129,6 +139,7 @@ async function updateButtons(chat_id, message_id, row) {
       { text: "❌ Отмена", callback_data: `cancel_${row}` }
     ]
   ];
+
   await editMessage(chat_id, message_id, `🟢 Заявка в работе`, buttons);
 }
 
