@@ -1,11 +1,5 @@
-// 📦 server.js — Telegram бот с интеграцией в Google Таблицу
-
-const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
-const FormData = require("form-data");
-const fs = require("fs");
-const path = require("path");
 
 const app = express();
 app.use(bodyParser.json());
@@ -14,16 +8,17 @@ app.use(bodyParser.json());
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzv0rnfV8dRQaSUs97riFH_-taEqDsSDd1Hl5BkehGfCbIjti_jWLhTNiuXppJMYAo/exec";
-const CHAT_CLEANUP_DELAY_MS = 60000; // 1 минута
+const CHAT_CLEANUP_DELAY_MS = 60000;
 
-// Служебное хранилище временных состояний пользователя
+// Служебное хранилище
 const state = {};
 
-// === Обработка входящих обновлений от Telegram ===
+// === Вебхук Telegram ===
 app.post("/webhook", async (req, res) => {
   const body = req.body;
+  console.log("📥 Входящий апдейт:", JSON.stringify(body, null, 2)); // Логирование
 
-  // Обработка инлайн-кнопок (callback_query)
+  // === Обработка кнопок ===
   if (body.callback_query) {
     const query = body.callback_query;
     const data = query.data;
@@ -31,9 +26,19 @@ app.post("/webhook", async (req, res) => {
     const message_id = query.message.message_id;
     const username = query.from.username || "Без имени";
 
+    // ✅ Обязательный ответ на callback_query
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+      callback_query_id: query.id,
+    });
+
     if (data === "accept") {
       await sendToGAS({ row: null, message_id, response: "В работе", username });
-      await editMessage(chat_id, message_id, `📌 Заявка принята в работу исполнителем: @${username}`);
+
+      // Обновляем текст заявки
+      const updatedText = `📌 Заявка принята в работу исполнителем: @${username}`;
+      await editMessage(chat_id, message_id, updatedText);
+
+      // Обновляем кнопки: Выполнено, Ожидает поставки, Отмена
       await updateButtons(chat_id, message_id);
     }
 
@@ -46,7 +51,7 @@ app.post("/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // Обработка фото, суммы, комментария
+  // === Фото
   if (body.message && body.message.photo) {
     const chat_id = body.message.chat.id;
     const file_id = body.message.photo.at(-1).file_id;
@@ -60,10 +65,10 @@ app.post("/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 
+  // === Текст: сумма или комментарий
   if (body.message && body.message.text) {
     const chat_id = body.message.chat.id;
     const text = body.message.text;
-
     const user = state[chat_id];
     if (!user) return res.sendStatus(200);
 
@@ -132,9 +137,8 @@ function scheduleDelete(chat_id, message_id) {
 async function handleFinalSubmission(chat_id) {
   const { photo_file_id, sum, comment, message_id, username } = state[chat_id];
 
-  // Получаем файл и загружаем на диск через твой старый код (опущено для краткости)
   const photoUrl = await getTelegramFileUrl(photo_file_id);
-  const photoDriveLink = await uploadPhotoToDrive(photoUrl); // замените на свою реализацию
+  const photoDriveLink = await uploadPhotoToDrive(photoUrl); // заменить на твою реализацию
 
   const payload = {
     message_id,
@@ -155,11 +159,10 @@ async function getTelegramFileUrl(file_id) {
 }
 
 async function uploadPhotoToDrive(url) {
-  // Твоя логика загрузки фото на Google Диск и получения публичной ссылки
-  return url; // временно возвращаем URL Telegram (заменить)
+  // Здесь должна быть твоя логика
+  return url;
 }
 
-// === Запуск сервера ===
+// === Запуск ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
-
