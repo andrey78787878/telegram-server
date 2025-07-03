@@ -3,7 +3,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
-const { createButtonsForStatus } = require('./messageUtils');
+const { buildInitialButtons, buildFollowUpButtons } = require('./messageUtils');
 
 const app = express();
 app.use(express.json());
@@ -13,11 +13,10 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbyiYYTXGbezDWwKT9kuHoVE5NjZ1C2dKmDQRwUTwITI0p3m9wF-ZI9L2cbh_O9VbQH0/exec';
 
-const userStates = {}; // { [chatId]: { step, row, message_id, sum, username, comment, photoUrl, serviceMessages: [] } }
+const userStates = {}; // Хранит промежуточные состояния пользователя
 
 app.post('/webhook', async (req, res) => {
   console.log('Получен запрос /webhook:', JSON.stringify(req.body).slice(0, 1000));
-
   const body = req.body;
 
   try {
@@ -31,18 +30,18 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`Callback query received. Data: ${data}, chatId: ${chatId}, username: @${username}`);
 
-      const rowMatch = fullMessage.match(/Заявка №(\d+)/);
-      const row = rowMatch ? rowMatch[1] : null;
+      // Разбираем callback_data вида action_row, например: "inprogress_138", "done_138"
+      const [action, row] = data.split('_');
       if (!row) {
-        console.warn('Не удалось найти номер заявки в сообщении.');
+        console.warn('Не удалось определить номер заявки из callback_data:', data);
         return res.sendStatus(200);
       }
 
-      if (data === 'in_progress') {
+      if (action === 'accept' || action === 'inprogress' || action === 'in_progress') {
+        // Обновляем сообщение: добавляем статус "В работе" и исполнителя,
+        // меняем кнопки на три новые
         const newText = `${fullMessage}\n\n🟢 В работе\n👷 Исполнитель: @${username}`;
-        const buttons = createButtonsForStatus(row);
-
-        console.log(`Обновляем статус заявки №${row} на "В работе"`);
+        const buttons = buildFollowUpButtons(row);
 
         await axios.post(`${TELEGRAM_API}/editMessageText`, {
           chat_id: chatId,
@@ -60,7 +59,8 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (data === 'completed') {
+      if (action === 'done' || action === 'completed') {
+        // Запускаем процесс сбора фото, суммы, комментария
         userStates[chatId] = {
           step: 'waiting_photo',
           row,
@@ -80,8 +80,8 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (data === 'delayed' || data === 'cancelled') {
-        const statusText = data === 'delayed' ? 'Ожидает поставки' : 'Отменено';
+      if (action === 'delayed' || action === 'cancelled') {
+        const statusText = action === 'delayed' ? 'Ожидает поставки' : 'Отменено';
 
         console.log(`Обновляем статус заявки №${row} на "${statusText}"`);
 
@@ -239,13 +239,4 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    res.sendStatus(200);
-  } catch (err) {
-    console.error('Ошибка:', err);
-    res.sendStatus(500);
-  }
-});
-
-app.listen(3000, () => {
-  console.log('Сервер запущен на порту 3000');
-});
+    res
