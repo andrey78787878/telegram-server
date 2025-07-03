@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 10000;
 
 const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwrkw-Pd2HzOUStWt4nAkLUFdGzLsWJRQjdLcv4xAjVEdXFAqKknGnbCnM7Epa5ps7g/exec; // ⬅️ ВСТАВЬ СЮДА СВОЙ URL Google Apps Script
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzv0rnfV8dRQaSUs97riFH_-taEqDsSDd1Hl5BkehGfCbIjti_jWLhTNiuXppJMYAo/exec; // ⬅️ ВСТАВЬ СЮДА СВОЙ URL Google Apps Script
 
 app.use(bodyParser.json());
 
