@@ -13,7 +13,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbyiYYTXGbezDWwKT9kuHoVE5NjZ1C2dKmDQRwUTwITI0p3m9wF-ZI9L2cbh_O9VbQH0/exec';
 
-// Храним состояния по ключу chatId:userId — чтобы раздельно по каждому пользователю
+// Храним состояния по ключу chatId:userId
 const userStates = {};
 
 app.post('/webhook', async (req, res) => {
@@ -22,7 +22,6 @@ app.post('/webhook', async (req, res) => {
   const body = req.body;
 
   try {
-    // Обработка callback_query (нажатия на inline кнопки)
     if (body.callback_query) {
       const { data, message, from } = body.callback_query;
       const chatId = message.chat.id;
@@ -35,12 +34,10 @@ app.post('/webhook', async (req, res) => {
 
       console.log(`Callback query received. Data: ${data}, chatId: ${chatId}, username: @${username}`);
 
-      // Парсим callback_data как JSON (если ошибка — используем просто строку)
       let parsedData = {};
       try {
         parsedData = JSON.parse(data);
       } catch {
-        // fallback, если не JSON, например "accept_138"
         const parts = data.split('_');
         parsedData.action = parts[0];
         parsedData.messageId = parts[1];
@@ -53,7 +50,6 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // Обработка кнопки "Принято в работу"
       if (action === 'accept' || action === 'inprogress' || action === 'in_progress') {
         const newText = `${fullMessage}\n\n🟢 В работе\n👷 Исполнитель: @${username}`;
         const buttons = buildFollowUpButtons(row);
@@ -65,19 +61,18 @@ app.post('/webhook', async (req, res) => {
           message_id: messageId,
           text: newText,
           parse_mode: 'HTML',
-          reply_markup: JSON.stringify(buttons),
+          reply_markup: buttons,  // <- Важно: передаём объект, не строку и не вложенный inline_keyboard
         });
 
         await axios.post(GAS_URL, {
           status: 'В работе',
           row,
-          username
+          username,
         });
 
         return res.sendStatus(200);
       }
 
-      // Кнопка "Выполнено"
       if (action === 'done' || action === 'completed') {
         userStates[userKey] = {
           step: 'waiting_photo',
@@ -91,14 +86,13 @@ app.post('/webhook', async (req, res) => {
 
         const reply = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: 'Пожалуйста, отправьте фото выполненной работы.'
+          text: 'Пожалуйста, отправьте фото выполненной работы.',
         });
 
         userStates[userKey].serviceMessages.push(reply.data.result.message_id);
         return res.sendStatus(200);
       }
 
-      // Кнопки "Ожидает поставки" и "Отмена"
       if (action === 'delayed' || action === 'cancelled') {
         const statusText = action === 'delayed' ? 'Ожидает поставки' : 'Отменено';
 
@@ -108,7 +102,7 @@ app.post('/webhook', async (req, res) => {
 
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: `Заявка №${row} переведена в статус "${statusText}".`
+          text: `Заявка №${row} переведена в статус "${statusText}".`,
         });
 
         return res.sendStatus(200);
@@ -117,7 +111,6 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // Обработка фотографий от пользователя
     if (body.message && body.message.photo) {
       const chatId = body.message.chat.id;
       const userId = body.message.from.id;
@@ -145,7 +138,10 @@ app.post('/webhook', async (req, res) => {
         const photoStream = await axios.get(fileUrl, { responseType: 'stream' });
         const writer = fs.createWriteStream(localFilePath);
         photoStream.data.pipe(writer);
-        await new Promise(resolve => writer.on('finish', resolve));
+        await new Promise((resolve, reject) => {
+          writer.on('finish', resolve);
+          writer.on('error', reject);
+        });
 
         const formData = new FormData();
         formData.append('photo', fs.createReadStream(localFilePath));
@@ -154,19 +150,19 @@ app.post('/webhook', async (req, res) => {
         formData.append('message_id', state.message_id);
 
         const uploadResponse = await axios.post(GAS_URL, formData, {
-          headers: formData.getHeaders()
+          headers: formData.getHeaders(),
         });
 
         fs.unlinkSync(localFilePath);
 
-        userStates[userKey].photoUrl = uploadResponse.data.photoUrl; // ссылка от GAS
+        userStates[userKey].photoUrl = uploadResponse.data.photoUrl || '';
         userStates[userKey].step = 'waiting_sum';
 
         console.log(`Фото загружено, просим ввести сумму выполненных работ.`);
 
         const reply = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: 'Теперь введите сумму выполненных работ (только число):'
+          text: 'Теперь введите сумму выполненных работ (только число):',
         });
 
         userStates[userKey].serviceMessages.push(body.message.message_id, reply.data.result.message_id);
@@ -174,12 +170,11 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // Обработка текста от пользователя (сумма и комментарий)
     if (body.message && body.message.text) {
       const chatId = body.message.chat.id;
       const userId = body.message.from.id;
       const userKey = `${chatId}:${userId}`;
-      const text = body.message.text;
+      const text = body.message.text.trim();
       const state = userStates[userKey];
 
       if (!state) {
@@ -190,21 +185,20 @@ app.post('/webhook', async (req, res) => {
       if (state.step === 'waiting_sum') {
         console.log(`Получена сумма: ${text} от @${state.username} для заявки №${state.row}`);
 
-        // Проверка, что сумма — число
-        if (!/^\d+$/.test(text.trim())) {
+        if (!/^\d+$/.test(text)) {
           await axios.post(`${TELEGRAM_API}/sendMessage`, {
             chat_id: chatId,
-            text: 'Ошибка: введите сумму числом (только цифры). Попробуйте ещё раз:'
+            text: 'Ошибка: введите сумму числом (только цифры). Попробуйте ещё раз:',
           });
           return res.sendStatus(200);
         }
 
-        userStates[userKey].sum = text.trim();
+        userStates[userKey].sum = text;
         userStates[userKey].step = 'waiting_comment';
 
         const reply = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: 'Добавьте комментарий (или введите "-" если без комментария):'
+          text: 'Добавьте комментарий (или введите "-" если без комментария):',
         });
 
         userStates[userKey].serviceMessages.push(body.message.message_id, reply.data.result.message_id);
@@ -213,20 +207,19 @@ app.post('/webhook', async (req, res) => {
 
       if (state.step === 'waiting_comment') {
         console.log(`Получен комментарий: ${text} от @${state.username} для заявки №${state.row}`);
-        state.comment = text.trim();
+        state.comment = text;
 
         const payload = {
           row: state.row,
           username: state.username,
           sum: state.sum,
           comment: state.comment,
-          message_id: state.message_id
+          message_id: state.message_id,
         };
 
         console.log('Отправляем данные в GAS:', payload);
         await axios.post(GAS_URL, payload);
 
-        // Получаем просрочку
         const overdueResp = await axios.post(GAS_URL, { row: state.row, action: 'get_overdue' });
         const overdue = overdueResp.data.overdue || '0';
 
@@ -239,21 +232,19 @@ app.post('/webhook', async (req, res) => {
 ⏰ Просрочка: ${overdue} дн.
         `.trim();
 
-        // Ответом на исходное сообщение
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
           text: finalText,
           parse_mode: 'HTML',
-          reply_to_message_id: state.message_id
+          reply_to_message_id: state.message_id,
         });
 
-        // Редактируем материнское сообщение
         await axios.post(`${TELEGRAM_API}/editMessageText`, {
           chat_id: chatId,
           message_id: state.message_id,
           text: finalText,
           parse_mode: 'HTML',
-          reply_markup: JSON.stringify({ inline_keyboard: [] }) // убрать кнопки после закрытия
+          reply_markup: { inline_keyboard: [] }, // Убираем кнопки
         });
 
         // Удаляем промежуточные сообщения через 60 секунд
@@ -262,8 +253,8 @@ app.post('/webhook', async (req, res) => {
           setTimeout(() => {
             axios.post(`${TELEGRAM_API}/deleteMessage`, {
               chat_id: chatId,
-              message_id: msgId
-            }).catch(() => { });
+              message_id: msgId,
+            }).catch(() => {});
           }, 60000);
         });
 
@@ -272,9 +263,7 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    // Для остальных апдейтов просто подтверждаем
     res.sendStatus(200);
-
   } catch (err) {
     console.error('Ошибка:', err);
     res.sendStatus(500);
