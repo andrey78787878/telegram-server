@@ -61,7 +61,7 @@ app.post('/webhook', async (req, res) => {
           message_id: messageId,
           text: newText,
           parse_mode: 'HTML',
-          reply_markup: buttons,  // <- Важно: передаём объект, не строку и не вложенный inline_keyboard
+          reply_markup: buttons,  // <- Объект, не строка
         });
 
         await axios.post(GAS_URL, {
@@ -165,7 +165,8 @@ app.post('/webhook', async (req, res) => {
           text: 'Теперь введите сумму выполненных работ (только число):',
         });
 
-        userStates[userKey].serviceMessages.push(body.message.message_id, reply.data.result.message_id);
+        // Записываем только ID сообщения бота для последующего удаления
+        userStates[userKey].serviceMessages.push(reply.data.result.message_id);
         return res.sendStatus(200);
       }
     }
@@ -182,9 +183,9 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (state.step === 'waiting_sum') {
-        console.log(`Получена сумма: ${text} от @${state.username} для заявки №${state.row}`);
+      console.log(`Текущий шаг пользователя: step=${state.step}, получен текст: "${text}"`);
 
+      if (state.step === 'waiting_sum') {
         if (!/^\d+$/.test(text)) {
           await axios.post(`${TELEGRAM_API}/sendMessage`, {
             chat_id: chatId,
@@ -201,12 +202,11 @@ app.post('/webhook', async (req, res) => {
           text: 'Добавьте комментарий (или введите "-" если без комментария):',
         });
 
-        userStates[userKey].serviceMessages.push(body.message.message_id, reply.data.result.message_id);
+        userStates[userKey].serviceMessages.push(reply.data.result.message_id);
         return res.sendStatus(200);
       }
 
       if (state.step === 'waiting_comment') {
-        console.log(`Получен комментарий: ${text} от @${state.username} для заявки №${state.row}`);
         state.comment = text;
 
         const payload = {
@@ -261,6 +261,9 @@ app.post('/webhook', async (req, res) => {
         delete userStates[userKey];
         return res.sendStatus(200);
       }
+
+      // Если получили текст на другом шаге — просто подтверждаем
+      return res.sendStatus(200);
     }
 
     res.sendStatus(200);
@@ -274,3 +277,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Сервер запущен на порту ${PORT}`);
 });
+
