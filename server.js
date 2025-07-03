@@ -4,9 +4,9 @@ const axios = require("axios");
 const app = express();
 const PORT = 3000;
 
-const BOT_TOKEN = "YOUR_BOT_TOKEN";
+const BOT_TOKEN = "8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const SPREADSHEET_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec";
+const SPREADSHEET_URL = "https://script.google.com/macros/s/AKfycbwlJy3XL7EF7rcou2fe7O4uC2cVlmeYfM87D-M6ji4KyU0Ds0sp_SiOuT643vIhCwps/exec";
 
 app.use(bodyParser.json());
 
