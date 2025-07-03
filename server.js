@@ -1,8 +1,12 @@
+// index.js
 const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const { downloadTelegramFile, deleteMessages } = require('./messageUtils');
+const { uploadToDrive, generatePublicUrl } = require('./driveUploader');
+
 const app = express();
 app.use(express.json());
 
@@ -11,162 +15,166 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbwlJy3XL7EF7rcou2fe7O4uC2cVlmeYfM87D-M6ji4KyU0Ds0sp_SiOuT643vIhCwps/exec';
 
-const state = {}; // для отслеживания этапов "Выполнено"
+const userStates = {};
 
 app.post('/webhook', async (req, res) => {
   const body = req.body;
+
   if (body.callback_query) {
-    const cb = body.callback_query;
-    const chat_id = cb.message.chat.id;
-    const message_id = cb.message.message_id;
-    const from = cb.from;
-    const username = from.username ? '@' + from.username : from.first_name;
-    const data = cb.data;
+    const callback = body.callback_query;
+    const data = callback.data;
+    const chatId = callback.message.chat.id;
+    const messageId = callback.message.message_id;
+    const username = callback.from.username || '';
+    const row = callback.message.text.match(/№(\d+)/)?.[1] || '';
 
-    if (data === 'accept') {
-      // ответ на кнопку "Принято в работу"
+    if (data === 'work') {
       await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-        chat_id,
-        message_id,
-        reply_markup: {
-          inline_keyboard: [[{ text: 'В работе 🟢', callback_data: 'working' }]],
-        },
-      });
-
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: `Заявка принята в работу исполнителем ${username}`,
-        reply_to_message_id: message_id,
-      });
-
-      await axios.post(GAS_URL, {
-        status: 'В работе',
-        executor: username,
-        message_id,
-      });
-    }
-
-    if (data === 'working') {
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: `Что сделать с заявкой?`,
+        chat_id: chatId,
+        message_id: messageId,
         reply_markup: {
           inline_keyboard: [
-            [{ text: '✅ Выполнено', callback_data: 'done' }],
-            [{ text: '🚚 Ожидает поставки', callback_data: 'waiting' }],
-            [{ text: '❌ Отмена', callback_data: 'cancel' }],
-          ],
-        },
-        reply_to_message_id: message_id,
+            [
+              { text: 'Выполнено ✅', callback_data: 'done' },
+              { text: 'Ожидает поставки 📦', callback_data: 'wait' },
+              { text: 'Отмена ❌', callback_data: 'cancel' }
+            ]
+          ]
+        }
       });
-    }
 
-    if (data === 'done') {
-      // инициируем сбор данных
-      state[chat_id] = { step: 'photo', message_id, executor: username };
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: 'Пожалуйста, отправьте фото выполненных работ 📷',
+        chat_id: chatId,
+        text: `🟢 Заявка №${row} принята в работу\n👷 Исполнитель: @${username}`,
+        reply_to_message_id: messageId
       });
-    }
 
-    if (data === 'waiting' || data === 'cancel') {
-      const newStatus = data === 'waiting' ? 'Ожидает поставки' : 'Отменено';
       await axios.post(GAS_URL, {
-        status: newStatus,
-        executor: username,
-        message_id,
+        row,
+        status: 'В работе',
+        executor: `@${username}`,
+        message_id: messageId
       });
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: `Заявка обновлена: ${newStatus}`,
-        reply_to_message_id: message_id,
+
+    } else if (data === 'done') {
+      userStates[chatId] = { step: 'awaiting_photo', row, messageId, username };
+      const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: '📷 Пожалуйста, отправьте фото выполненных работ'
       });
+      userStates[chatId].serviceMessages = [sent.data.result.message_id];
     }
 
     return res.sendStatus(200);
   }
 
-  if (body.message && state[body.message.chat.id]) {
-    const chat_id = body.message.chat.id;
-    const userState = state[chat_id];
-    const message_id = userState.message_id;
+  if (body.message) {
+    const msg = body.message;
+    const chatId = msg.chat.id;
 
-    if (body.message.photo && userState.step === 'photo') {
-      const fileId = body.message.photo.pop().file_id;
-      const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-      const filePath = fileRes.data.result.file_path;
-      const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
-      const fileName = `photo_${Date.now()}.jpg`;
+    if (userStates[chatId]) {
+      const state = userStates[chatId];
 
-      const photoRes = await axios({
-        url: fileUrl,
-        method: 'GET',
-        responseType: 'stream',
-      });
+      // 1. Фото
+      if (state.step === 'awaiting_photo' && msg.photo) {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        const filePathRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+        const filePath = filePathRes.data.result.file_path;
+        const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
+        const localPath = await downloadTelegramFile(fileUrl, filePath);
 
-      const destPath = path.join(__dirname, fileName);
-      const writer = fs.createWriteStream(destPath);
-      photoRes.data.pipe(writer);
-      await new Promise((resolve) => writer.on('finish', resolve));
+        const driveId = await uploadToDrive(localPath);
+        const publicUrl = await generatePublicUrl(driveId);
+        fs.unlinkSync(localPath);
 
-      const form = new FormData();
-      form.append('file', fs.createReadStream(destPath));
-      form.append('filename', fileName);
-      form.append('message_id', message_id);
-      form.append('executor', userState.executor);
-      form.append('username', userState.executor);
+        state.photoUrl = publicUrl;
+        state.step = 'awaiting_sum';
 
-      const uploadRes = await axios.post(GAS_URL, form, {
-        headers: form.getHeaders(),
-      });
+        const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: '💰 Введите сумму работ в сумах (только цифры)'
+        });
+        state.serviceMessages.push(sent.data.result.message_id);
+        return res.sendStatus(200);
+      }
 
-      fs.unlinkSync(destPath);
-      userState.step = 'sum';
-      userState.photoUrl = uploadRes.data.url;
+      // 2. Сумма
+      if (state.step === 'awaiting_sum' && msg.text && /^\d+$/.test(msg.text)) {
+        state.sum = msg.text;
+        state.step = 'awaiting_comment';
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: 'Введите сумму работ в сумах 💰',
-      });
-    } else if (userState.step === 'sum' && body.message.text) {
-      userState.sum = body.message.text;
-      userState.step = 'comment';
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: 'Добавьте комментарий по выполненным работам 📝',
-      });
-    } else if (userState.step === 'comment' && body.message.text) {
-      userState.comment = body.message.text;
-      userState.step = 'done';
+        const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: '📝 Напишите краткий комментарий по выполненной заявке'
+        });
+        state.serviceMessages.push(sent.data.result.message_id);
+        return res.sendStatus(200);
+      }
 
-      await axios.post(GAS_URL, {
-        message_id: userState.message_id,
-        photoUrl: userState.photoUrl,
-        sum: userState.sum,
-        comment: userState.comment,
-        executor: userState.executor,
-        status: 'Выполнено',
-      });
+      // 3. Комментарий
+      if (state.step === 'awaiting_comment' && msg.text) {
+        state.comment = msg.text;
 
-      const finalText = `📌 Заявка закрыта.\n📎 Фото: [ссылка](${userState.photoUrl})\n💰 Сумма: ${userState.sum} сум\n👤 Исполнитель: ${userState.executor}\n✅ Статус: Выполнено`;
+        const now = new Date();
+        const dateString = now.toLocaleDateString('ru-RU');
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id,
-        text: finalText,
-        parse_mode: 'Markdown',
-        reply_to_message_id: userState.message_id,
-      });
+        // Отправка на GAS
+        await axios.post(GAS_URL, {
+          row: state.row,
+          photo: state.photoUrl,
+          sum: state.sum,
+          comment: state.comment,
+          username: `@${state.username}`,
+          message_id: state.messageId,
+          closed: dateString
+        });
 
-      delete state[chat_id];
+        // Получение просрочки
+        const delayRes = await axios.post(GAS_URL, {
+          row: state.row,
+          action: 'get_delay'
+        });
+        const delay = delayRes.data.delay || '0';
+
+        // Обновление материнского сообщения
+        const msgText = `
+📌 Заявка №${state.row} закрыта.
+📎 Фото: ${state.photoUrl}
+💰 Сумма: ${state.sum} сум
+👤 Исполнитель: @${state.username}
+✅ Статус: Выполнено
+🔴 Просрочка: ${delay} дн.
+        `.trim();
+
+        await axios.post(`${TELEGRAM_API}/editMessageText`, {
+          chat_id: chatId,
+          message_id: state.messageId,
+          text: msgText
+        });
+
+        // Финальное сообщение
+        const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `✅ Заявка №${state.row} закрыта. Все данные сохранены.`
+        });
+
+        state.serviceMessages.push(msg.message_id, sent.data.result.message_id);
+
+        // Удаление через 60 сек
+        setTimeout(() => {
+          deleteMessages(chatId, state.serviceMessages);
+        }, 60000);
+
+        delete userStates[chatId];
+        return res.sendStatus(200);
+      }
     }
-
-    return res.sendStatus(200);
   }
 
   res.sendStatus(200);
 });
 
 app.listen(3000, () => {
-  console.log('Telegram bot listening on port 3000');
+  console.log('Telegram bot server running on port 3000');
 });
+
