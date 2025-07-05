@@ -128,11 +128,17 @@ async function getTelegramFileUrl(fileId) {
   return `${TELEGRAM_FILE_API}/${res.data.result.file_path}`;
 }
 
-async function sendMessage(chatId, text) {
-  return axios.post(`${TELEGRAM_API}/sendMessage`, {
+async function sendMessage(chatId, text, replyMarkup = null) {
+  const payload = {
     chat_id: chatId,
     text,
-  });
+  };
+
+  if (replyMarkup) {
+    payload.reply_markup = replyMarkup;
+  }
+
+  return axios.post(`${TELEGRAM_API}/sendMessage`, payload);
 }
 
 async function editInlineKeyboard(chatId, messageId, username) {
@@ -146,6 +152,15 @@ async function editInlineKeyboard(chatId, messageId, username) {
         { text: '❌ Отмена', callback_data: `cancel_${messageId}` }
       ]],
     },
+  });
+}
+
+// 👇 ВСТАВКА КНОПКИ ПРИ СОЗДАНИИ ЗАЯВКИ — ПРИМЕР ИСПОЛЬЗОВАНИЯ:
+async function sendNewRequest(chatId, row) {
+  await sendMessage(chatId, `📝 Заявка #${row} создана. Выберите действие:`, {
+    inline_keyboard: [[
+      { text: 'Принято в работу', callback_data: `work_${row}` }
+    ]]
   });
 }
 
