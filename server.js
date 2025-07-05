@@ -3,6 +3,8 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
+const { google } = require('googleapis');
+
 const app = express();
 const PORT = 3000;
 
@@ -11,9 +13,18 @@ const TELEGRAM_API = https://api.telegram.org/bot${BOT_TOKEN};
 const TELEGRAM_FILE_API = https://api.telegram.org/file/bot${BOT_TOKEN};
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbxeXikOhZy-HlXNTh4Dpz7FWqBf1pRi6DWpzGQlFQr8TSV46KUU_-FJF976oQrxpHAx/exec';
 
+// === Google Drive auth ===
+const SERVICE_ACCOUNT_FILE = path.join(__dirname, 'credentials.json');
+const FOLDER_ID = '1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF';
+
+const auth = new google.auth.GoogleAuth({
+  keyFile: SERVICE_ACCOUNT_FILE,
+  scopes: ['https://www.googleapis.com/auth/drive'],
+});
+const drive = google.drive({ version: 'v3', auth });
+
 app.use(express.json());
 
-// Хранилище временных данных по пользователям
 const userStates = {};
 
 app.post('/webhook', async (req, res) => {
@@ -33,7 +44,7 @@ app.post('/webhook', async (req, res) => {
 
     if (userStates[userId]?.waitingFor === 'photo' && photo) {
       const fileId = photo[photo.length - 1].file_id;
-      const fileUrl = await getFileLink(fileId);
+      const fileUrl = await uploadTelegramPhotoToDrive(fileId);
       userStates[userId].photo = fileUrl;
       userStates[userId].waitingFor = 'sum';
       await sendMessage(chatId, 'Укажите сумму 💰');
@@ -135,12 +146,6 @@ async function editMessage(chatId, messageId, newText) {
   });
 }
 
-async function getFileLink(fileId) {
-  const res = await axios.get(${TELEGRAM_API}/getFile?file_id=${fileId});
-  const filePath = res.data.result.file_path;
-  return ${TELEGRAM_FILE_API}/${filePath};
-}
-
 function extractRowFromText(text) {
   const match = text.match(/Заявка\s+#(\d+)/);
   return match ? match[1] : '';
@@ -156,6 +161,49 @@ function extractProblemFromText(text) {
   return match ? match[1].trim() : '';
 }
 
+// === NEW: Upload photo from Telegram to Google Drive ===
+async function uploadTelegramPhotoToDrive(fileId) {
+  try {
+    const fileInfo = await axios.get(
+      https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}
+    );
+    const filePath = fileInfo.data.result.file_path;
+    const url = https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath};
+
+    const response = await axios.get(url, { responseType: 'stream' });
+    const fileName = path.basename(filePath);
+
+    const uploadResponse = await drive.files.create({
+      requestBody: {
+        name: fileName,
+        parents: [FOLDER_ID],
+      },
+      media: {
+        mimeType: response.headers['content-type'],
+        body: response.data,
+      },
+    });
+
+    const fileIdOnDrive = uploadResponse.data.id;
+
+    await drive.permissions.create({
+      fileId: fileIdOnDrive,
+      requestBody: {
+        role: 'reader',
+        type: 'anyone',
+      },
+    });
+
+    const webLink = https://drive.google.com/uc?id=${fileIdOnDrive}&export=view;
+    return webLink;
+  } catch (error) {
+    console.error('Ошибка при загрузке фото на Google Диск:', error.message);
+    throw error;
+  }
+}
+
 app.listen(PORT, () => {
   console.log(Server is running on port ${PORT});
 });
+
+
