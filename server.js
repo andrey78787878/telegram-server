@@ -134,9 +134,9 @@ async function sendMessage(chatId, text, replyMarkup = null) {
     text,
   };
 
-  if (replyMarkup) {
-    payload.reply_markup = replyMarkup;
-  }
+if (replyMarkup) {
+  payload.reply_markup = replyMarkup;
+}
 
   return axios.post(`${TELEGRAM_API}/sendMessage`, payload);
 }
