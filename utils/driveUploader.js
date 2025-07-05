@@ -1,50 +1,71 @@
-const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const FormData = require("form-data");
-const { TELEGRAM_API, TELEGRAM_FILE_API, BOT_TOKEN, GOOGLE_DRIVE_FOLDER_ID } = require('../config');
+const axios = require("axios");
+const { google } = require("googleapis");
 
-async function downloadTelegramFile(fileId, fileName) {
-  const filePathRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-  const filePath = filePathRes.data.result.file_path;
-  const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
+// Замените на ваш путь к JSON-файлу сервисного аккаунта
+const SERVICE_ACCOUNT_FILE = path.join(__dirname, "credentials.json");
 
-  const fileStream = await axios.get(fileUrl, { responseType: "stream" });
-  const tempPath = path.join(__dirname, fileName);
-  const writer = fs.createWriteStream(tempPath);
+// ID папки на Google Диске, куда будут сохраняться фото
+const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
 
-  return new Promise((resolve, reject) => {
-    fileStream.data.pipe(writer);
-    writer.on("finish", () => resolve(tempPath));
-    writer.on("error", reject);
-  });
+// Авторизация через сервисный аккаунт
+const auth = new google.auth.GoogleAuth({
+  keyFile: SERVICE_ACCOUNT_FILE,
+  scopes: ["https://www.googleapis.com/auth/drive"],
+});
+const drive = google.drive({ version: "v3", auth });
+
+/**
+ * Загружает фото с Telegram на Google Диск
+ * @param {string} fileId - Telegram file_id
+ * @param {string} telegramToken - токен бота
+ * @returns {Promise<string>} - ссылка на публичный файл
+ */
+async function uploadTelegramPhotoToDrive(fileId, telegramToken) {
+  try {
+    // Получаем путь к файлу на серверах Telegram
+    const fileInfo = await axios.get(
+      `https://api.telegram.org/bot${telegramToken}/getFile?file_id=${fileId}`
+    );
+    const filePath = fileInfo.data.result.file_path;
+
+    // Скачиваем файл
+    const url = `https://api.telegram.org/file/bot${telegramToken}/${filePath}`;
+    const response = await axios.get(url, { responseType: "stream" });
+
+    const fileName = path.basename(filePath);
+
+    // Загружаем на Google Диск
+    const uploadResponse = await drive.files.create({
+      requestBody: {
+        name: fileName,
+        parents: [FOLDER_ID],
+      },
+      media: {
+        mimeType: response.headers["content-type"],
+        body: response.data,
+      },
+    });
+
+    const fileIdOnDrive = uploadResponse.data.id;
+
+    // Делаем файл публичным
+    await drive.permissions.create({
+      fileId: fileIdOnDrive,
+      requestBody: {
+        role: "reader",
+        type: "anyone",
+      },
+    });
+
+    // Получаем прямую ссылку
+    const webLink = `https://drive.google.com/uc?id=${fileIdOnDrive}&export=view`;
+    return webLink;
+  } catch (error) {
+    console.error("Ошибка при загрузке фото на Google Диск:", error.message);
+    throw error;
+  }
 }
 
-async function uploadToDrive(tempPath, fileName) {
-  const driveApi = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
-  const accessToken = process.env.GDRIVE_TOKEN;
-
-  const metadata = {
-    name: fileName,
-    parents: [FOLDER_ID]
-  };
-
-  const form = new FormData();
-  form.append("metadata", JSON.stringify(metadata), { contentType: "application/json" });
-  form.append("file", fs.createReadStream(tempPath));
-
-  const headers = {
-    ...form.getHeaders(),
-    Authorization: `Bearer ${accessToken}`
-  };
-
-  const res = await axios.post(driveApi, form, { headers });
-  fs.unlinkSync(tempPath);
-
-  return `https://drive.google.com/file/d/${res.data.id}/view?usp=sharing`;
-}
-
-module.exports = {
-  downloadTelegramFile,
-  uploadToDrive
-};
+module.exports = { uploadTelegramPhotoToDrive };
