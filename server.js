@@ -9,8 +9,8 @@ const app = express();
 const PORT = 3000;
 
 const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-const TELEGRAM_API = https://api.telegram.org/bot${BOT_TOKEN};
-const TELEGRAM_FILE_API = https://api.telegram.org/file/bot${BOT_TOKEN};
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbxeXikOhZy-HlXNTh4Dpz7FWqBf1pRi6DWpzGQlFQr8TSV46KUU_-FJF976oQrxpHAx/exec';
 
 // === Google Drive auth ===
@@ -81,7 +81,7 @@ app.post('/webhook', async (req, res) => {
         username,
       });
 
-      const textFinal = 
+      const textFinal = `
 📌 Заявка #${row} закрыта.
 📎 Фото: [ссылка](${photo})
 💰 Сумма: ${sum} сум
@@ -90,7 +90,7 @@ app.post('/webhook', async (req, res) => {
 🛠️ ${problem}
 💬 ${comment}
 🔴 Просрочка: ${overdueDays} дн.
-      .trim();
+      `.trim();
 
       await editMessage(userStates[userId].chat_id, message_id, textFinal);
 
@@ -129,7 +129,7 @@ async function handleCallbackQuery(query) {
 }
 
 async function sendMessage(chatId, text) {
-  await axios.post(${TELEGRAM_API}/sendMessage, {
+  await axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
     text,
     parse_mode: 'Markdown',
@@ -137,7 +137,7 @@ async function sendMessage(chatId, text) {
 }
 
 async function editMessage(chatId, messageId, newText) {
-  await axios.post(${TELEGRAM_API}/editMessageText, {
+  await axios.post(`${TELEGRAM_API}/editMessageText`, {
     chat_id: chatId,
     message_id: messageId,
     text: newText,
@@ -161,14 +161,14 @@ function extractProblemFromText(text) {
   return match ? match[1].trim() : '';
 }
 
-// === NEW: Upload photo from Telegram to Google Drive ===
+// === Upload photo from Telegram to Google Drive ===
 async function uploadTelegramPhotoToDrive(fileId) {
   try {
     const fileInfo = await axios.get(
-      https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}
+      `${TELEGRAM_API}/getFile?file_id=${fileId}`
     );
     const filePath = fileInfo.data.result.file_path;
-    const url = https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath};
+    const url = `${TELEGRAM_FILE_API}/${filePath}`;
 
     const response = await axios.get(url, { responseType: 'stream' });
     const fileName = path.basename(filePath);
@@ -194,7 +194,7 @@ async function uploadTelegramPhotoToDrive(fileId) {
       },
     });
 
-    const webLink = https://drive.google.com/uc?id=${fileIdOnDrive}&export=view;
+    const webLink = `https://drive.google.com/uc?id=${fileIdOnDrive}&export=view`;
     return webLink;
   } catch (error) {
     console.error('Ошибка при загрузке фото на Google Диск:', error.message);
@@ -203,7 +203,5 @@ async function uploadTelegramPhotoToDrive(fileId) {
 }
 
 app.listen(PORT, () => {
-  console.log(Server is running on port ${PORT});
+  console.log(`Server is running on port ${PORT}`);
 });
-
-
