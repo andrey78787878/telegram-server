@@ -47,12 +47,13 @@ function buildInitialButtons(messageId) {
   };
 }
 
+// Заменил JSON на короткие строки
 function buildFollowUpButtons(messageId) {
   return {
     inline_keyboard: [
-      [{ text: '✅ Выполнено', callback_data: JSON.stringify({ action: 'completed', messageId }) }],
-      [{ text: '🕐 Ожидает поставки', callback_data: JSON.stringify({ action: 'delayed', messageId }) }],
-      [{ text: '❌ Отмена', callback_data: JSON.stringify({ action: 'cancelled', messageId }) }]
+      [{ text: '✅ Выполнено', callback_data: `completed_${messageId}` }],
+      [{ text: '🕐 Ожидает поставки', callback_data: `delayed_${messageId}` }],
+      [{ text: '❌ Отмена', callback_data: `cancelled_${messageId}` }]
     ]
   };
 }
@@ -87,39 +88,40 @@ app.post('/', async (req, res) => {
       const username = cb.from.username || 'неизвестен';
       const messageId = cb.message.message_id;
 
-      // Новый формат (JSON)
-      if (typeof data === 'string' && data.startsWith('{')) {
-        const parsed = JSON.parse(data);
-        const action = parsed.action;
-        const msgId = parsed.messageId;
+      // Теперь без JSON.parse, а с проверкой по префиксам
+      if (data.startsWith('in_progress_')) {
+        const msgId = data.split('_')[1];
+        await axios.post(GAS_URL, {
+          message_id: msgId,
+          status: 'В работе',
+          executor: `@${username}`,
+        });
 
-        if (action === 'in_progress') {
-          await axios.post(GAS_URL, {
-            message_id: msgId,
-            status: 'В работе',
-            executor: `@${username}`,
-          });
+        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+          chat_id: chatId,
+          message_id: msgId,
+          reply_markup: JSON.stringify(buildFollowUpButtons(msgId)),
+        });
 
-          await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-            chat_id: chatId,
-            message_id: msgId,
-            reply_markup: JSON.stringify(buildFollowUpButtons(msgId)),
-          });
+        await sendMessage(chatId, `👤 Заявка #${msgId} принята в работу исполнителем: @${username}`, null, msgId);
 
-          await sendMessage(chatId, `👤 Заявка #${msgId} принята в работу исполнителем: @${username}`, null, msgId);
-        }
+        return res.sendStatus(200);
+      }
 
-        if (action === 'completed') {
-          userState[chatId] = { stage: 'awaiting_photo', messageId: msgId, username, tempMsgs: [] };
-          const msg = await sendMessage(chatId, '📸 Пришлите фото выполненной работы.');
-          userState[chatId].tempMsgs.push(msg.data.result.message_id);
-        }
+      if (data.startsWith('completed_')) {
+        const msgId = data.split('_')[1];
+        userState[chatId] = { stage: 'awaiting_photo', messageId: msgId, username, tempMsgs: [] };
+        const msg = await sendMessage(chatId, '📸 Пришлите фото выполненной работы.');
+        userState[chatId].tempMsgs.push(msg.data.result.message_id);
+        return res.sendStatus(200);
+      }
 
-        if (action === 'delayed' || action === 'cancelled') {
-          const status = action === 'delayed' ? 'Ожидает поставки' : 'Отменено';
-          await axios.post(GAS_URL, { message_id: msgId, status });
-          await sendMessage(chatId, `🔄 Заявка #${msgId}: ${status}`, null, msgId);
-        }
+      if (data.startsWith('delayed_') || data.startsWith('cancelled_')) {
+        const [action, msgId] = data.split('_');
+        const status = action === 'delayed' ? 'Ожидает поставки' : 'Отменено';
+
+        await axios.post(GAS_URL, { message_id: msgId, status });
+        await sendMessage(chatId, `🔄 Заявка #${msgId}: ${status}`, null, msgId);
 
         return res.sendStatus(200);
       }
