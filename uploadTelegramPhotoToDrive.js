@@ -1,36 +1,38 @@
 const axios = require('axios');
 const FormData = require('form-data');
-const fs = require('fs');
-const path = require('path');
 
-const TELEGRAM_FILE_API = 'https://api.telegram.org/file/bot8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
+const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
+const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
+const GAS_UPLOAD_URL = 'https://script.google.com/macros/s/AKfycbx-yVE9Z8lWDVNUoLrGbuEfp7hyvHogQfPLc9ehH6afPmAEIlqLSj6r3RuzTK9NmA4W/exec';
 
-async function uploadPhotoToDrive(file_id, TELEGRAM_FILE_API) {
-  const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
-  const getFileUrl = `https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${file_id}`;
-  const res = await axios.get(getFileUrl);
-  const filePath = res.data.result.file_path;
-  const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
+async function uploadPhotoToDrive(file_id) {
+  try {
+    // Получаем путь к файлу на сервере Telegram
+    const { data: fileInfo } = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${file_id}`);
+    if (!fileInfo.ok) throw new Error('Не удалось получить путь к файлу Telegram');
 
-  const tempPath = path.join(__dirname, 'temp.jpg');
-  const writer = fs.createWriteStream(tempPath);
-  const response = await axios.get(fileUrl, { responseType: 'stream' });
-  response.data.pipe(writer);
+    const filePath = fileInfo.result.file_path;
+    const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
 
-  await new Promise((resolve, reject) => {
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
+    // Скачиваем фото как поток
+    const response = await axios.get(fileUrl, { responseType: 'stream' });
 
-  const formData = new FormData();
-  formData.append('photo', fs.createReadStream(tempPath));
+    // Формируем form-data с потоком файла
+    const formData = new FormData();
+    formData.append('photo', response.data, 'photo.jpg');
 
-  const uploadRes = await axios.post('https://script.google.com/macros/s/AKfycbxeXikOhZy-HlXNTh4Dpz7FWqBf1pRi6DWpzGQlFQr8TSV46KUU_-FJF976oQrxpHAx/exec', formData, {
-    headers: formData.getHeaders(),
-  });
+    // Отправляем на GAS (Google Apps Script)
+    const uploadRes = await axios.post(GAS_UPLOAD_URL, formData, {
+      headers: formData.getHeaders(),
+    });
 
-  fs.unlinkSync(tempPath);
-  return uploadRes.data.photoUrl;
+    if (!uploadRes.data.photoUrl) throw new Error('Не получена ссылка на фото с GAS');
+
+    return uploadRes.data.photoUrl;
+  } catch (error) {
+    console.error('Ошибка загрузки фото на Google Диск:', error.response?.data || error.message);
+    throw error;
+  }
 }
 
 module.exports = { uploadPhotoToDrive };
