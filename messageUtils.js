@@ -59,4 +59,7 @@ async function editMessageText(chatId, messageId, text, keyboard) {
       reply_markup: keyboard,
     });
   } catch (error) {
-    console.error(
+    console.error('❌ Ошибка editMessageText:', error.response?.data || error.message);
+    throw error;
+  }
+}
