@@ -11,12 +11,12 @@ app.use(express.json());
 const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyS1vPiaxs488I28pRPcwG_OMVd3eBRX0dqk2tPc8d8HwASxEUXi3mJsps4o-n033-3/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbx-yVE9Z8lWDVNUoLrGbuEfp7hyvHogQfPLc9ehH6afPmAEIlqLSj6r3RuzTK9NmA4W/exec';
 
 const folderId = '1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF';
 
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
-const auth = new google.auth.GoogleAuth({ keyFile: 'credentials.json', scopes: SCOPES });
+const auth = new google.auth.GoogleAuth({ keyFile: 'service_account.json', scopes: SCOPES });
 const drive = google.drive({ version: 'v3', auth });
 
 const EXECUTORS = [
