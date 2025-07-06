@@ -22,13 +22,11 @@ const buildInitialButtons = (messageId) => ({
 });
 
 const buildWorkButtons = (messageId) => ({
-  inline_keyboard: [
-    [
-      { text: '✅ Выполнено', callback_data: `executor_${messageId}` },
-      { text: '📦 Ожидает поставки', callback_data: `wait_${messageId}` },
-      { text: '❌ Отмена', callback_data: `cancel_${messageId}` },
-    ],
-  ],
+  inline_keyboard: [[
+    { text: '✅ Выполнено', callback_data: `executor_${messageId}` },
+    { text: '📦 Ожидает поставки', callback_data: `wait_${messageId}` },
+    { text: '❌ Отмена', callback_data: `cancel_${messageId}` },
+  ]],
 });
 
 const sendMessage = async (chatId, text, markup = null, replyTo = null) => {
@@ -46,87 +44,81 @@ const sendMessage = async (chatId, text, markup = null, replyTo = null) => {
 app.post('/webhook', async (req, res) => {
   const body = req.body;
   const cb = body.callback_query;
-  const msg = body.message;
 
   try {
     if (cb) {
       const data = cb.data;
       const chatId = cb.message.chat.id;
       const user = cb.from.username || cb.from.first_name || 'неизвестный';
-      const rawId = data.split('_')[1];
-      const messageIdNum = Number(rawId);
 
-      // Правильный msgId для редактирования
-      const msgId = cb.message.reply_to_message?.message_id || cb.message.message_id;
+      const messageId = cb.message.message_id;
+      const replyToMessageId = cb.message.reply_to_message?.message_id;
+      const targetMessageId = replyToMessageId || messageId;
+
+      const id = Number(data.split('_')[1]); // Это message_id исходного сообщения-заявки
 
       if (data.startsWith('in_progress_')) {
         await axios.post(GAS_URL, {
-          message_id: messageIdNum,
+          message_id: id,
           status: 'В работе',
           executor: `@${user}`,
         });
 
         await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
           chat_id: chatId,
-          message_id: msgId,
-          reply_markup: buildWorkButtons(messageIdNum),
+          message_id: targetMessageId,
+          reply_markup: buildWorkButtons(id),
         });
 
-        await sendMessage(chatId, `👤 Заявка #${messageIdNum} принята в работу: @${user}`, null, messageIdNum);
-        return res.sendStatus(200);
+        await sendMessage(chatId, `👤 Заявка #${id} принята в работу: @${user}`, null, targetMessageId);
       }
 
-      if (data.startsWith('executor_')) {
+      else if (data.startsWith('executor_')) {
         await axios.post(GAS_URL, {
-          message_id: messageIdNum,
+          message_id: id,
           status: 'Выполнено',
           step: 'start',
           executor: `@${user}`,
         });
 
-        await sendMessage(chatId, 'Пожалуйста, загрузите фото выполненных работ 📷', null, cb.message.message_id);
-        return res.sendStatus(200);
+        await sendMessage(chatId, 'Пожалуйста, загрузите фото выполненных работ 📷', null, targetMessageId);
       }
 
-      if (data.startsWith('wait_')) {
+      else if (data.startsWith('wait_')) {
         await axios.post(GAS_URL, {
-          message_id: messageIdNum,
+          message_id: id,
           status: 'Ожидает поставки',
         });
 
         await axios.post(`${TELEGRAM_API}/editMessageText`, {
           chat_id: chatId,
-          message_id: msgId,
-          text: `📦 Заявка #${messageIdNum} переведена в статус: <b>Ожидает поставки</b>\n👤 @${user}`,
+          message_id: targetMessageId,
+          text: `📦 Заявка #${id} переведена в статус: <b>Ожидает поставки</b>\n👤 @${user}`,
           parse_mode: 'HTML',
         });
-
-        return res.sendStatus(200);
       }
 
-      if (data.startsWith('cancel_')) {
+      else if (data.startsWith('cancel_')) {
         await axios.post(GAS_URL, {
-          message_id: messageIdNum,
+          message_id: id,
           status: 'Отмена',
         });
 
         await axios.post(`${TELEGRAM_API}/editMessageText`, {
           chat_id: chatId,
-          message_id: msgId,
-          text: `❌ Заявка #${messageIdNum} отменена\n👤 @${user}`,
+          message_id: targetMessageId,
+          text: `❌ Заявка #${id} отменена\n👤 @${user}`,
           parse_mode: 'HTML',
         });
-
-        return res.sendStatus(200);
       }
 
       return res.sendStatus(200);
     }
 
-    return res.sendStatus(200);
+    res.sendStatus(200);
   } catch (error) {
     console.error('❌ WEBHOOK ERROR:', error.response?.data || error.message);
-    return res.sendStatus(500);
+    res.sendStatus(500);
   }
 });
 
