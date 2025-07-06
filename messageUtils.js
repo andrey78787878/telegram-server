@@ -1,5 +1,20 @@
-const axios = require('axios');
-const { TELEGRAM_API } = require('./config');
+function buildInitialMessage(rowData, rowIndex) {
+  const [
+    timestamp, pizzeriaNumber, classification, category, problemDescription,
+    initiator, phoneNumber, photoUrl, deadline
+  ] = rowData;
+
+  return `
+📌 *Заявка #${rowIndex}*
+🏪 *Пиццерия:* ${pizzeriaNumber}
+🛠 *Категория:* ${category}
+📂 *Классификация:* ${classification}
+📎 *Суть:* ${problemDescription}
+👤 *Инициатор:* ${initiator}
+📞 *Телефон:* ${phoneNumber}
+🕒 *Срок:* ${deadline || 'не указан'}
+  `.trim();
+}
 
 function buildInitialButtons(messageId) {
   return {
@@ -7,7 +22,7 @@ function buildInitialButtons(messageId) {
       [
         {
           text: 'Принято в работу',
-          callback_data: JSON.stringify({ action: 'in_progress', messageId }),
+          callback_data: `in_progress_${messageId}`,
         },
       ],
     ],
@@ -18,58 +33,37 @@ function buildFollowUpButtons(messageId) {
   return {
     inline_keyboard: [
       [
-        { text: 'Выполнено ✅', callback_data: JSON.stringify({ action: 'completed', messageId }) },
-        { text: 'Ожидает поставки ⏳', callback_data: JSON.stringify({ action: 'delayed', messageId }) },
-        { text: 'Отмена ❌', callback_data: JSON.stringify({ action: 'cancelled', messageId }) },
+        { text: 'Выполнено ✅', callback_data: `completed_${messageId}` },
+        { text: 'Ожидает поставки ⏳', callback_data: `delayed_${messageId}` },
+        { text: 'Отмена ❌', callback_data: `cancelled_${messageId}` },
       ],
     ],
   };
 }
 
-async function editInlineKeyboard(chatId, messageId, keyboard) {
-  if (!chatId || !messageId) {
-    console.error('❗ Неверные chatId или messageId при редактировании клавиатуры');
-    return;
-  }
-
-  try {
-    const res = await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-      chat_id: chatId,
-      message_id: messageId,
-      reply_markup: keyboard,
-    });
-    return res.data;
-  } catch (error) {
-    console.error('❌ Ошибка editInlineKeyboard:', error.response?.data || error.message);
-    throw error;
-  }
+function buildInProgressMessage(rowIndex, executorUsername, problemDescription) {
+  return `
+🟢 Заявка #${rowIndex} в работе.
+👤 *Исполнитель:* @${executorUsername}
+📌 *Суть:* ${problemDescription}
+  `.trim();
 }
 
-async function editMessageText(chatId, messageId, text, keyboard) {
-  if (!chatId || !messageId) {
-    console.error('❗ Неверные chatId или messageId при редактировании текста');
-    return;
-  }
-
-  try {
-    const res = await axios.post(`${TELEGRAM_API}/editMessageText`, {
-      chat_id: chatId,
-      message_id: messageId,
-      text,
-      parse_mode: 'HTML',
-      reply_markup: keyboard,
-    });
-    return res.data;
-  } catch (error) {
-    console.error('❌ Ошибка editMessageText:', error.response?.data || error.message);
-    throw error;
-  }
+function buildFinalClosedMessage({ rowIndex, photoUrl, sum, executor, overdueDays }) {
+  return `
+📌 *Заявка #${rowIndex} закрыта.*
+📎 [Фото](${photoUrl})
+💰 *Сумма:* ${sum} сум
+👤 *Исполнитель:* @${executor}
+✅ *Статус:* Выполнено
+⏰ *Просрочка:* ${overdueDays || 0} дн.
+  `.trim();
 }
 
-// ✅ Экспортируем функции
 module.exports = {
+  buildInitialMessage,
   buildInitialButtons,
   buildFollowUpButtons,
-  editInlineKeyboard,
-  editMessageText,
+  buildInProgressMessage,
+  buildFinalClosedMessage,
 };
