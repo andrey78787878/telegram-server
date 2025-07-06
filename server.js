@@ -13,7 +13,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_ENDPOINT = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
 
-const folderId = 'YOUR_GOOGLE_DRIVE_FOLDER_ID';
+const folderId = '1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF';
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const auth = new google.auth.GoogleAuth({
   keyFile: 'credentials.json',
