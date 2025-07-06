@@ -1,128 +1,117 @@
 const express = require('express');
 const axios = require('axios');
-const bodyParser = require('body-parser');
-const { BOT_TOKEN, TELEGRAM_API, GAS_URL } = require('./config');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+app.use(express.json());
 
-app.use(bodyParser.json());
+const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyS1vPiaxs488I28pRPcwG_OMVd3eBRX0dqk2tPc8d8HwASxEUXi3mJsps4o-n033-3/exec`;
 
-// ==== КНОПКИ ====
+const EXECUTORS = [
+  { text: '@EvelinaB87', value: '@EvelinaB87' },
+  { text: '@Olim19', value: '@Olim19' },
+  { text: '@Oblayor_04_09', value: '@Oblayor_04_09' },
+  { text: 'Текстовой подрядчик', value: 'Текстовой подрядчик' }
+];
 
-function buildInitialButtons(messageId) {
-  return {
-    inline_keyboard: [
-      [
-        {
-          text: 'Принято в работу',
-          callback_data: JSON.stringify({ action: 'choose_executor', messageId }),
-        },
-      ],
-    ],
+// ===== Utils =====
+const sendMessage = async (chatId, text, replyMarkup, replyToMessageId) => {
+  const payload = {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML'
   };
-}
+  if (replyMarkup) payload.reply_markup = JSON.stringify(replyMarkup);
+  if (replyToMessageId) payload.reply_to_message_id = replyToMessageId;
 
-function buildExecutorButtons(messageId) {
-  return {
-    inline_keyboard: [
-      [
-        { text: '@EvelinaB87', callback_data: JSON.stringify({ action: 'set_executor', executor: '@EvelinaB87', messageId }) },
-        { text: '@Olim19', callback_data: JSON.stringify({ action: 'set_executor', executor: '@Olim19', messageId }) },
-      ],
-      [
-        { text: '@Oblayor_04_09', callback_data: JSON.stringify({ action: 'set_executor', executor: '@Oblayor_04_09', messageId }) },
-        { text: 'Подрядчик', callback_data: JSON.stringify({ action: 'set_executor', executor: 'Подрядчик', messageId }) },
-      ],
-    ],
+  return axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+};
+
+const deleteMessage = async (chatId, messageId) => {
+  return axios.post(`${TELEGRAM_API}/deleteMessage`, {
+    chat_id: chatId,
+    message_id: messageId
+  }).catch(() => {});
+};
+
+const editMessage = async (chatId, messageId, text, replyMarkup) => {
+  const payload = {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: 'HTML'
   };
-}
+  if (replyMarkup) payload.reply_markup = JSON.stringify(replyMarkup);
 
-function buildFollowUpButtons(messageId) {
-  return {
-    inline_keyboard: [
-      [
-        { text: 'Выполнено ✅', callback_data: JSON.stringify({ action: 'completed', messageId }) },
-        { text: 'Ожидает поставки ⏳', callback_data: JSON.stringify({ action: 'delayed', messageId }) },
-        { text: 'Отмена ❌', callback_data: JSON.stringify({ action: 'cancelled', messageId }) },
-      ],
-    ],
-  };
-}
+  return axios.post(`${TELEGRAM_API}/editMessageText`, payload);
+};
 
-// ==== ОБРАБОТКА callback_query ====
-
-app.post(`/webhook/${BOT_TOKEN}`, async (req, res) => {
+// ===== Обработка Webhook =====
+app.post('/', async (req, res) => {
   const body = req.body;
 
-  if (body.callback_query) {
-    const { data, message, id: callbackQueryId } = body.callback_query;
-    const { chat, message_id } = message;
+  try {
+    // 1. Кнопка "Принято в работу"
+    if (body.callback_query) {
+      const cb = body.callback_query;
+      const data = cb.data;
+      const chatId = cb.message.chat.id;
+      const messageId = cb.message.message_id;
 
-    let parsed;
-    try {
-      parsed = JSON.parse(data);
-    } catch (err) {
-      console.error('Ошибка разбора callback_data:', err);
-      return res.sendStatus(200);
-    }
+      if (data.startsWith('start_work_')) {
+        const row = data.split('_')[2];
 
-    const { action, messageId, executor } = parsed;
+        // Показываем кнопки исполнителей
+        const buttons = EXECUTORS.map(exec => [
+          { text: exec.text, callback_data: `executor_${exec.value}_${row}_${messageId}` }
+        ]);
 
-    try {
-      if (action === 'choose_executor') {
-        // показать список исполнителей
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chat.id,
-          text: 'Выберите исполнителя:',
-          reply_markup: JSON.stringify(buildExecutorButtons(messageId)),
-        });
+        const msg = await sendMessage(chatId, 'Выберите исполнителя:', { inline_keyboard: buttons });
+        setTimeout(() => deleteMessage(chatId, msg.data.result.message_id), 60000); // удалим через 60 сек
+        return res.sendStatus(200);
       }
 
-      if (action === 'set_executor') {
-        // обновить кнопки и записать исполнителя
-        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-          chat_id: chat.id,
-          message_id: messageId,
-          reply_markup: JSON.stringify(buildFollowUpButtons(messageId)),
-        });
+      // 2. Обработка выбора исполнителя
+      if (data.startsWith('executor_')) {
+        const [_, executor, row, parentMsgId] = data.split('_');
 
-        // записать в таблицу исполнителя
+        // Отправка данных в GAS
         await axios.post(GAS_URL, {
-          message_id: messageId,
+          row,
           executor,
+          message_id: parentMsgId,
+          status: 'В работе'
         });
 
-        // уведомление об исполнителе
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chat.id,
-          text: `👤 Исполнитель выбран: ${executor}`,
-          reply_to_message_id: messageId,
-        });
+        // Удаляем сообщение с кнопками исполнителей
+        await deleteMessage(chatId, cb.message.message_id);
 
-        // удалить сообщение выбора исполнителя
-        await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-          chat_id: chat.id,
-          message_id: message.message_id,
-        });
+        // Обновляем оригинальное сообщение
+        const statusText = `🟢 <b>Заявка в работе</b>\n👤 Исполнитель: ${executor}`;
+        const followupButtons = {
+          inline_keyboard: [
+            [{ text: '✅ Выполнено', callback_data: `done_${row}_${executor}_${parentMsgId}` }],
+            [{ text: '🕐 Ожидает поставки', callback_data: `waiting_${row}` }],
+            [{ text: '❌ Отмена', callback_data: `cancel_${row}` }]
+          ]
+        };
+        await editMessage(chatId, Number(parentMsgId), statusText, followupButtons);
+        return res.sendStatus(200);
       }
 
-      // можно добавить обработку completed / delayed / cancelled
-
-    } catch (error) {
-      console.error('Ошибка при обработке callback:', error.response?.data || error.message);
+      // Другие кнопки можно добавить здесь — done_, waiting_, cancel_
     }
 
-    // Ответ Telegram
-    return res.sendStatus(200);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('Ошибка в webhook:', err.message, err.stack);
+    res.sendStatus(500);
   }
-
-  res.sendStatus(200);
 });
 
-// ==== ЗАПУСК ====
-
+// ===== Запуск сервера =====
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
-
