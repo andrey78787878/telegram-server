@@ -4,5 +4,5 @@ module.exports = {
   BOT_TOKEN,
   TELEGRAM_API: `https://api.telegram.org/bot${BOT_TOKEN}`,
   TELEGRAM_FILE_API: `https://api.telegram.org/file/bot${BOT_TOKEN}`,
-  GAS_URL: 'https://script.google.com/macros/s/AKfycbx-yVE9Z8lWDVNUoLrGbuEfp7hyvHogQfPLc9ehH6afPmAEIlqLSj6r3RuzTK9NmA4W/exec'
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbwnxJm00oGfpCChFrhu0ov3PZ7iVn7i1RTRnyeP8DhXCw2QUHqWRyiyGDU5jvJROY9G/exec'
 };
