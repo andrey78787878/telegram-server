@@ -12,6 +12,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const GAS_URL = process.env.GAS_WEB_APP_URL;
 
+// Кнопки для первоначальной заявки
 const buildInitialButtons = (messageId) => ({
   inline_keyboard: [[
     {
@@ -21,6 +22,7 @@ const buildInitialButtons = (messageId) => ({
   ]],
 });
 
+// Кнопки после принятия заявки
 const buildWorkButtons = (messageId) => ({
   inline_keyboard: [[
     { text: '✅ Выполнено', callback_data: `executor_${messageId}` },
@@ -29,6 +31,7 @@ const buildWorkButtons = (messageId) => ({
   ]],
 });
 
+// Универсальная функция отправки сообщения
 const sendMessage = async (chatId, text, markup = null, replyTo = null) => {
   const payload = {
     chat_id: chatId,
@@ -41,6 +44,7 @@ const sendMessage = async (chatId, text, markup = null, replyTo = null) => {
   await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
 };
 
+// Обработка колбэков
 app.post('/webhook', async (req, res) => {
   const body = req.body;
   const cb = body.callback_query;
@@ -55,8 +59,9 @@ app.post('/webhook', async (req, res) => {
       const replyToMessageId = cb.message.reply_to_message?.message_id;
       const targetMessageId = replyToMessageId || messageId;
 
-      const id = Number(data.split('_')[1]); // Это message_id исходного сообщения-заявки
+      const id = Number(data.split('_')[1]); // id = message_id из исходной заявки
 
+      // ===== Принято в работу =====
       if (data.startsWith('in_progress_')) {
         await axios.post(GAS_URL, {
           message_id: id,
@@ -73,6 +78,7 @@ app.post('/webhook', async (req, res) => {
         await sendMessage(chatId, `👤 Заявка #${id} принята в работу: @${user}`, null, targetMessageId);
       }
 
+      // ===== Выполнено - начать сбор данных =====
       else if (data.startsWith('executor_')) {
         await axios.post(GAS_URL, {
           message_id: id,
@@ -84,6 +90,7 @@ app.post('/webhook', async (req, res) => {
         await sendMessage(chatId, 'Пожалуйста, загрузите фото выполненных работ 📷', null, targetMessageId);
       }
 
+      // ===== Ожидает поставки =====
       else if (data.startsWith('wait_')) {
         await axios.post(GAS_URL, {
           message_id: id,
@@ -98,6 +105,7 @@ app.post('/webhook', async (req, res) => {
         });
       }
 
+      // ===== Отмена =====
       else if (data.startsWith('cancel_')) {
         await axios.post(GAS_URL, {
           message_id: id,
