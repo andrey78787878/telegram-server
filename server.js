@@ -9,7 +9,7 @@ const { BOT_TOKEN, TELEGRAM_API } = require('./config');
 const FormData = require('form-data');
 const fs = require('fs');
 const path = require('path');
-const { downloadTelegramFile, uploadToDrive, deleteMessages } = require('./driveUploader');
+const driveUploader = require('./utils/driveUploader');
 const { askForPhoto, askForSum, askForComment, finalizeRequest } = require('./messageUtils');
 
 const bodyParser = require('body-parser');
