@@ -6,15 +6,21 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const { BOT_TOKEN, TELEGRAM_API } = require('./config');
-const handleCallbackQuery = require('./messageUtils'); // если есть
-const bodyParser = require('body-parser');
+const FormData = require('form-data');
+const fs = require('fs');
+const path = require('path');
+const { downloadTelegramFile, uploadToDrive, deleteMessages } = require('./driveUploader');
+const { askForPhoto, askForSum, askForComment, finalizeRequest } = require('./messageUtils');
 
+const bodyParser = require('body-parser');
 app.use(bodyParser.json());
 
-// Проверка переменных окружения
+// Стейт для обработки данных по chatId
+const userState = {}; // { [chatId]: { stage: 'photo' | 'sum' | 'comment', row: 123, ... } }
+
 if (!process.env.GAS_WEB_APP_URL) {
   console.error('❌ GAS_WEB_APP_URL не определён! Проверь .env');
-  process.exit(1); // Прерываем запуск сервера
+  process.exit(1);
 }
 
 // Webhook от Telegram
@@ -22,25 +28,102 @@ app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
 
-    // Проверка callback от кнопки
+    // 🔘 Обработка нажатий кнопок
     if (body.callback_query) {
-      const callbackData = body.callback_query.data;
+      const data = body.callback_query.data;
       const chatId = body.callback_query.message.chat.id;
       const messageId = body.callback_query.message.message_id;
-      const username = body.callback_query.from.username;
+      const username = '@' + body.callback_query.from.username;
 
-      console.log(`➡️ Обработка кнопки: ${callbackData}, заявка ID: ${callbackData.split('_')[1]}, от пользователя: @${username}`);
+      console.log(`➡️ Кнопка: ${data}, от: ${username}`);
 
-      const payload = {
-        data: callbackData,
-        message_id: messageId,
-        username: '@' + username
-      };
+      if (data.startsWith('start_')) {
+        const row = data.split('_')[1];
 
-      console.log('📤 Отправка в GAS:', process.env.GAS_WEB_APP_URL);
+        // Ответ на кнопку "Принято в работу"
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `✅ Заявка #${row} взята в работу пользователем ${username}`,
+          reply_to_message_id: messageId,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Выполнено ✅', callback_data: `done_${row}` },
+                { text: 'Ожидает поставки ⏳', callback_data: `delay_${row}` },
+                { text: 'Отмена ❌', callback_data: `cancel_${row}` },
+              ]
+            ]
+          }
+        });
 
-      const response = await axios.post(process.env.GAS_WEB_APP_URL, payload);
-      console.log('✅ Ответ от GAS:', response.data);
+        // Обновление GAS (обновление статуса и исполнителя)
+        await axios.post(process.env.GAS_WEB_APP_URL, {
+          data: 'start',
+          row,
+          username,
+          message_id: messageId
+        });
+      }
+
+      // Кнопка "Выполнено" — начинаем сбор информации
+      else if (data.startsWith('done_')) {
+        const row = data.split('_')[1];
+        userState[chatId] = { stage: 'photo', row, username, messageId };
+
+        await askForPhoto(chatId);
+      }
+
+      return res.sendStatus(200);
+    }
+
+    // 📸 Получено фото от пользователя
+    if (body.message?.photo && userState[body.message.chat.id]?.stage === 'photo') {
+      const chatId = body.message.chat.id;
+      const fileId = body.message.photo[body.message.photo.length - 1].file_id;
+
+      const localPath = await downloadTelegramFile(fileId);
+      const photoUrl = await uploadToDrive(localPath);
+
+      userState[chatId].photoUrl = photoUrl;
+      userState[chatId].stage = 'sum';
+
+      fs.unlinkSync(localPath); // Удаляем временный файл
+
+      await askForSum(chatId);
+      return res.sendStatus(200);
+    }
+
+    // 💰 Получена сумма
+    if (body.message?.text && userState[body.message.chat.id]?.stage === 'sum') {
+      const chatId = body.message.chat.id;
+      const sum = body.message.text.trim();
+
+      if (!/^\d+$/g.test(sum)) {
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: '❗️Введите только число, без символов.'
+        });
+        return res.sendStatus(200);
+      }
+
+      userState[chatId].sum = sum;
+      userState[chatId].stage = 'comment';
+
+      await askForComment(chatId);
+      return res.sendStatus(200);
+    }
+
+    // 💬 Получен комментарий
+    if (body.message?.text && userState[body.message.chat.id]?.stage === 'comment') {
+      const chatId = body.message.chat.id;
+      const comment = body.message.text.trim();
+      userState[chatId].comment = comment;
+
+      // Финал: отправка в GAS
+      await finalizeRequest(chatId, userState[chatId]);
+      delete userState[chatId];
+
+      return res.sendStatus(200);
     }
 
     res.sendStatus(200);
@@ -53,4 +136,3 @@ app.post('/webhook', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
-
