@@ -27,36 +27,36 @@ function buildFollowUpButtons(messageId) {
 }
 
 async function editInlineKeyboard(chatId, messageId, keyboard) {
+  if (!chatId || !messageId) {
+    console.error('❗ Неверные chatId или messageId при редактировании клавиатуры');
+    return;
+  }
+
   try {
     return await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
       chat_id: chatId,
       message_id: messageId,
-      reply_markup: keyboard, // передаем объект, а не JSON-строку
+      reply_markup: keyboard,
     });
   } catch (error) {
-    console.error('Ошибка editInlineKeyboard:', error.response?.data || error.message);
+    console.error('❌ Ошибка editInlineKeyboard:', error.response?.data || error.message);
     throw error;
   }
 }
 
 async function editMessageText(chatId, messageId, text, keyboard) {
+  if (!chatId || !messageId) {
+    console.error('❗ Неверные chatId или messageId при редактировании текста');
+    return;
+  }
+
   try {
     return await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: messageId,
       text,
       parse_mode: 'HTML',
-      reply_markup: keyboard, // передаем объект, а не JSON-строку
+      reply_markup: keyboard,
     });
   } catch (error) {
-    console.error('Ошибка editMessageText:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-module.exports = {
-  buildInitialButtons,
-  buildFollowUpButtons,
-  editInlineKeyboard,
-  editMessageText,
-};
+    console.error(
