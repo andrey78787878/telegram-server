@@ -5,6 +5,9 @@ const path = require('path');
 const FormData = require('form-data');
 const { google } = require('googleapis');
 
+// Если в будущем захочешь использовать messageUtils.js, раскомментируй
+// const { buildInitialButtons, buildFollowUpButtons, editInlineKeyboard, editMessageText } = require('./messageUtils');
+
 const app = express();
 app.use(express.json());
 
@@ -47,7 +50,7 @@ function buildInitialButtons(messageId) {
   };
 }
 
-// Заменил JSON на короткие строки
+// Оставил короткие callback_data для простоты
 function buildFollowUpButtons(messageId) {
   return {
     inline_keyboard: [
@@ -71,7 +74,11 @@ async function uploadPhotoToDrive(fileStream, filename) {
 
 async function deleteMessages(chatId, messageIds) {
   for (const id of messageIds) {
-    await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: chatId, message_id: id }).catch(() => {});
+    try {
+      await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: chatId, message_id: id });
+    } catch (e) {
+      // Игнорируем ошибки удаления, например, если сообщение уже удалено
+    }
   }
 }
 
@@ -88,7 +95,6 @@ app.post('/', async (req, res) => {
       const username = cb.from.username || 'неизвестен';
       const messageId = cb.message.message_id;
 
-      // Теперь без JSON.parse, а с проверкой по префиксам
       if (data.startsWith('in_progress_')) {
         const msgId = data.split('_')[1];
         await axios.post(GAS_URL, {
@@ -104,7 +110,6 @@ app.post('/', async (req, res) => {
         });
 
         await sendMessage(chatId, `👤 Заявка #${msgId} принята в работу исполнителем: @${username}`, null, msgId);
-
         return res.sendStatus(200);
       }
 
@@ -122,7 +127,6 @@ app.post('/', async (req, res) => {
 
         await axios.post(GAS_URL, { message_id: msgId, status });
         await sendMessage(chatId, `🔄 Заявка #${msgId}: ${status}`, null, msgId);
-
         return res.sendStatus(200);
       }
 
