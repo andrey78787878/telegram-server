@@ -1,5 +1,5 @@
-const { TELEGRAM_API } = require('./config');
 const axios = require('axios');
+const { TELEGRAM_API } = require('./config');
 
 function buildInitialButtons(messageId) {
   return {
@@ -33,11 +33,12 @@ async function editInlineKeyboard(chatId, messageId, keyboard) {
   }
 
   try {
-    return await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+    const res = await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: keyboard,
     });
+    return res.data;
   } catch (error) {
     console.error('❌ Ошибка editInlineKeyboard:', error.response?.data || error.message);
     throw error;
@@ -51,15 +52,24 @@ async function editMessageText(chatId, messageId, text, keyboard) {
   }
 
   try {
-    return await axios.post(`${TELEGRAM_API}/editMessageText`, {
+    const res = await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: messageId,
       text,
       parse_mode: 'HTML',
       reply_markup: keyboard,
     });
+    return res.data;
   } catch (error) {
     console.error('❌ Ошибка editMessageText:', error.response?.data || error.message);
     throw error;
   }
 }
+
+// ✅ Экспортируем функции
+module.exports = {
+  buildInitialButtons,
+  buildFollowUpButtons,
+  editInlineKeyboard,
+  editMessageText,
+};
