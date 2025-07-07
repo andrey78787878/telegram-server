@@ -13,7 +13,7 @@ app.use(express.json());
 
 // Telegram API setup
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TELEGRAM_API = "https://api.telegram.org/bot" + BOT_TOKEN;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 
 // GAS Web App URL and Drive folder ID
