@@ -19,12 +19,12 @@ const FOLDER_ID = process.env.FOLDER_ID;
 
 // Авторизация в Google Drive API
 const auth = new google.auth.GoogleAuth({
-  keyFile: 'credentials.json', // Убедитесь, что файл существует
+  keyFile: 'credentials.json',
   scopes: ['https://www.googleapis.com/auth/drive'],
 });
 const driveService = google.drive({ version: 'v3', auth });
 
-// Загружаем фото на Google Диск
+// Загрузка на Google Диск
 async function uploadToDrive(filePath, fileName) {
   const fileMetadata = {
     name: fileName,
@@ -52,13 +52,13 @@ async function uploadToDrive(filePath, fileName) {
   return `https://drive.google.com/uc?id=${file.data.id}`;
 }
 
-// Получение file_path по file_id
+// Получить путь файла Telegram
 async function getTelegramFilePath(fileId) {
   const res = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
   return res.data.result.file_path;
 }
 
-// Скачивание фото и загрузка на диск
+// Обработка фото
 async function handlePhoto(photo, message_id, username, row) {
   try {
     const fileId = photo[photo.length - 1].file_id;
@@ -86,16 +86,16 @@ async function handlePhoto(photo, message_id, username, row) {
       row,
     });
 
-    console.log(`Фотография загружена и отправлена в таблицу: ${driveLink}`);
+    console.log(`✅ Фото загружено: ${driveLink}`);
   } catch (err) {
-    console.error('Ошибка при загрузке фото:', err.message);
+    console.error('❌ Ошибка загрузки фото:', err.message);
   }
 }
 
-// Обработка callback кнопок
+// Обработка обновлений от Telegram
 app.post('/webhook', async (req, res) => {
-  console.log('Incoming update:', JSON.stringify(req.body, null, 2));
   const body = req.body;
+  console.log('📩 Входящий update:', JSON.stringify(body, null, 2));
 
   if (body.message && body.message.photo) {
     const message = body.message;
@@ -103,6 +103,7 @@ app.post('/webhook', async (req, res) => {
     const [_, message_id, row] = caption.split('|');
     const username = message.from.username || 'unknown';
 
+    console.log(`📸 Получено фото от @${username} (row: ${row}, msg: ${message_id})`);
     await handlePhoto(message.photo, message_id, username, row);
   }
 
@@ -112,6 +113,8 @@ app.post('/webhook', async (req, res) => {
     const chat_id = query.message.chat.id;
     const message_id = query.message.message_id;
     const username = query.from.username || 'unknown';
+
+    console.log(`🔘 Callback от @${username}: ${data}`);
 
     if (data.startsWith('in_progress_')) {
       const row = data.split('_')[2];
@@ -161,6 +164,11 @@ app.post('/webhook', async (req, res) => {
   } else {
     res.sendStatus(200);
   }
+});
+
+// Проверка сервера
+app.get('/', (req, res) => {
+  res.send('✅ Telegram bot server работает.');
 });
 
 const PORT = process.env.PORT || 3000;
