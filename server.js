@@ -94,6 +94,7 @@ async function handlePhoto(photo, message_id, username, row) {
 
 // Обработка callback кнопок
 app.post('/webhook', async (req, res) => {
+  console.log('Incoming update:', JSON.stringify(req.body, null, 2));
   const body = req.body;
 
   if (body.message && body.message.photo) {
@@ -112,7 +113,8 @@ app.post('/webhook', async (req, res) => {
     const message_id = query.message.message_id;
     const username = query.from.username || 'unknown';
 
-    if (data === 'start_work') {
+    if (data.startsWith('in_progress_')) {
+      const row = data.split('_')[2];
       await axios.post(GAS_WEB_APP_URL, {
         message_id,
         status: 'В работе',
