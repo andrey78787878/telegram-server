@@ -19,6 +19,7 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 const PORT = process.env.PORT || 3000;
 
 const userStates = {}; // userId -> { stage, row, messageId, ... }
+const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
 app.post('/webhook', async (req, res) => {
   const body = req.body;
@@ -33,10 +34,12 @@ app.post('/webhook', async (req, res) => {
       if (/^in_progress_\d+$/.test(callbackData)) {
         const row = callbackData.split('_')[2];
 
+        const executor = `@${username}`;
+
         await axios.post(GAS_WEB_APP_URL, {
           row,
           status: 'В работе',
-          executor: username
+          executor
         });
 
         await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
@@ -53,7 +56,36 @@ app.post('/webhook', async (req, res) => {
 
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: `✅ Заявка #${row} принята в работу исполнителем @${username}`,
+          text: `✅ Заявка #${row} принята в работу исполнителем ${executor}`,
+          reply_to_message_id: messageId
+        });
+      }
+
+      else if (/^assign_\d+_.+/.test(callbackData)) {
+        const [, row, exec] = callbackData.split('_');
+        const executor = `@${exec}`;
+
+        await axios.post(GAS_WEB_APP_URL, {
+          row,
+          status: 'В работе',
+          executor
+        });
+
+        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: 'Выполнено ✅', callback_data: `done_${row}` },
+              { text: 'Ожидает поставки 📦', callback_data: `supply_${row}` },
+              { text: 'Отмена ❌', callback_data: `cancel_${row}` }
+            ]]
+          }
+        });
+
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `✅ Заявка #${row} принята в работу исполнителем ${executor}`,
           reply_to_message_id: messageId
         });
       }
