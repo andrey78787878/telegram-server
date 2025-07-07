@@ -13,17 +13,15 @@ app.use(express.json());
 // Telegram API setup
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = "https://api.telegram.org/bot" + BOT_TOKEN;
-const TELEGRAM_FILE_API = "https://api.telegram.org/file/bot" + BOT_TOKEN; // заменено на конкатенацию
+const TELEGRAM_FILE_API = "https://api.telegram.org/file/bot" + BOT_TOKEN;
 
 // GAS Web App URL and Drive folder ID
-const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;  // В .env переменная должна быть именно так названа
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const PORT = process.env.PORT || 3000;
 
-// В остальном код без изменений — выглядит корректно
-
 // In-memory user state for multi-step flows
-const userStates = {}; // chatId -> { stage, row, messageId, username, photo, sum, comment }
+const userStates = {}; // chatId -> { stage, row, messageId, username, photo, sum, comment, serviceMessages, lastUserMessageId }
 
 // Google Drive API auth using service account (credentials.json mounted at /etc/secrets)
 const auth = new google.auth.GoogleAuth({
@@ -70,7 +68,8 @@ const buildExecutorButtons = row => ({
 // Helpers for Telegram
 async function sendMessage(chatId, text, options = {}) {
   try {
-    await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text, parse_mode: 'HTML', ...options });
+    const res = await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text, parse_mode: 'HTML', ...options });
+    return res.data.result.message_id; // возвращаем id сообщения
   } catch (e) {
     console.error('Ошибка отправки:', e.response?.data || e.message);
   }
@@ -83,10 +82,25 @@ async function editMessageText(chatId, messageId, text, reply_markup) {
   }
 }
 
-// Multi-step prompts
-const askForPhoto   = chatId => sendMessage(chatId, '📸 Пожалуйста, пришлите фото выполненных работ.');
-const askForSum     = chatId => sendMessage(chatId, '💰 Введите сумму работ в сумах (только цифры).');
-const askForComment = chatId => sendMessage(chatId, '💬 Добавьте комментарий к заявке.');
+// Multi-step prompts — теперь сохраняем ID сообщений
+async function askForPhoto(chatId) {
+  const msgId = await sendMessage(chatId, '📸 Пожалуйста, пришлите фото выполненных работ.');
+  if (!userStates[chatId]) userStates[chatId] = {};
+  if (!userStates[chatId].serviceMessages) userStates[chatId].serviceMessages = [];
+  userStates[chatId].serviceMessages.push(msgId);
+}
+async function askForSum(chatId) {
+  const msgId = await sendMessage(chatId, '💰 Введите сумму работ в сумах (только цифры).');
+  if (!userStates[chatId]) userStates[chatId] = {};
+  if (!userStates[chatId].serviceMessages) userStates[chatId].serviceMessages = [];
+  userStates[chatId].serviceMessages.push(msgId);
+}
+async function askForComment(chatId) {
+  const msgId = await sendMessage(chatId, '💬 Добавьте комментарий к заявке.');
+  if (!userStates[chatId]) userStates[chatId] = {};
+  if (!userStates[chatId].serviceMessages) userStates[chatId].serviceMessages = [];
+  userStates[chatId].serviceMessages.push(msgId);
+}
 
 // Webhook endpoint (configured at /callback)
 app.post('/callback', async (req, res) => {
@@ -104,29 +118,27 @@ app.post('/callback', async (req, res) => {
       try { data = JSON.parse(raw); } catch { return res.sendStatus(200); }
       const { action, row, executor } = data;
 
-      // Initial in_progress -> choose executor
       if (action === 'in_progress' && row) {
         await editMessageText(chatId, messageId,
           `Выберите исполнителя для заявки #${row}:`, buildExecutorButtons(row)
         );
         return res.sendStatus(200);
       }
-      // Executor selected
+
       if (action === 'select_executor' && row && executor) {
-        // Update status in GAS
         await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row, executor } });
-        // Append to text and show follow-up
         const newText = `${message.text}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
         await editMessageText(chatId, messageId, newText, buildFollowUpButtons(row));
         await sendMessage(chatId, `✅ Заявка #${row} принята в работу исполнителем ${executor}`, { reply_to_message_id: messageId });
         return res.sendStatus(200);
       }
-      // Follow-up actions
+
       if (action === 'completed' && row) {
-        userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username };
+        userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username, serviceMessages: [] };
         await askForPhoto(chatId);
         return res.sendStatus(200);
       }
+
       if ((action === 'delayed' || action === 'cancelled') && row) {
         await axios.post(GAS_WEB_APP_URL, { data: { action, row, executor: username } });
         const status = action === 'delayed' ? 'Ожидает поставки' : 'Отменена';
@@ -141,6 +153,10 @@ app.post('/callback', async (req, res) => {
       const chatId = body.message.chat.id;
       const state = userStates[chatId]; if (!state) return res.sendStatus(200);
       const text = body.message.text;
+      const userMessageId = body.message.message_id;
+
+      // Сохраняем ID сообщения пользователя для последующего удаления
+      state.lastUserMessageId = userMessageId;
 
       // Photo received
       if (state.stage === 'awaiting_photo' && body.message.photo) {
@@ -153,6 +169,7 @@ app.post('/callback', async (req, res) => {
         await askForSum(chatId);
         return res.sendStatus(200);
       }
+
       // Sum entered
       if (state.stage === 'awaiting_sum' && text) {
         if (!/^\d+$/.test(text.trim())) {
@@ -164,12 +181,55 @@ app.post('/callback', async (req, res) => {
         await askForComment(chatId);
         return res.sendStatus(200);
       }
+
       // Comment entered
       if (state.stage === 'awaiting_comment' && text) {
         const comment = text.trim();
-        const { row, photo, sum, username, messageId } = state;
+        const { row, photo, sum, username, messageId, serviceMessages } = state;
+
+        // Обновление в Google Apps Script (таблице)
         await axios.post(GAS_WEB_APP_URL, { data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId } });
-        await sendMessage(chatId, `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${photo}">ссылка</a>\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}`);
+
+        // Здесь можно заменить заглушки, если есть доступ к данным заявки
+        const номерПиццерии = "Номер пиццерии"; // заменить, если есть данные
+        const сутьПроблемы = "Суть проблемы";   // заменить, если есть данные
+        const просрочка = 0;                     // заменить, если есть данные
+
+        const updatedText =
+          `📌 Заявка №${row} закрыта.\n` +
+          `${номерПиццерии}\n` +
+          `${сутьПроблемы}\n` +
+          `${comment}\n\n` +
+          `📎 Фото: <a href="${photo}">ссылка</a>\n` +
+          `💰 Сумма: ${sum} сум\n` +
+          `👤 Исполнитель: ${username}\n` +
+          `✅ Статус: Выполнено\n` +
+          `⏰ Просрочка: ${просрочка} дн.`;
+
+        // 1) Отправляем уведомление ответом на материнское сообщение
+        await sendMessage(chatId,
+          `📌 Заявка №${row} закрыта.`,
+          { reply_to_message_id: messageId }
+        );
+
+        // 2) Редактируем материнское сообщение с расширенной информацией и убираем кнопки
+        await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
+
+        // 3) Удаляем сервисные сообщения и ответы пользователя через 60 секунд
+        setTimeout(async () => {
+          try {
+            for (const msgId of serviceMessages) {
+              await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+            }
+            if (state.lastUserMessageId) {
+              await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: chatId, message_id: state.lastUserMessageId }).catch(() => {});
+            }
+          } catch (err) {
+            console.error('Ошибка удаления сообщений:', err.message);
+          }
+        }, 60000);
+
+        // 4) Очистка состояния пользователя
         delete userStates[chatId];
         return res.sendStatus(200);
       }
