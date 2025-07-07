@@ -1,4 +1,3 @@
-```javascript
 require('dotenv').config();
 console.log('GAS_WEB_APP_URL:', process.env.GAS_WEB_APP_URL);
 
@@ -14,12 +13,14 @@ app.use(express.json());
 // Telegram API setup
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = "https://api.telegram.org/bot" + BOT_TOKEN;
-const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
+const TELEGRAM_FILE_API = "https://api.telegram.org/file/bot" + BOT_TOKEN; // заменено на конкатенацию
 
 // GAS Web App URL and Drive folder ID
-const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;  // В .env переменная должна быть именно так названа
 const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const PORT = process.env.PORT || 3000;
+
+// В остальном код без изменений — выглядит корректно
 
 // In-memory user state for multi-step flows
 const userStates = {}; // chatId -> { stage, row, messageId, username, photo, sum, comment }
@@ -182,4 +183,3 @@ app.post('/callback', async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
-```
