@@ -175,7 +175,7 @@ app.post('/callback', async (req, res) => {
       }
 
       if (state.stage === 'awaiting_sum' && text) {
-        if (!/^
+        if (!/^@\w+/.test(username)) {
 \d+$/.test(text.trim())) {
           await sendMessage(chatId, '❗ Введите сумму только цифрами.');
           return res.sendStatus(200);
