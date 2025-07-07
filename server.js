@@ -48,20 +48,20 @@ async function uploadToDriveFromUrl(fileUrl, fileName) {
   return `https://drive.google.com/uc?id=${file.data.id}`;
 }
 
-// Buttons for follow-up actions
+// Buttons for follow-up actions — callback_data как строка
 const buildFollowUpButtons = row => ({
   inline_keyboard: [[
-    { text: 'Выполнено ✅', callback_data: JSON.stringify({ action: 'completed', row }) },
-    { text: 'Ожидает поставки ⏳', callback_data: JSON.stringify({ action: 'delayed', row }) },
-    { text: 'Отмена ❌', callback_data: JSON.stringify({ action: 'cancelled', row }) },
+    { text: 'Выполнено ✅', callback_data: `completed:${row}` },
+    { text: 'Ожидает поставки ⏳', callback_data: `delayed:${row}` },
+    { text: 'Отмена ❌', callback_data: `cancelled:${row}` },
   ]]
 });
 
-// List of executors and buttons for selection
+// List of executors and buttons for selection — callback_data как строка
 const EXECUTORS = ['@EvelinaB87','@Olim19','@Oblayor_04_09','Текстовой подрядчик'];
 const buildExecutorButtons = row => ({
   inline_keyboard: EXECUTORS.map(ex => [
-    { text: ex, callback_data: JSON.stringify({ action: 'select_executor', row, executor: ex }) }
+    { text: ex, callback_data: `select_executor:${row}:${ex}` }
   ])
 });
 
@@ -114,9 +114,12 @@ app.post('/callback', async (req, res) => {
       const chatId = message.chat.id;
       const messageId = message.message_id;
       const username = '@' + (from.username || from.first_name);
-      let data;
-      try { data = JSON.parse(raw); } catch { return res.sendStatus(200); }
-      const { action, row, executor } = data;
+
+      // Разбор callback_data с форматом "action:row[:executor]"
+      const parts = raw.split(':');
+      const action = parts[0];
+      const row = parts[1] ? parseInt(parts[1], 10) : null;
+      const executor = parts[2] || null;
 
       if (action === 'in_progress' && row) {
         await editMessageText(chatId, messageId,
@@ -245,4 +248,3 @@ app.post('/callback', async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
-
