@@ -1,3 +1,6 @@
+require('dotenv').config();
+console.log('GAS_WEB_APP_URL:', process.env.GAS_WEB_APP_URL);
+
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
