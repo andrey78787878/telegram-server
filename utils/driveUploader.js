@@ -3,8 +3,8 @@ const path = require("path");
 const axios = require("axios");
 const { google } = require("googleapis");
 
-// Замените на ваш путь к JSON-файлу сервисного аккаунта
-const SERVICE_ACCOUNT_FILE = path.join(__dirname, "credentials.json");
+// Указание абсолютного пути к credentials.json
+const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
 
 // ID папки на Google Диске, куда будут сохраняться фото
 const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
@@ -24,19 +24,16 @@ const drive = google.drive({ version: "v3", auth });
  */
 async function uploadTelegramPhotoToDrive(fileId, telegramToken) {
   try {
-    // Получаем путь к файлу на серверах Telegram
     const fileInfo = await axios.get(
       `https://api.telegram.org/bot${telegramToken}/getFile?file_id=${fileId}`
     );
     const filePath = fileInfo.data.result.file_path;
 
-    // Скачиваем файл
     const url = `https://api.telegram.org/file/bot${telegramToken}/${filePath}`;
     const response = await axios.get(url, { responseType: "stream" });
 
     const fileName = path.basename(filePath);
 
-    // Загружаем на Google Диск
     const uploadResponse = await drive.files.create({
       requestBody: {
         name: fileName,
@@ -50,7 +47,6 @@ async function uploadTelegramPhotoToDrive(fileId, telegramToken) {
 
     const fileIdOnDrive = uploadResponse.data.id;
 
-    // Делаем файл публичным
     await drive.permissions.create({
       fileId: fileIdOnDrive,
       requestBody: {
@@ -59,7 +55,6 @@ async function uploadTelegramPhotoToDrive(fileId, telegramToken) {
       },
     });
 
-    // Получаем прямую ссылку
     const webLink = `https://drive.google.com/uc?id=${fileIdOnDrive}&export=view`;
     return webLink;
   } catch (error) {
