@@ -172,19 +172,19 @@ app.post('/callback', async (req, res) => {
         state.stage = 'awaiting_sum';
         await askForSum(chatId);
         return res.sendStatus(200);
-      }
+  }
+if (state.stage === 'awaiting_sum' && text) {
+  if (!/^\d+$/.test(text.trim())) {
+    await sendMessage(chatId, '❗ Введите сумму только цифрами.');
+    return res.sendStatus(200);
+  }
 
-      if (state.stage === 'awaiting_sum' && text) {
-        if (!/^@\w+/.test(username)) {
-\d+$/.test(text.trim())) {
-          await sendMessage(chatId, '❗ Введите сумму только цифрами.');
-          return res.sendStatus(200);
-        }
-        state.sum = text.trim();
-        state.stage = 'awaiting_comment';
-        await askForComment(chatId);
-        return res.sendStatus(200);
-      }
+  // сумма валидна — сохраняем и переходим к следующему этапу
+  state.sum = text.trim();
+  state.stage = 'awaiting_comment';
+  await sendMessage(chatId, '✏️ Введите комментарий к выполненной заявке:');
+  return res.sendStatus(200);
+}
 
       if (state.stage === 'awaiting_comment' && text) {
         const comment = text.trim();
