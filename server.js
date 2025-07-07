@@ -198,7 +198,7 @@ app.post('/webhook', async (req, res) => {
         const sum = body.message.text.trim();
         if (!/^
 \d+$/.test(sum)) {
-          await sendMessage(chatId, "❗ Введите сумму только цифрами, без пробелов и символов.");
+         await sendMessage(chatId, "💰 Введите сумму работ в сумах (только цифры).");
           return res.sendStatus(200);
         }
 
