@@ -21,7 +21,7 @@ const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const PORT = process.env.PORT || 3000;
 
 // In-memory user state for multi-step flows
-const userStates = {}; // chatId -> { stage, row, messageId, username, photo, sum, comment, serviceMessages, lastUserMessageId }
+const userStates = {}; // chatId -> { stage, row, messageId, username, photo, sum, comment, serviceMessages, lastUserMessageId, originalText }
 
 // Google Drive API auth using service account (credentials.json mounted at /etc/secrets)
 const auth = new google.auth.GoogleAuth({
@@ -134,7 +134,8 @@ app.post('/callback', async (req, res) => {
       }
 
       if (action === 'completed' && row) {
-        userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username, serviceMessages: [] };
+        // Сохраняем текст материнского сообщения originalText для дальнейшего использования
+        userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username, serviceMessages: [], originalText: message.text };
         await askForPhoto(chatId);
         return res.sendStatus(200);
       }
@@ -185,28 +186,27 @@ app.post('/callback', async (req, res) => {
       // Comment entered
       if (state.stage === 'awaiting_comment' && text) {
         const comment = text.trim();
-        const { row, photo, sum, username, messageId, serviceMessages } = state;
+        const { row, photo, sum, username, messageId, serviceMessages, originalText } = state;
 
         // Обновление в Google Apps Script (таблице)
         await axios.post(GAS_WEB_APP_URL, { data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId } });
 
         // Извлекаем данные из текста материнского сообщения
-const originalText = message.text;
+        const textForParse = originalText || '';
+        const номерПиццерии = (textForParse.match(/🏪 \*Пиццерия:\* (.+)/) || [])[1] || '—';
+        const сутьПроблемы = (textForParse.match(/📎 \*Суть:\*([\s\S]*?)\n/) || [])[1]?.trim() || '—';
+        const просрочка = (textForParse.match(/⏰ \*Просрочка:\* (\d+)/) || [])[1] || 0;
 
-const номерПиццерии = (originalText.match(/🏪 \*Пиццерия:\* (.+)/) || [])[1] || '—';
-const сутьПроблемы = (originalText.match(/📎 \*Суть:\*([\s\S]*?)\n/) || [])[1]?.trim() || '—';
-const просрочка = (originalText.match(/⏰ \*Просрочка:\* (\d+)/) || [])[1] || 0;
-
-const updatedText =
-  `📌 Заявка №${row} закрыта.\n` +
-  `🏪 Пиццерия: ${номерПиццерии}\n` +
-  `📎 Суть: ${сутьПроблемы}\n` +
-  `💬 Комментарий: ${comment}\n\n` +
-  `📎 Фото: <a href="${photo}">ссылка</a>\n` +
-  `💰 Сумма: ${sum} сум\n` +
-  `👤 Исполнитель: ${username}\n` +
-  `✅ Статус: Выполнено\n` +
-  `⏰ Просрочка: ${просрочка} дн.`;
+        const updatedText =
+          `📌 Заявка №${row} закрыта.\n` +
+          `🏪 Пиццерия: ${номерПиццерии}\n` +
+          `📎 Суть: ${сутьПроблемы}\n` +
+          `💬 Комментарий: ${comment}\n\n` +
+          `📎 Фото: <a href="${photo}">ссылка</a>\n` +
+          `💰 Сумма: ${sum} сум\n` +
+          `👤 Исполнитель: ${username}\n` +
+          `✅ Статус: Выполнено\n` +
+          `⏰ Просрочка: ${просрочка} дн.`;
 
         // 1) Отправляем уведомление ответом на материнское сообщение
         await sendMessage(chatId,
@@ -245,3 +245,4 @@ const updatedText =
 });
 
 app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
+
