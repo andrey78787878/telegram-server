@@ -22,9 +22,10 @@ const userStates = {}; // userStates: chatId -> { stage, row, messageId, usernam
 
 // Google Drive API auth
 const auth = new google.auth.GoogleAuth({
-  keyFile: 'credentials.json',
+  keyFile: '/etc/secrets/credentials.json',
   scopes: ['https://www.googleapis.com/auth/drive'],
 });
+
 const driveService = google.drive({ version: 'v3', auth });
 
 async function uploadToDriveFromUrl(fileUrl, fileName) {
