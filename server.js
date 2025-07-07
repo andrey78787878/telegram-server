@@ -23,7 +23,6 @@ const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const auth = new google.auth.GoogleAuth({ keyFile: KEYFILEPATH, scopes: SCOPES });
 const drive = google.drive({ version: 'v3', auth });
 
-// Функция загрузки файла на Google Диск (как ранее)
 async function uploadFileToDrive(fileUrl, filename) {
   try {
     const response = await axios({ method: 'GET', url: fileUrl, responseType: 'stream' });
@@ -31,7 +30,6 @@ async function uploadFileToDrive(fileUrl, filename) {
     const media = { mimeType: response.headers['content-type'], body: response.data };
     const file = await drive.files.create({ resource: fileMetadata, media, fields: 'id' });
     const fileId = file.data.id;
-
     await drive.permissions.create({ fileId, requestBody: { role: 'reader', type: 'anyone' } });
     const result = await drive.files.get({ fileId, fields: 'webViewLink, webContentLink' });
     return result.data.webViewLink || result.data.webContentLink;
@@ -42,11 +40,8 @@ async function uploadFileToDrive(fileUrl, filename) {
 }
 
 const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
-
-// userStates для хранения промежуточных данных
 const userStates = {};
 
-// Отправка сообщения в Telegram с возвратом message_id
 async function sendMessage(chatId, text, options = {}) {
   try {
     const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -62,7 +57,6 @@ async function sendMessage(chatId, text, options = {}) {
   }
 }
 
-// Редактирование текста сообщения
 async function editMessageText(chatId, messageId, text, reply_markup) {
   try {
     await axios.post(`${TELEGRAM_API}/editMessageText`, {
@@ -77,7 +71,6 @@ async function editMessageText(chatId, messageId, text, reply_markup) {
   }
 }
 
-// Удаление сообщения Telegram
 async function deleteMessage(chatId, messageId) {
   try {
     await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: chatId, message_id: messageId });
@@ -86,25 +79,24 @@ async function deleteMessage(chatId, messageId) {
   }
 }
 
-// Запросы фото, суммы, комментария с сохранением message_id для последующего удаления
 async function askForPhoto(chatId) {
   const messageId = await sendMessage(chatId, "📸 Пожалуйста, пришлите фото выполненных работ.");
   if (messageId) userStates[chatId].messagesToDelete.push(messageId);
 }
+
 async function askForSum(chatId) {
   const messageId = await sendMessage(chatId, "💰 Введите сумму работ в сумах (только цифры).");
   if (messageId) userStates[chatId].messagesToDelete.push(messageId);
 }
+
 async function askForComment(chatId) {
   const messageId = await sendMessage(chatId, "💬 Добавьте комментарий к заявке.");
   if (messageId) userStates[chatId].messagesToDelete.push(messageId);
 }
 
-// Удаление всех сервисных сообщений через 60 секунд
 function scheduleDeleteMessages(chatId) {
   const messages = userStates[chatId]?.messagesToDelete || [];
   if (messages.length === 0) return;
-
   setTimeout(() => {
     messages.forEach((msgId) => deleteMessage(chatId, msgId));
   }, 60000);
@@ -120,52 +112,50 @@ app.post('/webhook', async (req, res) => {
       const messageId = body.callback_query.message.message_id;
       const username = '@' + (body.callback_query.from.username || body.callback_query.from.first_name);
 
-      let data;
-      try {
-        data = JSON.parse(dataRaw);
-      } catch {
-        console.warn("⚠️ Некорректный callback_data:", dataRaw);
-        return res.sendStatus(200);
-      }
+      // Парсим callback_data из формата action_row_messageId или action_row_executor_messageId
+      const parts = dataRaw.split('_');
+      const action = parts[0];
+      const row = parts[1];
+      const executor = parts.length === 4 ? parts[2] : null;
+      const originalMessageId = parts.length === 4 ? parts[3] : parts[2];
 
-      const { action, row, messageId: originalMessageId } = data;
-
-      if (action === 'in_progress' && row) {
-        // Запрашиваем выбор исполнителя
-        const buttons = EXECUTORS.map((ex) => [{ text: ex, callback_data: JSON.stringify({ action: 'select_executor', row, executor: ex, messageId: originalMessageId }) }]);
+      if (action === 'inprogress' && row) {
+        // Запрос выбора исполнителя
+        const buttons = EXECUTORS.map((ex) => [
+          { text: ex, callback_data: `selectexec_${row}_${ex.replace('@','')}_${messageId}` }
+        ]);
         await editMessageText(chatId, messageId, `Выберите исполнителя для заявки #${row}:`, { inline_keyboard: buttons });
         return res.sendStatus(200);
       }
 
-      if (action === 'select_executor' && row) {
-        const executor = data.executor;
-        // Отправляем в GAS статус "В работе" и исполнителя
+      if (action === 'selectexec' && row && executor) {
+        // Запись исполнителя и статус "В работе"
         await axios.post(GAS_WEB_APP_URL, {
           data: {
             action: 'markInProgress',
             row,
-            executor
+            executor: '@' + executor
           }
         });
 
-        // Обновляем материнское сообщение с исполнителем и статусом, а кнопки — на следующие
+        // Обновляем материнское сообщение с исполнителем и кнопками
         await editMessageText(
           chatId,
           messageId,
-          `🟢 Заявка #${row} в работе.\n👤 Исполнитель: ${executor}`,
+          `🟢 Заявка #${row} в работе.\n👤 Исполнитель: @${executor}`,
           {
             inline_keyboard: [
               [
-                { text: "Выполнено ✅", callback_data: JSON.stringify({ action: "completed", row, messageId: originalMessageId }) },
-                { text: "Ожидает поставки ⏳", callback_data: JSON.stringify({ action: "delayed", row, messageId: originalMessageId }) },
-                { text: "Отмена ❌", callback_data: JSON.stringify({ action: "cancelled", row, messageId: originalMessageId }) }
+                { text: "Выполнено ✅", callback_data: `completed_${row}_${messageId}` },
+                { text: "Ожидает поставки ⏳", callback_data: `delayed_${row}_${messageId}` },
+                { text: "Отмена ❌", callback_data: `cancelled_${row}_${messageId}` }
               ]
             ]
           }
         );
 
-        // Ответ пользователю - в виде reply на материнское сообщение
-        await sendMessage(chatId, `✅ Заявка #${row} принята в работу исполнителем ${executor}`, { reply_to_message_id: messageId });
+        // Ответ в чат — reply на материнское сообщение
+        await sendMessage(chatId, `✅ Заявка #${row} принята в работу исполнителем @${executor}`, { reply_to_message_id: messageId });
 
         return res.sendStatus(200);
       }
@@ -197,7 +187,6 @@ app.post('/webhook', async (req, res) => {
       const state = userStates[chatId];
       if (!state) return res.sendStatus(200);
 
-      // Фото
       if (state.stage === 'awaiting_photo' && body.message.photo) {
         const fileId = body.message.photo.at(-1).file_id;
         const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
@@ -218,7 +207,6 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // Сумма
       if (state.stage === 'awaiting_sum' && body.message.text) {
         const sum = body.message.text.trim();
         if (!/^\d+$/.test(sum)) {
@@ -234,7 +222,6 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // Комментарий
       if (state.stage === 'awaiting_comment' && body.message.text) {
         const comment = body.message.text.trim();
         const { row, photo, sum, username, messageId, messagesToDelete } = state;
@@ -251,11 +238,11 @@ app.post('/webhook', async (req, res) => {
           }
         });
 
-        // Отправляем итоговое сообщение (сохраняем message_id для удаления)
+        // Отправляем итоговое сообщение как reply на материнское
         const finalMsgId = await sendMessage(
           chatId,
           `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${photo}">ссылка</a>\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n✅ Статус: Выполнено\n⏰ Просрочка: (данные из таблицы)`,
-          { parse_mode: 'HTML' }
+          { parse_mode: 'HTML', reply_to_message_id: messageId }
         );
 
         if (finalMsgId) messagesToDelete.push(finalMsgId);
@@ -263,13 +250,11 @@ app.post('/webhook', async (req, res) => {
         // Запускаем удаление всех сервисных сообщений через 60 секунд
         scheduleDeleteMessages(chatId);
 
-        // Очищаем состояние пользователя после окончания процесса
         delete userStates[chatId];
 
         return res.sendStatus(200);
       }
     }
-
     return res.sendStatus(200);
   } catch (err) {
     console.error("❌ Ошибка обработки webhook:", err);
@@ -280,4 +265,3 @@ app.post('/webhook', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
-
