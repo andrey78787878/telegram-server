@@ -3,17 +3,12 @@ console.log('GAS_WEB_APP_URL:', process.env.GAS_WEB_APP_URL);
 
 const express = require('express');
 const axios = require('axios');
-const FormData = require('form-data');
-const fs = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
 const bodyParser = require('body-parser');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwYycNWHJanlUL-vDM6KptXod9GdbzcVa6HI67ttSfRkIPkSYuDQdiEzGCDkRHSKkLV/exec';
 const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
@@ -23,6 +18,8 @@ app.use(bodyParser.urlencoded({ extended: true }));
 function log(...args) {
   console.log('[LOG]', ...args);
 }
+
+const userStates = {}; // состояние пользователя для фото/сумма/комментарий
 
 // Webhook handler
 app.post('/callback', async (req, res) => {
@@ -37,6 +34,34 @@ app.post('/callback', async (req, res) => {
 
       if (text === '/start') {
         await sendMessage(chatId, 'Бот запущен. Ожидаю команды.');
+      } else if (userStates[chatId]?.stage === 'awaiting_photo' && body.message.photo) {
+        const fileId = body.message.photo.at(-1).file_id;
+        const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+        const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${fileRes.data.result.file_path}`;
+
+        userStates[chatId].photoUrl = fileUrl;
+        userStates[chatId].stage = 'awaiting_sum';
+
+        await sendMessage(chatId, '💰 Укажите сумму выполненных работ (в сумах):');
+      } else if (userStates[chatId]?.stage === 'awaiting_sum' && text) {
+        userStates[chatId].sum = text;
+        userStates[chatId].stage = 'awaiting_comment';
+
+        await sendMessage(chatId, '💬 Добавьте комментарий к заявке:');
+      } else if (userStates[chatId]?.stage === 'awaiting_comment' && text) {
+        const { row, photoUrl, sum } = userStates[chatId];
+        const comment = text;
+
+        await axios.post(GAS_WEB_APP_URL, {
+          row,
+          status: 'Выполнено',
+          photo: photoUrl,
+          sum,
+          comment
+        });
+
+        await sendMessage(chatId, `✅ Заявка #${row} закрыта.\n📷 <a href="${photoUrl}">Фото</a>\n💰 Сумма: ${sum}\n💬 Комментарий: ${comment}`);
+        delete userStates[chatId];
       }
     }
 
@@ -45,7 +70,6 @@ app.post('/callback', async (req, res) => {
       const data = query.data;
       const chatId = query.message.chat.id;
       const messageId = query.message.message_id;
-      const fromUsername = query.from.username ? `@${query.from.username}` : query.from.first_name;
 
       log('Callback data:', data);
 
@@ -56,7 +80,8 @@ app.post('/callback', async (req, res) => {
       }
 
       if (data.startsWith('executor_')) {
-        const [, row, executor] = data.split('_');
+        const [, row, ...executorArr] = data.split('_');
+        const executor = executorArr.join('_');
 
         await axios.post(GAS_WEB_APP_URL, {
           row,
@@ -72,6 +97,24 @@ app.post('/callback', async (req, res) => {
             { text: 'Отмена ❌', callback_data: `cancel_${row}` }
           ]
         ]);
+      }
+
+      if (data.startsWith('done_')) {
+        const row = data.split('_')[1];
+        userStates[chatId] = { stage: 'awaiting_photo', row };
+        await sendMessage(chatId, '📷 Пожалуйста, отправьте фото выполненной работы.');
+      }
+
+      if (data.startsWith('wait_')) {
+        const row = data.split('_')[1];
+        await axios.post(GAS_WEB_APP_URL, { row, status: 'Ожидает поставки' });
+        await sendMessage(chatId, `📦 Заявка #${row} переведена в статус "Ожидает поставки".`);
+      }
+
+      if (data.startsWith('cancel_')) {
+        const row = data.split('_')[1];
+        await axios.post(GAS_WEB_APP_URL, { row, status: 'Отменено' });
+        await sendMessage(chatId, `❌ Заявка #${row} отменена.`);
       }
     }
 
