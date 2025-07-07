@@ -107,15 +107,18 @@ async function askForPhoto(chatId) {
 }
 
 async function askForSum(chatId) {
-  await sendMessage(chatId, "💰 Введите сумму работ в сумах (только цифры).\");
+  await sendMessage(chatId, "💰 Введите сумму работ в сумах (только цифры).");
 }
 
 async function askForComment(chatId) {
   await sendMessage(chatId, "💬 Добавьте комментарий к заявке.");
 }
 
-app.post('/webhook', async (req, res) => {
+// !!! Используй /callback если ты поставил Webhook на /callback
+app.post('/callback', async (req, res) => {
   const body = req.body;
+  console.log("📥 Webhook получен:", JSON.stringify(body, null, 2));
+
   try {
     if (body.callback_query) {
       const dataRaw = body.callback_query.data;
@@ -196,9 +199,8 @@ app.post('/webhook', async (req, res) => {
 
       if (state.stage === 'awaiting_sum' && body.message.text) {
         const sum = body.message.text.trim();
-        if (!/^
-\d+$/.test(sum)) {
-         await sendMessage(chatId, "💰 Введите сумму работ в сумах (только цифры).");
+        if (!/^\d+$/.test(sum)) {
+          await sendMessage(chatId, "💰 Введите сумму работ в сумах (только цифры).");
           return res.sendStatus(200);
         }
 
@@ -226,7 +228,7 @@ app.post('/webhook', async (req, res) => {
 
         await sendMessage(
           chatId,
-          `📌 Заявка #${row} закрыта.\n📎 Фото: <a href=\"${photo}\">ссылка</a>\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}`
+          `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${photo}">ссылка</a>\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}`
         );
 
         delete userStates[chatId];
