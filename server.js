@@ -115,11 +115,11 @@ app.post('/callback', async (req, res) => {
   userStates[chatId].row = row;
   userStates[chatId].messageId = message.message_id;
 
-  await editMessageText(chatId, messageId,
-    `Выберите исполнителя для заявки #${row}:`, buildExecutorButtons(row)
-  );
-  return res.sendStatus(200);
-      }
+ await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
+  reply_to_message_id: messageId,
+  reply_markup: keyboard
+});
+}
 if (action === 'select_executor' && row && executor) {
   if (executor === 'Текстовой подрядчик') {
     userStates[chatId] = {
