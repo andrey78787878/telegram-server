@@ -97,6 +97,7 @@ app.post('/callback', async (req, res) => {
   console.log('📥 Webhook получен:', JSON.stringify(req.body, null, 2));
   try {
     const body = req.body;
+const callback_query = body.callback_query;
 
     if (callback_query) {
   const { data: raw, message, from, id: callbackId } = callback_query;
