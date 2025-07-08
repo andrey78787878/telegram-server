@@ -115,18 +115,18 @@ app.post('/callback', async (req, res) => {
         );
         return res.sendStatus(200);
       }
-
-     if (action === 'select_executor' && row && executor) {
+if (action === 'select_executor' && row && executor) {
   if (executor === 'Текстовой подрядчик') {
     userStates[chatId] = { stage: 'awaiting_executor_name', row, messageId, originalText: message.text };
     await sendMessage(chatId, 'Введите имя подрядчика вручную:');
     return res.sendStatus(200);
   }
 
-  // ✅ Новый способ обновления текста: добавление "🟢 В работе\n👷 Исполнитель"
-  const updatedText = message.text.includes('🟢 В работе')
-    ? message.text.replace(/🟢 В работе.*?(\n👷 Исполнитель:.*)?/, `🟢 В работе\n👷 Исполнитель: ${executor}`)
-    : `${message.text}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+  const cleanedText = message.text
+    .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
+    .trim();
+
+  const updatedText = `${cleanedText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
 
   const keyboard = {
     inline_keyboard: [
@@ -139,13 +139,7 @@ app.post('/callback', async (req, res) => {
     ]
   };
 
-  await axios.post(`${TELEGRAM_API}/editMessageText`, {
-    chat_id: chatId,
-    message_id: messageId,
-    text: updatedText,
-    parse_mode: 'HTML',
-    reply_markup: keyboard
-  });
+  await editMessageText(chatId, messageId, updatedText, keyboard);
 
   const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
     reply_to_message_id: messageId
