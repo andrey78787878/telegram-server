@@ -122,11 +122,21 @@ if (action === 'select_executor' && row && executor) {
     return res.sendStatus(200);
   }
 
-  const originalText = userStates[chatId]?.originalText || message.text;
-const cleanedText = originalText
-  .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
-  .trim();
-  const updatedText = `${cleanedText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
+  // Сохраняем оригинальный текст, если еще не сохранён
+  if (!userStates[chatId]) userStates[chatId] = {};
+  if (!userStates[chatId].originalText) {
+    userStates[chatId].originalText = message.text;
+  }
+
+  const originalText = userStates[chatId].originalText;
+
+  const cleanedText = originalText
+    .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
+    .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
+    .trim();
+
+  const newHeader = `🟢 Заявка #${row} в работе.\n👷 Исполнитель: ${executor}`;
+  const updatedText = `${newHeader}\n\n${cleanedText}`.trim();
 
   const keyboard = {
     inline_keyboard: [
@@ -139,35 +149,20 @@ const cleanedText = originalText
     ]
   };
 
-  // 1. Получаем оригинальный текст материнской заявки
-const originalMessage = callbackQuery.message;
-const originalText = originalMessage.text || '';
+  await editMessageText(chatId, messageId, updatedText, keyboard);
 
-// 2. Удаляем старую плашку (если была)
-const cleanedText = originalText
-  .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/, '')
-  .replace(/✅ Заявка #\d+ закрыта\..*?\n*/s, ''); // на будущее — если была плашка о закрытии
+  const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
+    reply_to_message_id: messageId,
+  });
 
-// 3. Формируем новую плашку
-const newHeader = `🟢 Заявка #${row} в работе.\n👷 Исполнитель: @${executor}`;
+  setTimeout(() => {
+    axios.post(`${TELEGRAM_API}/deleteMessage`, {
+      chat_id: chatId,
+      message_id: infoMsg
+    }).catch(() => {});
+  }, 60000);
 
-// 4. Объединяем
-const updatedText = `${newHeader}\n\n${cleanedText}`;
-
-// 5. Обновляем сообщение
-await editMessageText(chatId, messageId, updatedText, keyboard);
-
-// 6. Отправляем сервисное уведомление
-const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
-  reply_to_message_id: messageId,
-});
-
-// 7. Удаляем его через минуту
-setTimeout(() => {
-  deleteMessage(chatId, infoMsg.message_id);
-}, 60000);
-
-  await axios.post(process.env.GAS_WEB_APP_URL, {
+  await axios.post(GAS_WEB_APP_URL, {
     action: 'in_progress',
     row,
     message_id: messageId,
@@ -175,6 +170,8 @@ setTimeout(() => {
   });
 
   return res.sendStatus(200);
+}
+
 }
 
       if (action === 'completed' && row) {
