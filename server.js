@@ -98,53 +98,39 @@ app.post('/callback', async (req, res) => {
   try {
     const body = req.body;
 
-    if (body.callback_query) {
-      const { data: raw, message, from } = body.callback_query;
-      const chatId = message.chat.id;
-const msgId = message.message_id; // ← чтобы не перезаписать messageId из callback_data
-      const username = '@' + (from.username || from.first_name);
+    if (callback_query) {
+  const { data: raw, message, from, id: callbackId } = callback_query;
+  const chatId = message.chat.id;
+  const msgId = message.message_id; // чтобы не перезаписать messageId из data
+  const username = from.username ? `@${from.username}` : from.first_name || '—';
 
-      let action, row, executor, messageId;
-try {
-  if (raw.startsWith('{')) {
-    const parsed = JSON.parse(raw);
-    action = parsed.action;
-    row = parsed.row;
-    messageId = parsed.messageId;
-    executor = parsed.executor;
-  } else {
-    const parts = raw.split(':');
-    action = parts[0];
-    row = parts[1] ? parseInt(parts[1], 10) : null;
-    executor = parts[2] || null;
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    console.error('Ошибка парсинга callback_data:', raw);
+    return res.sendStatus(200);
   }
-} catch (err) {
-  console.error('Ошибка парсинга callback_data:', err.message);
-  return res.sendStatus(200);
-}
 
-if (action === 'in_progress' && row) {
-  if (!userStates[chatId]) userStates[chatId] = {};
-  userStates[chatId].originalText = message.text;
-  userStates[chatId].row = row;
-  userStates[chatId].messageId = message.message_id;
+  const { action, row, messageId } = data;
 
-  const keyboard = buildExecutorButtons(row); // ✅ Обязательно вызови эту функцию
-
-  await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
-    reply_to_message_id: messageId,
-    reply_markup: keyboard
+  // ✅ ответим на callback — иначе кнопка будет "висеть"
+  await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+    callback_query_id: callbackId,
   });
-}
-if (action === 'select_executor' && row && executor) {
-  if (executor === 'Текстовой подрядчик') {
+
+  if (action === 'done' && row) {
+    // Запускаем цепочку: фото → сумма → комментарий
     userStates[chatId] = {
-      stage: 'awaiting_executor_name',
+      stage: 'awaiting_photo',
       row,
       messageId,
-      originalText: message.text
+      username,
+      serviceMessages: [],
+      originalText: message.text || message.caption || '', // сохраняем текст материнского сообщения
     };
-    await sendMessage(chatId, 'Введите имя подрядчика вручную:');
+
+    await askForPhoto(chatId);
     return res.sendStatus(200);
   }
 
