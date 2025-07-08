@@ -258,11 +258,9 @@ const updatedText = `${cleanedText}${addition}`;
           .replace(/\n?⏱ Просрочка: .*$/m, '')
           .replace(/\n?✅ Заявка закрыта\..*$/m, '');
 
-const просрочка = (originalText.match(/⏱ Просрочка: (.+)/) || [])[1] || '—';
-const problemMatch = originalText.match(/🛠 Проблема: (.+)/);
-const problemDescription = problemMatch ? problemMatch[1].trim() : '—';
+        const просрочка = (originalText.match(/⏱ Просрочка: (.+)/) || [])[1] || '—';
 
-const updatedText = `${cleanedText}
+        const updatedText = `${cleanedText}
 📎 Фото: <a href="${photo}">ссылка</a>
 💰 Сумма: ${sum} сум
 👤 Исполнитель: ${username}
