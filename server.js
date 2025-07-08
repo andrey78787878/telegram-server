@@ -248,14 +248,17 @@ const callback_query = body.callback_query;
           .replace(/\n?⏱ Просрочка: .*$/m, '')
           .replace(/\n?✅ Заявка закрыта\..*$/m, '');
 
-        const просрочка = (originalText.match(/⏱ Просрочка: (.+)/) || [])[1] || '—';
+const sheetData = await getSheetData();
+const rowData = sheetData[row - 1];
+const просрочка = rowData[13];       // Столбец N
+const problemText = rowData[4];      // Столбец E (суть проблемы)
 
-        const updatedText = `${cleanedText}
+const updatedText = `${cleanedText}
 📎 Фото: <a href="${photo}">ссылка</a>
 💰 Сумма: ${sum} сум
 👤 Исполнитель: ${username}
 ✅ Статус: Выполнено
-📌 Проблема: ${problemDescription}
+📌 Проблема: ${problemText}
 💬 Комментарий: ${comment}
 ⏱ Просрочка: ${просрочка}`.trim();
 
