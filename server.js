@@ -101,7 +101,7 @@ app.post('/callback', async (req, res) => {
     if (body.callback_query) {
       const { data: raw, message, from } = body.callback_query;
       const chatId = message.chat.id;
-      const messageId = message.message_id;
+const msgId = message.message_id; // ← чтобы не перезаписать messageId из callback_data
       const username = '@' + (from.username || from.first_name);
 
       let action, row, executor, messageId;
