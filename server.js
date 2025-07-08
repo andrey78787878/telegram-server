@@ -122,7 +122,10 @@ if (action === 'select_executor' && row && executor) {
     return res.sendStatus(200);
   }
 
-  const cleanedText = message.text
+  const originalText = userStates[chatId]?.originalText || message.text;
+const cleanedText = originalText
+  .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
+  .trim();
     .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
     .trim();
 
