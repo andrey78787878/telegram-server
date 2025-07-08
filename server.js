@@ -295,9 +295,7 @@ const updatedText = `${cleanedText}${addition}`;
   delete userStates[chatId];
 }, 60000);
 
-
-        delete userStates[chatId];
-        return res.sendStatus(200);
+     return res.sendStatus(200);
       }
     }
 
