@@ -128,17 +128,30 @@ const callback_query = body.callback_query;
     callback_query_id: callbackId,
   });
 
-  if (action === 'done' && row) {
+ if (action === 'done' && row) {
   const executor = username;
   const originalText = message.text || message.caption || '';
-  const cleanedText = originalText
-    .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
-    .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
-    .replace(/🟢 В работе\n👷 Исполнитель:.*(\n)?/g, '')
-    .trim();
 
-  const addition = `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-  const updatedText = `${cleanedText}${addition}`;
+  // Сохраняем состояние — ждём выбора исполнителя
+  userStates[chatId] = {
+    stage: 'awaiting_executor_name',
+    row,
+    messageId: msgId, // messageId заявки
+    username,
+    originalText,
+    serviceMessages: []
+  };
+
+  // Отправим новое сообщение с кнопками исполнителей
+  const execMsgId = await sendMessage(chatId, '👷 Выберите исполнителя:', {
+    reply_markup: buildExecutorButtons(row)
+  });
+
+  // Сохраняем id, чтобы удалить потом
+  userStates[chatId].serviceMessages.push(execMsgId);
+
+  return res.sendStatus(200);
+}
 
   const keyboard = {
     inline_keyboard: [
