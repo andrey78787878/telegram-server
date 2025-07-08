@@ -133,17 +133,18 @@ if (action === 'select_executor' && row && executor) {
   }
 
   // Сохраняем оригинальный текст
-  const originalText = userStates[chatId]?.originalText || message.text;
+const originalText = userStates[chatId]?.originalText || message.text;
 
-  // Чистим старую плашку, если была
-  const cleanedText = originalText
-    .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
-    .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
-    .trim();
+// Чистим старую плашку, если была
+const cleanedText = originalText
+  .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
+  .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
+  .replace(/🟢 В работе\n👷 Исполнитель:.*(\n)?/g, '')
+  .trim();
 
-  // Новая плашка
-  const newHeader = `🟢 Заявка #${row} в работе.\n👷 Исполнитель: @${executor}`;
-  const updatedText = `${newHeader}\n\n${cleanedText}`.trim();
+// Новая плашка — ДОБАВЛЯЕМ СНИЗУ
+const addition = `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+const updatedText = cleanedText + addition;
 
   const keyboard = {
     inline_keyboard: [
