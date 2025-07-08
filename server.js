@@ -50,19 +50,17 @@ app.post('/webhook', async (req, res) => {
 
       // Выбор исполнителя
       if (callbackData.startsWith('in_progress:')) {
-  const [_, row, messageId] = callback_data.split('__');
+  const [_, row, messageId] = callbackData.split(':');
   const executorKeyboard = [
-    [{ text: '@EvelinaB87', callbackdata: `set_executor__${row}:${messageId}:@EvelinaB87` }],
-    [{ text: '@Olim19', callbackdata: `set_executor:${row}__${messageId}:@Olim19` }],
-    [{ text: '@Oblayor_04_09', callbackdata: `set_executor__${row}:${messageId}:@Oblayor_04_09` }],
-    [{ text: '📝 Текстовой подрядчик', callbackdata: `set_executor__${row}:${messageId}:text` }]
+    [{ text: '@EvelinaB87', callback_data: `set_executor__${row}__${messageId}__@EvelinaB87` }],
+    [{ text: '@Olim19', callback_data: `set_executor__${row}__${messageId}__@Olim19` }],
+    [{ text: '@Oblayor_04_09', callback_data: `set_executor__${row}__${messageId}__@Oblayor_04_09` }],
+    [{ text: '📝 Текстовой подрядчик', callback_data: `set_executor__${row}__${messageId}__text` }]
   ];
 
   console.log('➡️ Выбор исполнителя для заявки', row);
 
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id,
-    text: `Выберите исполнителя для заявки #${row}:`,
+  await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
     reply_markup: {
       inline_keyboard: executorKeyboard
     }
