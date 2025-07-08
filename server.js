@@ -117,25 +117,27 @@ app.post('/callback', async (req, res) => {
       }
 if (action === 'select_executor' && row && executor) {
   if (executor === 'Текстовой подрядчик') {
-    userStates[chatId] = { stage: 'awaiting_executor_name', row, messageId, originalText: message.text };
+    userStates[chatId] = {
+      stage: 'awaiting_executor_name',
+      row,
+      messageId,
+      originalText: message.text
+    };
     await sendMessage(chatId, 'Введите имя подрядчика вручную:');
     return res.sendStatus(200);
   }
 
-  // Сохраняем оригинальный текст, если еще не сохранён
-  if (!userStates[chatId]) userStates[chatId] = {};
-  if (!userStates[chatId].originalText) {
-    userStates[chatId].originalText = message.text;
-  }
+  // Сохраняем оригинальный текст
+  const originalText = userStates[chatId]?.originalText || message.text;
 
-  const originalText = userStates[chatId].originalText;
-
+  // Чистим старую плашку, если была
   const cleanedText = originalText
     .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
     .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
     .trim();
 
-  const newHeader = `🟢 Заявка #${row} в работе.\n👷 Исполнитель: ${executor}`;
+  // Новая плашка
+  const newHeader = `🟢 Заявка #${row} в работе.\n👷 Исполнитель: @${executor}`;
   const updatedText = `${newHeader}\n\n${cleanedText}`.trim();
 
   const keyboard = {
@@ -170,8 +172,6 @@ if (action === 'select_executor' && row && executor) {
   });
 
   return res.sendStatus(200);
-}
-
 }
 
       if (action === 'completed' && row) {
