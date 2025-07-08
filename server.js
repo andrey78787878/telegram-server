@@ -3,7 +3,6 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const FormData = require('form-data');
 const { google } = require('googleapis');
 
 const app = express();
@@ -43,6 +42,7 @@ async function uploadToDrive(filename) {
 
 app.post('/', async (req, res) => {
   const body = req.body;
+  console.log('📩 Получен апдейт:', JSON.stringify(body, null, 2));
 
   if (body.callback_query) {
     const cbq = body.callback_query;
@@ -56,7 +56,6 @@ app.post('/', async (req, res) => {
         text: 'Выберите исполнителя:',
         reply_markup: { inline_keyboard: buttons }
       });
-      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callback_id });
     }
 
     if (data.startsWith('executor')) {
