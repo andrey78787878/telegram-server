@@ -116,23 +116,54 @@ app.post('/callback', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (action === 'select_executor' && row && executor) {
-        if (executor === 'Текстовой подрядчик') {
-          userStates[chatId] = { stage: 'awaiting_executor_name', row, messageId, originalText: message.text };
-          await sendMessage(chatId, 'Введите имя подрядчика вручную:');
-          return res.sendStatus(200);
-        }
+     if (action === 'select_executor' && row && executor) {
+  if (executor === 'Текстовой подрядчик') {
+    userStates[chatId] = { stage: 'awaiting_executor_name', row, messageId, originalText: message.text };
+    await sendMessage(chatId, 'Введите имя подрядчика вручную:');
+    return res.sendStatus(200);
+  }
 
-        await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row, executor } });
+  // ✅ Новый способ обновления текста: добавление "🟢 В работе\n👷 Исполнитель"
+  const updatedText = message.text.includes('🟢 В работе')
+    ? message.text.replace(/🟢 В работе.*?(\n👷 Исполнитель:.*)?/, `🟢 В работе\n👷 Исполнитель: ${executor}`)
+    : `${message.text}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
 
-        const updatedText = message.text.includes('🟢 В работе')
-          ? message.text.replace(/🟢 В работе.*?(\n|$)/s, `🟢 В работе\n👷 Исполнитель: ${executor}\n`)
-          : `${message.text}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: `✅ В работе ${executor}`, callback_data: 'noop' }],
+      [
+        { text: 'Выполнено', callback_data: JSON.stringify({ action: 'done', row, messageId }) },
+        { text: 'Ожидает поставки', callback_data: JSON.stringify({ action: 'delayed', row, messageId }) },
+        { text: 'Отмена', callback_data: JSON.stringify({ action: 'cancel', row, messageId }) }
+      ]
+    ]
+  };
 
-        await editMessageText(chatId, messageId, updatedText, buildFollowUpButtons(row));
-        await sendMessage(chatId, `✅ Заявка #${row} принята в работу исполнителем ${executor}`, { reply_to_message_id: messageId });
-        return res.sendStatus(200);
-      }
+  await axios.post(`${TELEGRAM_API}/editMessageText`, {
+    chat_id: chatId,
+    message_id: messageId,
+    text: updatedText,
+    parse_mode: 'HTML',
+    reply_markup: keyboard
+  });
+
+  const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
+    reply_to_message_id: messageId
+  });
+
+  setTimeout(() => {
+    deleteMessage(chatId, infoMsg.message_id);
+  }, 60000);
+
+  await axios.post(process.env.GAS_WEB_APP_URL, {
+    action: 'in_progress',
+    row,
+    message_id: messageId,
+    executor
+  });
+
+  return res.sendStatus(200);
+}
 
       if (action === 'completed' && row) {
         userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username, serviceMessages: [], originalText: message.text };
