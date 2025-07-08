@@ -126,9 +126,6 @@ if (action === 'select_executor' && row && executor) {
 const cleanedText = originalText
   .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
   .trim();
-    .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
-    .trim();
-
   const updatedText = `${cleanedText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
 
   const keyboard = {
