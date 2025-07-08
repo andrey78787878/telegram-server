@@ -110,10 +110,15 @@ app.post('/callback', async (req, res) => {
       const executor = parts[2] || null;
 
       if (action === 'in_progress' && row) {
-        await editMessageText(chatId, messageId,
-          `Выберите исполнителя для заявки #${row}:`, buildExecutorButtons(row)
-        );
-        return res.sendStatus(200);
+  if (!userStates[chatId]) userStates[chatId] = {};
+  userStates[chatId].originalText = message.text;
+  userStates[chatId].row = row;
+  userStates[chatId].messageId = message.message_id;
+
+  await editMessageText(chatId, messageId,
+    `Выберите исполнителя для заявки #${row}:`, buildExecutorButtons(row)
+  );
+  return res.sendStatus(200);
       }
 if (action === 'select_executor' && row && executor) {
   if (executor === 'Текстовой подрядчик') {
