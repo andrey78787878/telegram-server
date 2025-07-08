@@ -21,6 +21,11 @@ const stepDataMap = {};
 const tempMessages = [];
 
 app.post('/webhook', async (req, res) => {
+  console.log('📩 Webhook получен');
+  res.sendStatus(200); // ОБЯЗАТЕЛЬНО!
+  // дальше любая логика
+});
+
   const body = req.body;
 
   try {
