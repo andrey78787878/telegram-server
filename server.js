@@ -121,22 +121,8 @@ const callback_query = body.callback_query;
   });
 
   if (action === 'done' && row) {
-    // Запускаем цепочку: фото → сумма → комментарий
-    userStates[chatId] = {
-      stage: 'awaiting_photo',
-      row,
-      messageId,
-      username,
-      serviceMessages: [],
-      originalText: message.text || message.caption || '', // сохраняем текст материнского сообщения
-    };
-
-    await askForPhoto(chatId);
-    return res.sendStatus(200);
-  }
-
-  // Сохраняем оригинальный текст
-const originalText = message.text || message.caption || '';
+  const executor = username;
+  const originalText = message.text || message.caption || '';
   const cleanedText = originalText
     .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
     .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
