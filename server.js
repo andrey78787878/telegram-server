@@ -144,7 +144,7 @@ const cleanedText = originalText
 
 // Новая плашка — ДОБАВЛЯЕМ СНИЗУ
 const addition = `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-const updatedText = cleanedText + addition;
+const updatedText = `${cleanedText}${addition}`;
 
   const keyboard = {
     inline_keyboard: [
