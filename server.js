@@ -50,12 +50,12 @@ app.post('/webhook', async (req, res) => {
 
       // Выбор исполнителя
       if (callbackData.startsWith('in_progress:')) {
-  const [_, row, messageId] = callback_data.split(':');
+  const [_, row, messageId] = callback_data.split('__');
   const executorKeyboard = [
-    [{ text: '@EvelinaB87', callback_data: `set_executor:${row}:${messageId}:@EvelinaB87` }],
-    [{ text: '@Olim19', callback_data: `set_executor:${row}:${messageId}:@Olim19` }],
-    [{ text: '@Oblayor_04_09', callback_data: `set_executor:${row}:${messageId}:@Oblayor_04_09` }],
-    [{ text: '📝 Текстовой подрядчик', callback_data: `set_executor:${row}:${messageId}:text` }]
+    [{ text: '@EvelinaB87', callbackdata: `set_executor__${row}:${messageId}:@EvelinaB87` }],
+    [{ text: '@Olim19', callbackdata: `set_executor:${row}__${messageId}:@Olim19` }],
+    [{ text: '@Oblayor_04_09', callbackdata: `set_executor__${row}:${messageId}:@Oblayor_04_09` }],
+    [{ text: '📝 Текстовой подрядчик', callbackdata: `set_executor__${row}:${messageId}:text` }]
   ];
 
   console.log('➡️ Выбор исполнителя для заявки', row);
