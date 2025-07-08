@@ -104,10 +104,24 @@ app.post('/callback', async (req, res) => {
       const messageId = message.message_id;
       const username = '@' + (from.username || from.first_name);
 
-      const parts = raw.split(':');
-      const action = parts[0];
-      const row = parts[1] ? parseInt(parts[1], 10) : null;
-      const executor = parts[2] || null;
+      clet action, row, executor, messageId;
+try {
+  if (raw.startsWith('{')) {
+    const parsed = JSON.parse(raw);
+    action = parsed.action;
+    row = parsed.row;
+    messageId = parsed.messageId;
+    executor = parsed.executor;
+  } else {
+    const parts = raw.split(':');
+    action = parts[0];
+    row = parts[1] ? parseInt(parts[1], 10) : null;
+    executor = parts[2] || null;
+  }
+} catch (err) {
+  console.error('Ошибка парсинга callback_data:', err.message);
+  return res.sendStatus(200);
+}
 
 if (action === 'in_progress' && row) {
   if (!userStates[chatId]) userStates[chatId] = {};
