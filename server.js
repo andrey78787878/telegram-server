@@ -13,19 +13,12 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
-// Список исполнителей
 const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
-
 const userStates = {};
 const stepDataMap = {};
-const tempMessages = [];
 
 app.post('/webhook', async (req, res) => {
   console.log('📩 Webhook получен');
-  res.sendStatus(200); // ОБЯЗАТЕЛЬНО!
-  // дальше любая логика
-});
-
   const body = req.body;
 
   try {
@@ -64,19 +57,17 @@ app.post('/webhook', async (req, res) => {
         stepDataMap[chatId].username = msg.text.replace('@', '');
         delete userStates[chatId];
         await updateToWork(chatId);
-        return res.sendStatus(200);
-      }
-
-      if (userStates[chatId]?.waitPhoto && msg.photo) {
+      } else if (userStates[chatId]?.waitPhoto && msg.photo) {
         const fileId = msg.photo.at(-1).file_id;
         const file = await getFile(fileId);
         const filePath = file.result.file_path;
         const url = `${TELEGRAM_FILE_API}/${filePath}`;
         const photoBuffer = await axios.get(url, { responseType: 'arraybuffer' });
         const fileName = `${Date.now()}.jpg`;
-        const filePathLocal = path.join(__dirname, 'downloads', fileName);
 
-        fs.mkdirSync('./downloads', { recursive: true });
+        const localDir = path.join(__dirname, 'downloads');
+        if (!fs.existsSync(localDir)) fs.mkdirSync(localDir);
+        const filePathLocal = path.join(localDir, fileName);
         fs.writeFileSync(filePathLocal, photoBuffer.data);
 
         stepDataMap[chatId].photo = {
@@ -96,7 +87,6 @@ app.post('/webhook', async (req, res) => {
         stepDataMap[chatId].comment = msg.text;
         delete userStates[chatId];
 
-        // Отправка на GAS
         const form = new FormData();
         form.append('photo', Buffer.from(stepDataMap[chatId].photo.buffer), {
           filename: stepDataMap[chatId].photo.fileName,
@@ -108,7 +98,10 @@ app.post('/webhook', async (req, res) => {
         form.append('pizzeria', stepDataMap[chatId].pizzeria);
         form.append('problem', stepDataMap[chatId].problem);
 
-        const gasRes = await axios.post(GAS_WEB_APP_URL, form, { headers: form.getHeaders() });
+        const gasRes = await axios.post(GAS_WEB_APP_URL, form, {
+          headers: form.getHeaders(),
+        });
+
         const { photoLink, delay } = gasRes.data;
 
         const finalText = `
@@ -127,15 +120,15 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    res.sendStatus(200);
+    res.sendStatus(200); // Только здесь!
   } catch (err) {
     console.error('Ошибка:', err);
     res.sendStatus(500);
   }
 });
 
-// --- Хелперы --- //
-async function askExecutor(chatId, messageId) {
+// ==== Хелперы ====
+async function askExecutor(chatId) {
   const keyboard = {
     inline_keyboard: EXECUTORS.map(name => {
       if (name === 'Текстовой подрядчик') {
@@ -156,11 +149,8 @@ async function updateToWork(chatId) {
       ],
     },
   });
-
-  // Можно здесь обновить статус в таблице через GAS, если нужно
 }
 
-// --- Универсальный метод отправки сообщений --- //
 async function sendMessage(chatId, text, extra = {}) {
   return axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
@@ -169,6 +159,11 @@ async function sendMessage(chatId, text, extra = {}) {
   });
 }
 
+async function getFile(fileId) {
+  const res = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+  return res.data;
+}
+
 app.listen(process.env.PORT || 3000, () => {
-  console.log('Server running...');
+  console.log('🤖 Server running on port 3000');
 });
