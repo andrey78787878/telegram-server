@@ -197,26 +197,46 @@ app.post('/callback', async (req, res) => {
         const comment = text.trim();
         const { row, photo, sum, username, messageId, serviceMessages, originalText } = state;
 
-        await axios.post(GAS_WEB_APP_URL, { data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId } });
+        await axios.post(GAS_WEB_APP_URL, {
+          data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId }
+        });
 
-        const textForParse = originalText || '';
-        const номерПиццерии = (textForParse.match(/🏪 Пиццерия №: (.+)/) || [])[1] || '—';
-        const сутьПроблемы = (textForParse.match(/🛠 Проблема:([\s\S]*?)\n/) || [])[1]?.trim() || '—';
-        const просрочка = (textForParse.match(/📬 Предельный срок: (.+)/) || [])[1] || '—';
+        const cleanedText = originalText
+          .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
+          .replace(/\n?📎 Фото: .*$/m, '')
+          .replace(/\n?💰 Сумма: .*$/m, '')
+          .replace(/\n?👤 Исполнитель: .*$/m, '')
+          .replace(/\n?✅ Статус: .*$/m, '')
+          .replace(/\n?⏱ Просрочка: .*$/m, '')
+          .replace(/\n?✅ Заявка закрыта\..*$/m, '');
 
-        const updatedText =
-          `${textForParse}\n\n✅ Заявка закрыта.\n💬 Комментарий: ${comment}\n📎 Фото: <a href="${photo}">ссылка</a>\n💰 Сумма: ${sum} сум\n✅ Статус: Выполнено`;
+        const просрочка = (originalText.match(/⏱ Просрочка: (.+)/) || [])[1] || '—';
+
+        const updatedText = `${cleanedText}
+📎 Фото: <a href="${photo}">ссылка</a>
+💰 Сумма: ${sum} сум
+👤 Исполнитель: ${username}
+✅ Статус: Выполнено
+💬 Комментарий: ${comment}
+⏱ Просрочка: ${просрочка}`.trim();
+
+        await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
         await sendMessage(chatId, `📌 Заявка №${row} закрыта.`, { reply_to_message_id: messageId });
-        await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
         setTimeout(async () => {
           try {
             for (const msgId of serviceMessages) {
-              await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+              await axios.post(`${TELEGRAM_API}/deleteMessage`, {
+                chat_id: chatId,
+                message_id: msgId
+              }).catch(() => {});
             }
             if (state.lastUserMessageId) {
-              await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: chatId, message_id: state.lastUserMessageId }).catch(() => {});
+              await axios.post(`${TELEGRAM_API}/deleteMessage`, {
+                chat_id: chatId,
+                message_id: state.lastUserMessageId
+              }).catch(() => {});
             }
           } catch (err) {
             console.error('Ошибка удаления сообщений:', err.message);
@@ -236,3 +256,4 @@ app.post('/callback', async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
+
