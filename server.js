@@ -40,7 +40,7 @@ async function uploadToDrive(filename) {
   return `https://drive.google.com/uc?id=${res.data.id}`;
 }
 
-app.post('/', async (req, res) => {
+app.post(['/','/webhook'], async (req, res) => {
   const body = req.body;
   console.log('📩 Получен апдейт:', JSON.stringify(body, null, 2));
 
