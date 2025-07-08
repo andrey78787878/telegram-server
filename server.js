@@ -100,7 +100,7 @@ async function getSheetData() {
     console.error('❌ Ошибка получения данных из Google Sheets:', error.message);
     return [];
   }
-
+}
 app.post('/callback', async (req, res) => {
   console.log('📥 Webhook получен:', JSON.stringify(req.body, null, 2));
   try {
