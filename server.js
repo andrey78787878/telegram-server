@@ -49,7 +49,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       // Выбор исполнителя
-      if (callback_data.startsWith('in_progress:')) {
+      if (callbackData.startsWith('in_progress:')) {
   const [_, row, messageId] = callback_data.split(':');
   const executorKeyboard = [
     [{ text: '@EvelinaB87', callback_data: `set_executor:${row}:${messageId}:@EvelinaB87` }],
@@ -80,20 +80,33 @@ app.post('/webhook', async (req, res) => {
       }
 
       // Ожидает поставки
-      if (callbackData.startsWith('delay_')) {
-        const [_, row, name] = callbackData.split('_');
-        await updateStatus(row, 'Ожидает поставки', name);
-        await sendMessage(chatId, `⏳ Заявка #${row} переведена в статус "Ожидает поставки" исполнителем ${name}`);
-        return res.sendStatus(200);
-      }
+      if (callbackData.startsWith('set_executor:')) {
+  const [_, row, messageId, executorRaw] = callbackData.split(':');
+  const chatId = update.callback_query.message.chat.id;
+  const username = executorRaw === 'text' ? null : executorRaw.replace('@', '');
 
-      // Отмена
-      if (callbackData.startsWith('cancel_')) {
-        const row = callbackData.split('_')[1];
-        await updateStatus(row, 'Отменена');
-        await sendMessage(chatId, `🚫 Заявка #${row} отменена.`);
-        return res.sendStatus(200);
+  if (username) {
+    // Назначен исполнитель из списка
+    await updateExecutor(row, username);
+    await sendMessage(chatId, `✅ Назначен исполнитель: @${username}`);
+
+    await sendMessage(chatId, 'Выберите дальнейшее действие:', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Выполнено ✅', callback_data: `done_${row}_${username}` }],
+          [{ text: 'Ожидает поставки 🕐', callback_data: `delay_${row}_${username}` }],
+          [{ text: 'Отмена ❌', callback_data: `cancel_${row}` }]
+        ]
       }
+    });
+  } else {
+    // Запрос ввода вручную
+    userSteps.set(chatId, { step: 'wait_custom_executor', row });
+    await sendMessage(chatId, 'Введите имя исполнителя вручную:');
+  }
+
+  return res.sendStatus(200);
+}
     }
 
     // Сообщения пользователя
