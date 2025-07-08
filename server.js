@@ -139,15 +139,33 @@ if (action === 'select_executor' && row && executor) {
     ]
   };
 
-  await editMessageText(chatId, messageId, updatedText, keyboard);
+  // 1. Получаем оригинальный текст материнской заявки
+const originalMessage = callbackQuery.message;
+const originalText = originalMessage.text || '';
 
-  const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
-    reply_to_message_id: messageId
-  });
+// 2. Удаляем старую плашку (если была)
+const cleanedText = originalText
+  .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/, '')
+  .replace(/✅ Заявка #\d+ закрыта\..*?\n*/s, ''); // на будущее — если была плашка о закрытии
 
-  setTimeout(() => {
-    deleteMessage(chatId, infoMsg.message_id);
-  }, 60000);
+// 3. Формируем новую плашку
+const newHeader = `🟢 Заявка #${row} в работе.\n👷 Исполнитель: @${executor}`;
+
+// 4. Объединяем
+const updatedText = `${newHeader}\n\n${cleanedText}`;
+
+// 5. Обновляем сообщение
+await editMessageText(chatId, messageId, updatedText, keyboard);
+
+// 6. Отправляем сервисное уведомление
+const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
+  reply_to_message_id: messageId,
+});
+
+// 7. Удаляем его через минуту
+setTimeout(() => {
+  deleteMessage(chatId, infoMsg.message_id);
+}, 60000);
 
   await axios.post(process.env.GAS_WEB_APP_URL, {
     action: 'in_progress',
