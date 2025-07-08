@@ -232,28 +232,28 @@ const callback_query = body.callback_query;
       }
 
       if (state.stage === 'awaiting_comment' && text) {
-        const comment = text.trim();
-        const { row, photo, sum, username, messageId, serviceMessages, originalText } = state;
+  const comment = text.trim();
+  const { row, photo, sum, username, messageId, serviceMessages, originalText } = state;
 
-        await axios.post(GAS_WEB_APP_URL, {
-          data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId }
-        });
+  const sheetData = await getSheetData();
+  const rowData = sheetData[row - 1] || [];
+  const problemText = rowData[4] || '—';     // Столбец E — суть проблемы
+  const просрочка = rowData[13] || '—';      // Столбец N — просрочка
 
-        const cleanedText = originalText
-          .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
-          .replace(/\n?📎 Фото: .*$/m, '')
-          .replace(/\n?💰 Сумма: .*$/m, '')
-          .replace(/\n?👤 Исполнитель: .*$/m, '')
-          .replace(/\n?✅ Статус: .*$/m, '')
-          .replace(/\n?⏱ Просрочка: .*$/m, '')
-          .replace(/\n?✅ Заявка закрыта\..*$/m, '');
+  await axios.post(GAS_WEB_APP_URL, {
+    data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId }
+  });
 
-const sheetData = await getSheetData();
-const rowData = sheetData[row - 1];
-const просрочка = rowData[13];       // Столбец N
-const problemText = rowData[4];      // Столбец E (суть проблемы)
+  const cleanedText = originalText
+    .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
+    .replace(/\n?📎 Фото: .*$/m, '')
+    .replace(/\n?💰 Сумма: .*$/m, '')
+    .replace(/\n?👤 Исполнитель: .*$/m, '')
+    .replace(/\n?✅ Статус: .*$/m, '')
+    .replace(/\n?⏱ Просрочка: .*$/m, '')
+    .replace(/\n?✅ Заявка закрыта\..*$/m, '');
 
-const updatedText = `${cleanedText}
+  const updatedText = `${cleanedText}
 📎 Фото: <a href="${photo}">ссылка</a>
 💰 Сумма: ${sum} сум
 👤 Исполнитель: ${username}
@@ -262,39 +262,37 @@ const updatedText = `${cleanedText}
 💬 Комментарий: ${comment}
 ⏱ Просрочка: ${просрочка}`.trim();
 
+  await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
-        await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
+  await sendMessage(chatId, `📌 Заявка №${row} закрыта.`, { reply_to_message_id: messageId });
 
-        await sendMessage(chatId, `📌 Заявка №${row} закрыта.`, { reply_to_message_id: messageId });
+  // Удаление служебных сообщений
+  setTimeout(async () => {
+    try {
+      const state = userStates[chatId];
+      if (state) {
+        const allMessagesToDelete = [
+          ...(state.serviceMessages || []),
+          ...(state.userMessages || [])
+        ];
 
-       setTimeout(async () => {
-  try {
-    const state = userStates[chatId];
-    if (state) {
-      const allMessagesToDelete = [
-        ...(state.serviceMessages || []),
-        ...(state.userMessages || [])
-      ];
-
-      for (const msgId of allMessagesToDelete) {
-        await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-          chat_id: chatId,
-          message_id: msgId
-        }).catch(() => {}); // Игнорируем ошибки
+        for (const msgId of allMessagesToDelete) {
+          await axios.post(`${TELEGRAM_API}/deleteMessage`, {
+            chat_id: chatId,
+            message_id: msgId
+          }).catch(() => {});
+        }
       }
-    }
-  } catch (err) {
-    console.error('Ошибка удаления сообщений:', err.message);
-  }
-
-  delete userStates[chatId];
-}, 60000);
-
-     return res.sendStatus(200);
-      }
+    } catch (err) {
+      console.error('Ошибка удаления сообщений:', err.message);
     }
 
-    res.sendStatus(200);
+    delete userStates[chatId];
+  }, 60000);
+
+  return res.sendStatus(200);
+}
+
   } catch (e) {
     console.error('❌ Ошибка обработки webhook:', e);
     res.sendStatus(500);
