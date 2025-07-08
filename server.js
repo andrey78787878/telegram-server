@@ -118,7 +118,7 @@ app.post('/callback', async (req, res) => {
 
       if (action === 'select_executor' && row && executor) {
         if (executor === 'Текстовой подрядчик') {
-          userStates[chatId] = { stage: 'awaiting_executor_name', row, messageId };
+          userStates[chatId] = { stage: 'awaiting_executor_name', row, messageId, originalText: message.text };
           await sendMessage(chatId, 'Введите имя подрядчика вручную:');
           return res.sendStatus(200);
         }
@@ -156,7 +156,7 @@ app.post('/callback', async (req, res) => {
       if (state.stage === 'awaiting_executor_name') {
         const executor = text.trim();
         await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row: state.row, executor } });
-        const newText = `${body.message.reply_to_message.text}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+        const newText = `${state.originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
         await editMessageText(chatId, state.messageId, newText, buildFollowUpButtons(state.row));
         await sendMessage(chatId, `✅ Заявка #${state.row} принята в работу исполнителем ${executor}`, { reply_to_message_id: state.messageId });
         delete userStates[chatId];
@@ -172,19 +172,19 @@ app.post('/callback', async (req, res) => {
         state.stage = 'awaiting_sum';
         await askForSum(chatId);
         return res.sendStatus(200);
-  }
-if (state.stage === 'awaiting_sum' && text) {
-  if (!/^\d+$/.test(text.trim())) {
-    await sendMessage(chatId, '❗ Введите сумму только цифрами.');
-    return res.sendStatus(200);
-  }
+      }
 
-  // сумма валидна — сохраняем и переходим к следующему этапу
-  state.sum = text.trim();
-  state.stage = 'awaiting_comment';
-  await sendMessage(chatId, '✏️ Введите комментарий к выполненной заявке:');
-  return res.sendStatus(200);
-}
+      if (state.stage === 'awaiting_sum' && text) {
+        if (!/^\d+$/.test(text.trim())) {
+          await sendMessage(chatId, '❗ Введите сумму только цифрами.');
+          return res.sendStatus(200);
+        }
+
+        state.sum = text.trim();
+        state.stage = 'awaiting_comment';
+        await sendMessage(chatId, '✏️ Введите комментарий к выполненной заявке:');
+        return res.sendStatus(200);
+      }
 
       if (state.stage === 'awaiting_comment' && text) {
         const comment = text.trim();
@@ -198,21 +198,9 @@ if (state.stage === 'awaiting_sum' && text) {
         const просрочка = (textForParse.match(/📬 Предельный срок: (.+)/) || [])[1] || '—';
 
         const updatedText =
-          `📌 Заявка №${row} закрыта.\n` +
-          `🏪 Пиццерия: ${номерПиццерии}\n` +
-          `📎 Суть: ${сутьПроблемы}\n` +
-          `💬 Комментарий: ${comment}\n\n` +
-          `📎 Фото: <a href="${photo}">ссылка</a>\n` +
-          `💰 Сумма: ${sum} сум\n` +
-          `👤 Исполнитель: ${username}\n` +
-          `✅ Статус: Выполнено\n` +
-          `📬 Срок: ${просрочка}`;
+          `${textForParse}\n\n✅ Заявка закрыта.\n💬 Комментарий: ${comment}\n📎 Фото: <a href="${photo}">ссылка</a>\n💰 Сумма: ${sum} сум\n✅ Статус: Выполнено`;
 
-        await sendMessage(chatId,
-          `📌 Заявка №${row} закрыта.`,
-          { reply_to_message_id: messageId }
-        );
-
+        await sendMessage(chatId, `📌 Заявка №${row} закрыта.`, { reply_to_message_id: messageId });
         await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
         setTimeout(async () => {
