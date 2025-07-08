@@ -136,18 +136,15 @@ const callback_query = body.callback_query;
   }
 
   // Сохраняем оригинальный текст
-const originalText = userStates[chatId]?.originalText || message.text;
+const originalText = message.text || message.caption || '';
+  const cleanedText = originalText
+    .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
+    .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
+    .replace(/🟢 В работе\n👷 Исполнитель:.*(\n)?/g, '')
+    .trim();
 
-// Чистим старую плашку, если была
-const cleanedText = originalText
-  .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
-  .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
-  .replace(/🟢 В работе\n👷 Исполнитель:.*(\n)?/g, '')
-  .trim();
-
-// Новая плашка — ДОБАВЛЯЕМ СНИЗУ
-const addition = `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-const updatedText = `${cleanedText}${addition}`;
+  const addition = `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+  const updatedText = `${cleanedText}${addition}`;
 
   const keyboard = {
     inline_keyboard: [
@@ -169,7 +166,7 @@ const updatedText = `${cleanedText}${addition}`;
   setTimeout(() => {
     axios.post(`${TELEGRAM_API}/deleteMessage`, {
       chat_id: chatId,
-      message_id: infoMsg
+      message_id: infoMsg.message_id
     }).catch(() => {});
   }, 60000);
 
@@ -179,6 +176,18 @@ const updatedText = `${cleanedText}${addition}`;
     message_id: messageId,
     executor
   });
+
+  // Инициализируем этап фото
+  userStates[chatId] = {
+    stage: 'awaiting_photo',
+    row,
+    messageId,
+    username,
+    serviceMessages: [],
+    originalText
+  };
+
+  await askForPhoto(chatId);
 
   return res.sendStatus(200);
 }
