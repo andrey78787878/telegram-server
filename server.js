@@ -122,18 +122,19 @@ if (action === 'in_progress' && row) {
     reply_markup: keyboard
   });
 }
-if (action === 'select_executor' && row && executor) {
-  if (executor === 'Текстовой подрядчик') {
-    userStates[chatId] = {
-      stage: 'awaiting_executor_name',
-      row,
-      messageId,
-      originalText: message.text
-    };
-    await sendMessage(chatId, 'Введите имя подрядчика вручную:');
-    return res.sendStatus(200);
-  }
+if (action === 'in_progress' && row) {
+  if (!userStates[chatId]) userStates[chatId] = {};
+  userStates[chatId].originalText = message.text;
+  userStates[chatId].row = row;
+  userStates[chatId].messageId = message.message_id;
 
+  const keyboard = buildExecutorButtons(row); // ✅ Создаем кнопки исполнителей
+
+  await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
+    reply_to_message_id: messageId,
+    reply_markup: keyboard
+  });
+}
   // Сохраняем оригинальный текст
 const originalText = userStates[chatId]?.originalText || message.text;
 
