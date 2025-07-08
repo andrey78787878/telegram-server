@@ -49,26 +49,26 @@ app.post('/webhook', async (req, res) => {
       }
 
       // Выбор исполнителя
-      if (callbackData.startsWith('set_executor_')) {
-        const [_, row, name] = callbackData.split('_');
+      if (callback_data.startsWith('in_progress:')) {
+  const [_, row, messageId] = callback_data.split(':');
+  const executorKeyboard = [
+    [{ text: '@EvelinaB87', callback_data: `set_executor:${row}:${messageId}:@EvelinaB87` }],
+    [{ text: '@Olim19', callback_data: `set_executor:${row}:${messageId}:@Olim19` }],
+    [{ text: '@Oblayor_04_09', callback_data: `set_executor:${row}:${messageId}:@Oblayor_04_09` }],
+    [{ text: '📝 Текстовой подрядчик', callback_data: `set_executor:${row}:${messageId}:text` }]
+  ];
 
-        if (name === 'Текстовой') {
-          userSteps.set(chatId, { step: 'wait_custom_executor', row });
-          await sendMessage(chatId, 'Введите имя исполнителя вручную:');
-        } else {
-          await updateExecutor(row, name);
-          await editMessage(update.callback_query.message.chat.id, messageId, {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: 'Выполнено ✅', callback_data: `done_${row}_${name}` }],
-                [{ text: 'Ожидает поставки 🕐', callback_data: `delay_${row}_${name}` }],
-                [{ text: 'Отмена ❌', callback_data: `cancel_${row}` }]
-              ]
-            }
-          });
-          await sendMessage(chatId, `Исполнитель ${name} назначен. Выберите дальнейшее действие.`);
-        }
-        return res.sendStatus(200);
+  console.log('➡️ Выбор исполнителя для заявки', row);
+
+  await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    chat_id,
+    text: `Выберите исполнителя для заявки #${row}:`,
+    reply_markup: {
+      inline_keyboard: executorKeyboard
+    }
+  });
+
+  return res.sendStatus(200);
       }
 
       // Выполнено
