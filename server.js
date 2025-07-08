@@ -40,7 +40,7 @@ async function uploadToDrive(filename) {
   return `https://drive.google.com/uc?id=${res.data.id}`;
 }
 
-app.post(['/','/webhook'], async (req, res) => {
+app.post(['/', '/webhook'], async (req, res) => {
   const body = req.body;
   console.log('📩 Получен апдейт:', JSON.stringify(body, null, 2));
 
@@ -48,41 +48,48 @@ app.post(['/','/webhook'], async (req, res) => {
     const cbq = body.callback_query;
     const { id: callback_id, message, data, from } = cbq;
 
-    if (data.startsWith('in_progress')) {
-      const [_, row, msgId] = data.split(':');
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callback_id }).catch(console.error);
+    res.sendStatus(200); // Telegram ждет немедленного ответа
+
+    const [action, row, msgId, arg] = data.split(':');
+
+    if (action === 'in_progress') {
       const buttons = EXECUTORS.map((e) => [{ text: e, callback_data: `executor:${row}:${msgId}:${e}` }]);
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: message.chat.id,
-        text: 'Выберите исполнителя:',
+        text: '👷 Выберите исполнителя:',
         reply_markup: { inline_keyboard: buttons }
       });
     }
 
-    if (data.startsWith('executor')) {
-      const [_, row, msgId, executor] = data.split(':');
-      const origText = message.text;
-      const updatedText = `${origText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-      await axios.post(`${TELEGRAM_API}/editMessageText`, {
+    if (action === 'executor') {
+      const executor = arg;
+      const statusText = `🟢 Заявка №${row} в работе\n👤 Исполнитель: ${executor}`;
+      const replyMarkup = {
+        inline_keyboard: [[
+          { text: '✅ Выполнено', callback_data: `done:${row}:${msgId}:${executor}` },
+          { text: '🚚 Ожидает поставки', callback_data: `pending:${row}:${msgId}:${executor}` },
+          { text: '❌ Отмена', callback_data: `cancel:${row}:${msgId}:${executor}` }
+        ]]
+      };
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: message.chat.id,
-        message_id: Number(msgId),
-        text: updatedText,
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '✅ Выполнено', callback_data: `done:${row}:${msgId}:${executor}` },
-            { text: '🚚 Ожидает поставки', callback_data: `pending:${row}:${msgId}:${executor}` },
-            { text: '❌ Отмена', callback_data: `cancel:${row}:${msgId}:${executor}` }
-          ]]
-        }
+        text: statusText,
+        reply_to_message_id: Number(msgId),
+        reply_markup: replyMarkup
       });
-      await axios.post(`${TELEGRAM_API}/deleteMessage`, { chat_id: message.chat.id, message_id: message.message_id });
+
       await axios.post(`${GAS_WEB_APP_URL}`, {
         row, executor, status: 'В работе', action: 'in_progress'
-      });
+      }).catch(console.error);
     }
 
-    if (data.startsWith('done')) {
-      const [_, row, msgId, executor] = data.split(':');
-      state[from.id] = { step: 'awaiting_photo', row, msgId, executor, messagesToDelete: [] };
+    if (action === 'done') {
+      state[from.id] = {
+        step: 'awaiting_photo',
+        row, msgId, executor: arg,
+        messagesToDelete: []
+      };
       const sent = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: message.chat.id,
         text: '📸 Пришлите фото выполненных работ'
@@ -90,10 +97,10 @@ app.post(['/','/webhook'], async (req, res) => {
       state[from.id].messagesToDelete.push(sent.data.result.message_id);
     }
 
-    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callback_id });
-    return res.sendStatus(200);
+    return;
   }
 
+  // обработка сообщений (фото, сумма, комментарий)
   if (body.message && state[body.message.from.id]) {
     const userId = body.message.from.id;
     const userState = state[userId];
@@ -103,45 +110,48 @@ app.post(['/','/webhook'], async (req, res) => {
       const fileId = msg.photo.at(-1).file_id;
       const fileUrl = await getFileLink(fileId);
       const filename = `${Date.now()}.jpg`;
-      const localPath = await downloadFile(fileUrl, filename);
+      await downloadFile(fileUrl, filename);
       const driveUrl = await uploadToDrive(filename);
 
       userState.photoUrl = driveUrl;
       userState.step = 'awaiting_sum';
+
       const sumMsg = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: msg.chat.id,
         text: '💰 Введите сумму:'
       });
       userState.messagesToDelete.push(msg.message_id, sumMsg.data.result.message_id);
-    } else if (userState.step === 'awaiting_sum' && msg.text) {
+    }
+
+    else if (userState.step === 'awaiting_sum' && msg.text) {
       userState.sum = msg.text;
       userState.step = 'awaiting_comment';
+
       const comMsg = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: msg.chat.id,
         text: '📝 Напишите комментарий:'
       });
       userState.messagesToDelete.push(msg.message_id, comMsg.data.result.message_id);
-    } else if (userState.step === 'awaiting_comment' && msg.text) {
+    }
+
+    else if (userState.step === 'awaiting_comment' && msg.text) {
       userState.comment = msg.text;
 
-      const response = await axios.get(`${GAS_WEB_APP_URL}?action=getRowData&row=${userState.row}`);
-      const rowData = response.data || {};
-      const overdues = rowData.overdue || '0';
+      const { row, sum, comment, photoUrl, executor, msgId } = userState;
 
-      await axios.post(`${GAS_WEB_APP_URL}`, {
-        action: 'done',
-        row: userState.row,
-        sum: userState.sum,
-        comment: userState.comment,
-        photo: userState.photoUrl,
-        executor: userState.executor
+      const response = await axios.get(`${GAS_WEB_APP_URL}?action=getRowData&row=${row}`);
+      const overdue = response.data?.overdue || '0';
+
+      await axios.post(GAS_WEB_APP_URL, {
+        action: 'done', row, sum, comment, photo: photoUrl, executor
       });
 
-      const finalText = `📌 Заявка №${userState.row} закрыта.\n📎 Фото: ${userState.photoUrl}\n💰 Сумма: ${userState.sum} сум\n👤 Исполнитель: ${userState.executor}\n✅ Статус: Выполнено\nПросрочка: ${overdues} дн.`;
-      await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      const finalText = `📌 Заявка №${row} закрыта.\n📎 Фото: ${photoUrl}\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n⏰ Просрочка: ${overdue} дн.`;
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: msg.chat.id,
-        message_id: Number(userState.msgId),
-        text: finalText
+        text: finalText,
+        reply_to_message_id: Number(msgId)
       });
 
       for (const mId of userState.messagesToDelete) {
@@ -149,7 +159,7 @@ app.post(['/','/webhook'], async (req, res) => {
           axios.post(`${TELEGRAM_API}/deleteMessage`, {
             chat_id: msg.chat.id,
             message_id: mId
-          });
+          }).catch(() => {});
         }, 60000);
       }
 
