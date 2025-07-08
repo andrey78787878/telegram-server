@@ -258,13 +258,15 @@ const updatedText = `${cleanedText}${addition}`;
           .replace(/\n?⏱ Просрочка: .*$/m, '')
           .replace(/\n?✅ Заявка закрыта\..*$/m, '');
 
-        const просрочка = (originalText.match(/⏱ Просрочка: (.+)/) || [])[1] || '—';
+const просрочка = (originalText.match(/⏱ Просрочка: (.+)/) || [])[1] || '—';
+const problemDescription = sheetData[4] || '—'; // Столбец E: суть проблемы
 
-        const updatedText = `${cleanedText}
+const updatedText = `${cleanedText}
 📎 Фото: <a href="${photo}">ссылка</a>
 💰 Сумма: ${sum} сум
 👤 Исполнитель: ${username}
 ✅ Статус: Выполнено
+📌 Проблема: ${problemDescription}
 💬 Комментарий: ${comment}
 ⏱ Просрочка: ${просрочка}`.trim();
 
