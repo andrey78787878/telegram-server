@@ -259,7 +259,8 @@ const updatedText = `${cleanedText}${addition}`;
           .replace(/\n?✅ Заявка закрыта\..*$/m, '');
 
 const просрочка = (originalText.match(/⏱ Просрочка: (.+)/) || [])[1] || '—';
-const problemDescription = sheetData[4] || '—'; // Столбец E: суть проблемы
+const problemMatch = originalText.match(/🛠 Проблема: (.+)/);
+const problemDescription = problemMatch ? problemMatch[1].trim() : '—';
 
 const updatedText = `${cleanedText}
 📎 Фото: <a href="${photo}">ссылка</a>
@@ -269,6 +270,7 @@ const updatedText = `${cleanedText}
 📌 Проблема: ${problemDescription}
 💬 Комментарий: ${comment}
 ⏱ Просрочка: ${просрочка}`.trim();
+
 
         await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
