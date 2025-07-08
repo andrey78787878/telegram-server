@@ -182,7 +182,7 @@ const updatedText = `${cleanedText}${addition}`;
   return res.sendStatus(200);
 }
 
-      if (action === 'completed' && row) {
+      if (action === 'done' && row) {
         userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username, serviceMessages: [], originalText: message.text };
         await askForPhoto(chatId);
         return res.sendStatus(200);
