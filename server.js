@@ -104,7 +104,7 @@ app.post('/callback', async (req, res) => {
       const messageId = message.message_id;
       const username = '@' + (from.username || from.first_name);
 
-      clet action, row, executor, messageId;
+      let action, row, executor, messageId;
 try {
   if (raw.startsWith('{')) {
     const parsed = JSON.parse(raw);
