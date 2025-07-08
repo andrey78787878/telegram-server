@@ -272,24 +272,29 @@ const updatedText = `${cleanedText}${addition}`;
 
         await sendMessage(chatId, `📌 Заявка №${row} закрыта.`, { reply_to_message_id: messageId });
 
-        setTimeout(async () => {
-          try {
-            for (const msgId of serviceMessages) {
-              await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-                chat_id: chatId,
-                message_id: msgId
-              }).catch(() => {});
-            }
-            if (state.lastUserMessageId) {
-              await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-                chat_id: chatId,
-                message_id: state.lastUserMessageId
-              }).catch(() => {});
-            }
-          } catch (err) {
-            console.error('Ошибка удаления сообщений:', err.message);
-          }
-        }, 60000);
+       setTimeout(async () => {
+  try {
+    const state = userStates[chatId];
+    if (state) {
+      const allMessagesToDelete = [
+        ...(state.serviceMessages || []),
+        ...(state.userMessages || [])
+      ];
+
+      for (const msgId of allMessagesToDelete) {
+        await axios.post(`${TELEGRAM_API}/deleteMessage`, {
+          chat_id: chatId,
+          message_id: msgId
+        }).catch(() => {}); // Игнорируем ошибки
+      }
+    }
+  } catch (err) {
+    console.error('Ошибка удаления сообщений:', err.message);
+  }
+
+  delete userStates[chatId];
+}, 60000);
+
 
         delete userStates[chatId];
         return res.sendStatus(200);
