@@ -109,16 +109,18 @@ app.post('/callback', async (req, res) => {
       const row = parts[1] ? parseInt(parts[1], 10) : null;
       const executor = parts[2] || null;
 
-      if (action === 'in_progress' && row) {
+if (action === 'in_progress' && row) {
   if (!userStates[chatId]) userStates[chatId] = {};
   userStates[chatId].originalText = message.text;
   userStates[chatId].row = row;
   userStates[chatId].messageId = message.message_id;
 
- await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
-  reply_to_message_id: messageId,
-  reply_markup: keyboard
-});
+  const keyboard = buildExecutorButtons(row); // ✅ Обязательно вызови эту функцию
+
+  await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
+    reply_to_message_id: messageId,
+    reply_markup: keyboard
+  });
 }
 if (action === 'select_executor' && row && executor) {
   if (executor === 'Текстовой подрядчик') {
