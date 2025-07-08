@@ -124,8 +124,12 @@ app.post('/callback', async (req, res) => {
         }
 
         await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row, executor } });
-        const newText = `${message.text}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-        await editMessageText(chatId, messageId, newText, buildFollowUpButtons(row));
+
+        const updatedText = message.text.includes('🟢 В работе')
+          ? message.text.replace(/🟢 В работе.*?(\n|$)/s, `🟢 В работе\n👷 Исполнитель: ${executor}\n`)
+          : `${message.text}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+
+        await editMessageText(chatId, messageId, updatedText, buildFollowUpButtons(row));
         await sendMessage(chatId, `✅ Заявка #${row} принята в работу исполнителем ${executor}`, { reply_to_message_id: messageId });
         return res.sendStatus(200);
       }
@@ -156,8 +160,11 @@ app.post('/callback', async (req, res) => {
       if (state.stage === 'awaiting_executor_name') {
         const executor = text.trim();
         await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row: state.row, executor } });
-        const newText = `${state.originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-        await editMessageText(chatId, state.messageId, newText, buildFollowUpButtons(state.row));
+        const updatedText = state.originalText.includes('🟢 В работе')
+          ? state.originalText.replace(/🟢 В работе.*?(\n|$)/s, `🟢 В работе\n👷 Исполнитель: ${executor}\n`)
+          : `${state.originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+
+        await editMessageText(chatId, state.messageId, updatedText, buildFollowUpButtons(state.row));
         await sendMessage(chatId, `✅ Заявка #${state.row} принята в работу исполнителем ${executor}`, { reply_to_message_id: state.messageId });
         delete userStates[chatId];
         return res.sendStatus(200);
