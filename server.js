@@ -192,12 +192,6 @@ const originalText = message.text || message.caption || '';
   return res.sendStatus(200);
 }
 
-      if (action === 'done' && row) {
-        userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username, serviceMessages: [], originalText: message.text };
-        await askForPhoto(chatId);
-        return res.sendStatus(200);
-      }
-
       if ((action === 'delayed' || action === 'cancelled') && row) {
         await axios.post(GAS_WEB_APP_URL, { data: { action, row, executor: username } });
         const status = action === 'delayed' ? 'Ожидает поставки' : 'Отменена';
