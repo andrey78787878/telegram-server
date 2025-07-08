@@ -1,228 +1,246 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const FormData = require('form-data');
 const fs = require('fs');
+const FormData = require('form-data');
+const { google } = require('googleapis');
 const path = require('path');
 
 const app = express();
 app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const GAS_URL = process.env.GAS_WEB_APP_URL;
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 
-const STATE = {}; // Хранение состояний по userId
+const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '📝 Текстовой подрядчик'];
+const TEMP_DIR = path.join(__dirname, 'temp');
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
 
-// ============ Вебхук ============
+// Хранилище шагов
+const steps = {};
+
 app.post('/', async (req, res) => {
-  const update = req.body;
-  console.log('📩 Webhook получен:', JSON.stringify(update, null, 2));
+  res.send('📩 Webhook получен');
 
-  if (update.callback_query) {
-    handleCallback(update.callback_query);
-  } else if (update.message) {
-    handleMessage(update.message);
-  }
-
-  res.sendStatus(200);
+  const body = req.body;
+  if (body.message) await handleMessage(body.message);
+  else if (body.callback_query) await handleCallback(body.callback_query);
 });
 
-// ============ Обработка callback ============
-async function handleCallback(callbackQuery) {
-  const data = callbackQuery.data;
-  const chatId = callbackQuery.message.chat.id;
-  const userId = callbackQuery.from.id;
-  const username = callbackQuery.from.username || '';
-  const messageId = callbackQuery.message.message_id;
+async function handleCallback(callback) {
+  const chat_id = callback.message.chat.id;
+  const message_id = callback.message.message_id;
+  const data = callback.data;
+  const from = callback.from.username;
 
   if (data.startsWith('in_progress:')) {
-    const [_, row, sourceMessageId] = data.split(':');
-    const executorKeyboard = [
-      [{ text: '@EvelinaB87', callback_data: `set_executor:${row}:${sourceMessageId}:@EvelinaB87` }],
-      [{ text: '@Olim19', callback_data: `set_executor:${row}:${sourceMessageId}:@Olim19` }],
-      [{ text: '@Oblayor_04_09', callback_data: `set_executor:${row}:${sourceMessageId}:@Oblayor_04_09` }],
-      [{ text: '📝 Текстовой подрядчик', callback_data: `set_executor:${row}:${sourceMessageId}:text` }]
-    ];
+    const [_, row, msgId] = data.split(':');
+
+    const keyboard = EXECUTORS.map(name => ([{
+      text: name,
+      callback_data: `set_executor:${row}:${msgId}:${name}`
+    }]));
 
     await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `Выберите исполнителя для заявки #${row}:`,
-      reply_markup: { inline_keyboard: executorKeyboard }
+      chat_id,
+      text: '👤 Выберите исполнителя:',
+      reply_to_message_id: Number(msgId),
+      reply_markup: { inline_keyboard: keyboard }
     });
   }
 
   else if (data.startsWith('set_executor:')) {
-    const [_, row, parentMessageId, executor] = data.split(':');
-    const selected = executor === 'text';
+    const [_, row, msgId, executor] = data.split(':');
 
-    if (selected) {
-      STATE[userId] = { stage: 'awaiting_custom_executor', row, messageId: parentMessageId };
+    let finalExecutor = executor;
+    if (executor === '📝 Текстовой подрядчик') {
+      steps[chat_id] = { step: 'wait_executor_text', row, msgId };
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `Введите имя исполнителя для заявки #${row}:`
+        chat_id,
+        text: '✏️ Введите имя подрядчика:',
+        reply_to_message_id: Number(msgId)
       });
-      return;
+    } else {
+      await setExecutorAndShowActions(chat_id, row, msgId, finalExecutor);
     }
-
-    // Сохраняем в таблицу
-    await axios.post(GAS_URL, {
-      row,
-      status: 'В работе',
-      username: executor
-    });
-
-    // Обновляем материнское сообщение
-    const buttons = [
-      [
-        { text: '✅ Выполнено', callback_data: `done:${row}:${parentMessageId}:${executor}` },
-        { text: '📦 Ожидает поставки', callback_data: `wait_parts:${row}` },
-        { text: '❌ Отмена', callback_data: `cancel:${row}` }
-      ]
-    ];
-    await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-      chat_id: chatId,
-      message_id: parentMessageId,
-      reply_markup: { inline_keyboard: buttons }
-    });
-
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `Заявка #${row} принята в работу исполнителем ${executor}`
-    });
   }
 
-  else if (data.startsWith('done:')) {
-    const [_, row, parentMessageId, executor] = data.split(':');
-    STATE[userId] = { stage: 'awaiting_photo', row, messageId: parentMessageId, username: executor };
+  else if (data.startsWith('status:done')) {
+    const [_, row, msgId, executor] = data.split(':');
+    steps[chat_id] = {
+      step: 'wait_photo',
+      row,
+      msgId,
+      username: executor.replace('@', '')
+    };
+
     await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `Загрузите фото выполненных работ по заявке #${row}`
+      chat_id,
+      text: '📸 Отправьте фото выполненной работы:',
+      reply_to_message_id: Number(msgId)
     });
   }
 }
 
-// ============ Обработка сообщений ============
-async function handleMessage(message) {
-  const userId = message.from.id;
-  const chatId = message.chat.id;
-  const step = STATE[userId];
-  if (!step) return;
+async function handleMessage(msg) {
+  const chat_id = msg.chat.id;
+  const stepData = steps[chat_id];
 
-  if (step.stage === 'awaiting_custom_executor') {
-    const executor = message.text.trim();
-    await axios.post(GAS_URL, {
-      row: step.row,
-      status: 'В работе',
-      username: executor
-    });
+  if (!stepData) return;
 
-    const buttons = [
-      [
-        { text: '✅ Выполнено', callback_data: `done:${step.row}:${step.messageId}:${executor}` },
-        { text: '📦 Ожидает поставки', callback_data: `wait_parts:${step.row}` },
-        { text: '❌ Отмена', callback_data: `cancel:${step.row}` }
-      ]
-    ];
-    await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-      chat_id: chatId,
-      message_id: step.messageId,
-      reply_markup: { inline_keyboard: buttons }
-    });
-
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `Заявка #${step.row} принята в работу исполнителем ${executor}`
-    });
-
-    delete STATE[userId];
+  // Ввод текстового исполнителя
+  if (stepData.step === 'wait_executor_text') {
+    const finalExecutor = msg.text;
+    await setExecutorAndShowActions(chat_id, stepData.row, stepData.msgId, finalExecutor);
+    delete steps[chat_id];
   }
 
-  else if (step.stage === 'awaiting_photo' && message.photo) {
-    const fileId = message.photo[message.photo.length - 1].file_id;
-    const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-    const filePath = fileRes.data.result.file_path;
+  // Фото
+  else if (stepData.step === 'wait_photo' && msg.photo) {
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    const fileLink = await getTelegramFileLink(fileId);
+    const photoPath = await downloadFile(fileLink);
+    const photoLink = await uploadToDrive(photoPath);
 
-    const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
-    const response = await axios.get(fileUrl, { responseType: 'stream' });
+    stepData.photoLink = photoLink;
+    steps[chat_id].step = 'wait_sum';
 
-    const fileName = `photo_${Date.now()}.jpg`;
-    const localPath = path.join(__dirname, fileName);
-    const writer = fs.createWriteStream(localPath);
-    response.data.pipe(writer);
-    await new Promise(resolve => writer.on('finish', resolve));
-
-    STATE[userId] = { ...step, stage: 'awaiting_sum', photoPath: localPath };
     await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `Введите сумму работ по заявке #${step.row}`
+      chat_id,
+      text: '💰 Введите сумму работ в сумах:',
+      reply_to_message_id: msg.message_id
     });
   }
 
-  else if (step.stage === 'awaiting_sum') {
-    const sum = message.text.replace(/[^\d]/g, '');
-    STATE[userId] = { ...step, stage: 'awaiting_comment', sum };
+  // Сумма
+  else if (stepData.step === 'wait_sum') {
+    steps[chat_id].sum = msg.text;
+    steps[chat_id].step = 'wait_comment';
+
     await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `Введите комментарий по заявке #${step.row}`
+      chat_id,
+      text: '💬 Напишите комментарий к выполненной работе:',
+      reply_to_message_id: msg.message_id
     });
   }
 
-  else if (step.stage === 'awaiting_comment') {
-    const comment = message.text;
-    const row = step.row;
-    const photoPath = step.photoPath;
-    const sum = step.sum;
-    const username = step.username;
+  // Комментарий
+  else if (stepData.step === 'wait_comment') {
+    steps[chat_id].comment = msg.text;
 
-    // Отправка на Google Apps Script
-    const form = new FormData();
-    form.append('photo', fs.createReadStream(photoPath));
-    form.append('row', row);
-    form.append('sum', sum);
-    form.append('comment', comment);
-    form.append('username', username);
-
-    const uploadRes = await axios.post(GAS_URL, form, {
-      headers: form.getHeaders()
+    // Запрос в GAS
+    await axios.post(GAS_WEB_APP_URL, {
+      row: stepData.row,
+      message_id: stepData.msgId,
+      username: stepData.username,
+      sum: stepData.sum,
+      comment: stepData.comment,
+      photo: stepData.photoLink
     });
 
-    const photoLink = uploadRes.data?.photoLink || '—';
-    const delay = uploadRes.data?.delay || 0;
-    const pizzeria = uploadRes.data?.pizzeria || '—';
-    const problem = uploadRes.data?.problem || '—';
+    // Финальное сообщение
+    const pizzeria = stepData.pizzeria || '❓';
+    const problem = stepData.problem || 'Нет данных';
+    const delay = stepData.delay || '0';
 
-const finalMessage = `
-📌 Заявка №${row}
-🏬 Пиццерия: ${pizzaNumber || '—'}
-📄 Проблема: ${problem || '—'}
-💬 Комментарий: ${comment || '—'}
-📎 Фото: ${photoLink ? `[Открыть](${photoLink})` : '—'}
-💰 Сумма: ${sum || '0'} сум
-👤 Исполнитель: @${executor || '—'}
-✅ Статус: Выполнено
-⏰ Просрочка: ${delay || '0'} дн.
-`;
+    const finalText = `🏬 Пиццерия: #${pizzeria}\n🛠 Проблема: ${problem}\n💬 Комментарий: ${stepData.comment}\n\n📌 Заявка #${stepData.row} закрыта.\n📎 Фото: [ссылка](${stepData.photoLink})\n💰 Сумма: ${stepData.sum} сум\n👤 Исполнитель: @${stepData.username}\n✅ Статус: Выполнено\n⏰ Просрочка: ${delay} дн.`;
 
-    await axios.post(`${TELEGRAM_API}/editMessageText`, {
-      chat_id: message.chat.id,
-      message_id: step.messageId,
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id,
       text: finalText,
       parse_mode: 'Markdown'
     });
 
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `✅ Заявка #${row} успешно закрыта!`
-    });
-
-    // Удаляем файл
-    fs.unlinkSync(photoPath);
-    delete STATE[userId];
+    delete steps[chat_id];
   }
 }
 
-// ============ Запуск сервера ============
+// ==================== Утилиты ====================
+
+async function setExecutorAndShowActions(chat_id, row, msgId, executor) {
+  await axios.post(GAS_WEB_APP_URL, {
+    row,
+    executor,
+    status: 'В работе'
+  });
+
+  const inline_keyboard = [[
+    {
+      text: '✅ Выполнено',
+      callback_data: `status:done:${row}:${msgId}:${executor}`
+    }
+  ]];
+
+  await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+    chat_id,
+    message_id: Number(msgId),
+    reply_markup: { inline_keyboard }
+  });
+
+  await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    chat_id,
+    text: `👤 Исполнитель @${executor} назначен. Заявка принята в работу.`,
+    reply_to_message_id: Number(msgId)
+  });
+}
+
+async function getTelegramFileLink(fileId) {
+  const res = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+  return `${TELEGRAM_FILE_API}/${res.data.result.file_path}`;
+}
+
+async function downloadFile(url) {
+  const fileName = path.join(TEMP_DIR, `${Date.now()}.jpg`);
+  const writer = fs.createWriteStream(fileName);
+
+  const res = await axios.get(url, { responseType: 'stream' });
+  res.data.pipe(writer);
+
+  return new Promise((resolve) => {
+    writer.on('finish', () => resolve(fileName));
+  });
+}
+
+async function uploadToDrive(filePath) {
+  const auth = new google.auth.GoogleAuth({
+    keyFile: 'credentials.json',
+    scopes: ['https://www.googleapis.com/auth/drive']
+  });
+
+  const drive = google.drive({ version: 'v3', auth });
+  const fileMetadata = {
+    name: path.basename(filePath),
+    parents: [process.env.GOOGLE_DRIVE_FOLDER_ID]
+  };
+
+  const media = {
+    mimeType: 'image/jpeg',
+    body: fs.createReadStream(filePath)
+  };
+
+  const res = await drive.files.create({
+    resource: fileMetadata,
+    media,
+    fields: 'id'
+  });
+
+  const fileId = res.data.id;
+
+  await drive.permissions.create({
+    fileId,
+    requestBody: {
+      role: 'reader',
+      type: 'anyone'
+    }
+  });
+
+  return `https://drive.google.com/uc?id=${fileId}`;
+}
+
+// Запуск
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+});
