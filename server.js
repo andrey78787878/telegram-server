@@ -1,70 +1,71 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || 'https://script.google.com/macros/s/AKfycbwYycNWHJanlUL-vDM6KptXod9GdbzcVa6HI67ttSfRkIPkSYuDQdiEzGCDkRHSKkLV/exec';
 
-
-// ================== Лог всех входящих запросов ==================
-console.log('📩 Получен апдейт от Telegram:', JSON.stringify(req.body, null, 2));
-
+// ================== Обработка вебхука ==================
 app.post('/webhook', async (req, res) => {
-  console.log('🔥 Webhook received:', JSON.stringify(req.body, null, 2));
+  console.log('📩 Получен апдейт от Telegram:', JSON.stringify(req.body, null, 2));
 
-  if (req.body.message) {
-    const message = req.body.message;
-    const chatId = message.chat.id;
+  try {
+    if (req.body.message) {
+      const message = req.body.message;
+      const chatId = message.chat.id;
 
-    // Пример отправки кнопки
-    if (message.text === '/start') {
-      await sendInlineKeyboard(chatId, message.message_id);
+      if (message.text === '/start') {
+        console.log('➡️ Команда /start получена от', message.from.username);
+        await sendInlineKeyboard(chatId, message.message_id);
+      }
     }
-  }
 
-  if (req.body.callback_query) {
-    const callback = req.body.callback_query;
-    const chatId = callback.message.chat.id;
-    const messageId = callback.message.message_id;
-    const data = callback.data;
-    const username = callback.from.username;
+    if (req.body.callback_query) {
+      const callback = req.body.callback_query;
+      const chatId = callback.message.chat.id;
+      const messageId = callback.message.message_id;
+      const data = callback.data;
+      const username = callback.from.username || 'без_ника';
 
-    console.log('✅ Нажата кнопка:', data);
+      console.log('✅ Нажата кнопка:', data);
 
-    if (data === 'accept') {
-      await axios.post(GAS_WEB_APP_URL, {
-        action: 'accept',
-        message_id: messageId,
-        username: username
+      if (data === 'accept') {
+        await axios.post(GAS_WEB_APP_URL, {
+          action: 'accept',
+          message_id: messageId,
+          username: username
+        });
+
+        await editMessage(chatId, messageId, `✅ Принято в работу от @${username}`);
+      }
+
+      if (data === 'cancel') {
+        await axios.post(GAS_WEB_APP_URL, {
+          action: 'cancel',
+          message_id: messageId,
+          username: username
+        });
+
+        await editMessage(chatId, messageId, `❌ Отменено пользователем @${username}`);
+      }
+
+      // Обязательно отвечай на callback
+      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+        callback_query_id: callback.id,
+        text: 'Обработано ✅',
+        show_alert: false
       });
-      await editMessage(chatId, messageId, `✅ Принято в работу от @${username}`);
     }
 
-    if (data === 'cancel') {
-      await axios.post(GAS_WEB_APP_URL, {
-        action: 'cancel',
-        message_id: messageId,
-        username: username
-      });
-      await editMessage(chatId, messageId, `❌ Отменено пользователем @${username}`);
-    }
-
-    // Обязательно отвечай на callback
-    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-      callback_query_id: callback.id,
-      text: 'Обработано ✅',
-      show_alert: false
-    });
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ Ошибка в обработке webhook:', err.message);
+    res.sendStatus(500);
   }
-
-  res.sendStatus(200);
 });
 
 // =============== Функция отправки инлайн-кнопок ===============
