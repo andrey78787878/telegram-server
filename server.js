@@ -14,6 +14,8 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || 'https://script.google.co
 
 
 // ================== Лог всех входящих запросов ==================
+console.log('📩 Получен апдейт от Telegram:', JSON.stringify(req.body, null, 2));
+
 app.post('/webhook', async (req, res) => {
   console.log('🔥 Webhook received:', JSON.stringify(req.body, null, 2));
 
