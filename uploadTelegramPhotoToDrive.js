@@ -3,7 +3,8 @@ const FormData = require('form-data');
 
 const BOT_TOKEN = '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const GAS_UPLOAD_URL = 'https://script.google.com/macros/s/AKfycbyw3ZZJzimwl2LUKE0jtvI3DpDc7Q-scVSi_wcMbTWguI5Tjt7FJmvyQRE_oiUlxssj/exec`;
+const GAS_UPLOAD_URL = 'https://script.google.com/macros/s/AKfycbyw3ZZJzimwl2LUKE0jtvI3DpDc7Q-scVSi_wcMbTWguI5Tjt7FJmvyQRE_oiUlxssj/exec';
+
 
 async function uploadPhotoToDrive(file_id) {
   try {
