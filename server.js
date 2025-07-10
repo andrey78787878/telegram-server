@@ -114,7 +114,68 @@ app.post('/webhook', async (req, res) => {
           text: `📸 Пожалуйста, пришлите фото выполненных работ.`
         });
 
-        // 👉 Здесь начинается следующая логика: ждём фото, сумму, комментарий — она должна быть в другом блоке обработки сообщений.
+const userStates = {}; // Для отслеживания контекста пользователя
+
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  const state = userStates[userId];
+
+  if (!state || !state.step) return;
+
+  try {
+    if (state.step === 'waiting_photo') {
+      if (msg.photo) {
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        state.photoFileId = fileId;
+        state.step = 'waiting_sum';
+
+        await bot.sendMessage(chatId, '📌 Укажите сумму работ в сумах:');
+      } else {
+        await bot.sendMessage(chatId, '⚠️ Пожалуйста, пришлите именно фото.');
+      }
+    } else if (state.step === 'waiting_sum') {
+      const sum = msg.text?.replace(/\D/g, '');
+      if (sum) {
+        state.sum = sum;
+        state.step = 'waiting_comment';
+
+        await bot.sendMessage(chatId, '✏️ Укажите комментарий к заявке или отправьте "-"');
+      } else {
+        await bot.sendMessage(chatId, '⚠️ Введите числовую сумму без текста.');
+      }
+    } else if (state.step === 'waiting_comment') {
+      state.comment = msg.text || '-';
+      state.step = 'processing';
+
+      await bot.sendMessage(chatId, '⏳ Обработка данных...');
+
+      const fileLink = await downloadTelegramFile(state.photoFileId);
+      const driveLink = await uploadToDriveAndGetLink(fileLink);
+
+      const payload = {
+        photo: driveLink,
+        sum: state.sum,
+        comment: state.comment,
+        message_id: state.message_id,
+        row: state.row,
+        username: `@${msg.from.username || msg.from.first_name}`,
+        executor: `@${msg.from.username || msg.from.first_name}`
+      };
+
+      await axios.post(`${process.env.GAS_WEB_APP_URL}`, payload);
+
+      await bot.sendMessage(chatId, `✅ Заявка #${state.row} закрыта. 💰 Сумма: ${state.sum} сум. 👤 Исполнитель: @${msg.from.username || msg.from.first_name}`);
+
+      delete userStates[userId];
+    }
+  } catch (error) {
+    console.error('❌ Ошибка при обработке сообщения:', error);
+    await bot.sendMessage(chatId, '❌ Произошла ошибка. Попробуйте снова или обратитесь к администратору.');
+    delete userStates[userId];
+  }
+});
 
       } else if (action === 'wait' || action === 'cancel') {
         const statusText = action === 'wait' ? 'Ожидает поставки' : 'Отменено';
