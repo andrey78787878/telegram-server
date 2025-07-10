@@ -7,7 +7,7 @@ app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || 'https://script.google.com/macros/s/AKfycbwYycNWHJanlUL-vDM6KptXod9GdbzcVa6HI67ttSfRkIPkSYuDQdiEzGCDkRHSKkLV/exec';
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || 'https://script.google.com/macros/s/AKfycbxOdNxJGEty3NP2YAH9nXoO3H7_nHBv4uAtJkSzkc5hQfIytaDOjycZvW49taqjiEeO/exec';
 const CHAT_ID =--1002582747660
 // ================== Обработка вебхука ==================
 app.post('/webhook', async (req, res) => {
