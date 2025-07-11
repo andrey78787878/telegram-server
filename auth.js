@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const router = express.Router();
 
-const CREDENTIALS_PATH = path.join(__dirname, '../credentials.json');
+const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
 const TOKEN_PATH = path.join(__dirname, '../token.json');
 
 const SCOPES = [
