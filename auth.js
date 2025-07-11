@@ -7,7 +7,8 @@ const router = express.Router();
 
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const TOKEN_PATH = path.join(__dirname, 'token.json');
-const CREDENTIALS_PATH = path.join(__dirname, 'credentials.json');
+const creds = JSON.parse(fs.readFileSync('/etc/secrets/credentials.json'));
+
 
 // Читаем credentials.json
 function loadCredentials() {
