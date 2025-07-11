@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const { google } = require("googleapis");
+const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
 
 // Указание абсолютного пути к credentials.json
 const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
