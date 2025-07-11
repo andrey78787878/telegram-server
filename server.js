@@ -5,7 +5,11 @@ const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
 const credentialsPath = '/etc/secrets/credentials.json';
-const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+
+if (!fs.existsSync(credentialsPath)) {
+  throw new Error(`Файл ${credentialsPath} не найден. Проверьте подключение секрета на Render.`);
+}
+
 
 const app = express();
 app.use(express.json());
