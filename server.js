@@ -4,7 +4,6 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
-const { google } = require('googleapis');
 
 const app = express();
 app.use(express.json());
@@ -16,7 +15,7 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
 
-// ========== УДАЛЕНИЕ СООБЩЕНИЙ ЧЕРЕЗ 2 МИНУТЫ ==========
+// ========== Удаление сообщений ==========
 function scheduleMessageDeletion(chatId, messageId, delayMs = 2 * 60 * 1000) {
   setTimeout(() => {
     axios.post(`${TELEGRAM_API}/deleteMessage`, {
@@ -26,7 +25,7 @@ function scheduleMessageDeletion(chatId, messageId, delayMs = 2 * 60 * 1000) {
   }, delayMs);
 }
 
-// ========== ЗАГРУЗКА ФОТО И ОТПРАВКА В GAS ==========
+// ========== Загрузка фото и отправка в GAS ==========
 async function handlePhotoUpload(chatId, photo, row, messageId, username) {
   const fileId = photo[photo.length - 1].file_id;
   const filePathRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
@@ -54,7 +53,7 @@ async function handlePhotoUpload(chatId, photo, row, messageId, username) {
   fs.unlinkSync(localPath);
 }
 
-// ========== ОБНОВЛЕНИЕ СТРОКИ "📎 Фото: ..." В МАТЕРИНСКОМ СООБЩЕНИИ ==========
+// ========== Обновление 📎 Фото: ... в сообщении ==========
 async function updateMotherMessageWithNewPhoto(chatId, messageId, row) {
   try {
     const gasRes = await axios.post(GAS_WEB_APP_URL, {
@@ -65,7 +64,6 @@ async function updateMotherMessageWithNewPhoto(chatId, messageId, row) {
     const newPhotoLink = gasRes.data?.photoLink;
     if (!newPhotoLink) return;
 
-    const res = await axios.post(`${TELEGRAM_API}/getChat`, { chat_id: chatId });
     const msgRes = await axios.post(`${TELEGRAM_API}/getMessage`, {
       chat_id: chatId,
       message_id: messageId,
@@ -83,53 +81,86 @@ async function updateMotherMessageWithNewPhoto(chatId, messageId, row) {
       parse_mode: 'HTML',
     });
   } catch (err) {
-    console.error('Ошибка при обновлении фото-ссылки в сообщении:', err?.response?.data || err.message);
+    console.error('Ошибка при обновлении фото-ссылки:', err?.response?.data || err.message);
   }
 }
 
-// ========== ПРИЁМ ЗАПРОСОВ ОТ TELEGRAM ==========
+// ========== Webhook ==========
 app.post('/webhook', async (req, res) => {
-  try {
-    const body = req.body;
+  const body = req.body;
 
-    if (body.message?.photo) {
-      const { chat, photo, message_id, caption } = body.message;
-      const row = caption?.match(/row=(\d+)/)?.[1];
-      const parentMessageId = caption?.match(/parent=(\d+)/)?.[1];
-      const username = body.message.from?.username || '';
+  // === Обработка callback_query ===
+  if (body.callback_query) {
+    const callback = body.callback_query;
+    const data = callback.data;
+    const [action, row, executor] = data.split(':');
 
-      if (row && parentMessageId) {
-        await handlePhotoUpload(chat.id, photo, row, parentMessageId, username);
+    if (action === 'select_executor') {
+      try {
+        // Обновляем в GAS
+        await axios.post(GAS_WEB_APP_URL, {
+          action: 'in_progress',
+          row,
+          executor,
+        });
 
-        // Обновить ссылку в материнском сообщении
-        await updateMotherMessageWithNewPhoto(chat.id, parentMessageId, row);
+        // Удаляем inline-кнопки
+        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+          chat_id: callback.message.chat.id,
+          message_id: callback.message.message_id,
+          reply_markup: { inline_keyboard: [] },
+        });
+
+        // Уведомляем
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: callback.from.id,
+          text: `✅ Заявка #${row} принята в работу исполнителем ${executor}`,
+        });
+
+        return res.sendStatus(200);
+      } catch (err) {
+        console.error('Ошибка обработки кнопки:', err?.response?.data || err.message);
+        return res.sendStatus(500);
       }
-
-      scheduleMessageDeletion(chat.id, message_id);
     }
 
-    if (body.message?.text && body.message?.reply_to_message?.text?.includes('Введите сумму')) {
-      const { chat, message_id, text } = body.message;
-      scheduleMessageDeletion(chat.id, message_id);
-    }
-
-    if (body.message?.text && body.message?.reply_to_message?.text?.includes('Введите комментарий')) {
-      const { chat, message_id, text } = body.message;
-      scheduleMessageDeletion(chat.id, message_id);
-    }
-
-    if (body.message?.text?.includes('Заявка #') && body.message?.text?.includes('закрыта')) {
-      const { chat, message_id } = body.message;
-      scheduleMessageDeletion(chat.id, message_id);
-    }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error('Ошибка в webhook:', err?.response?.data || err.message);
-    res.sendStatus(500);
+    return res.sendStatus(200);
   }
+
+  // === Обработка фото ===
+  if (body.message?.photo) {
+    const { chat, photo, message_id, caption } = body.message;
+    const row = caption?.match(/row=(\d+)/)?.[1];
+    const parentMessageId = caption?.match(/parent=(\d+)/)?.[1];
+    const username = body.message.from?.username || '';
+
+    if (row && parentMessageId) {
+      await handlePhotoUpload(chat.id, photo, row, parentMessageId, username);
+      await updateMotherMessageWithNewPhoto(chat.id, parentMessageId, row);
+    }
+
+    scheduleMessageDeletion(chat.id, message_id);
+    return res.sendStatus(200);
+  }
+
+  // === Удаление ответов на сумму/комментарий ===
+  if (body.message?.text && body.message?.reply_to_message?.text?.includes('Введите сумму')) {
+    scheduleMessageDeletion(body.message.chat.id, body.message.message_id);
+  }
+
+  if (body.message?.text && body.message?.reply_to_message?.text?.includes('Введите комментарий')) {
+    scheduleMessageDeletion(body.message.chat.id, body.message.message_id);
+  }
+
+  // === Удаление финальных уведомлений ===
+  if (body.message?.text?.includes('Заявка #') && body.message?.text?.includes('закрыта')) {
+    scheduleMessageDeletion(body.message.chat.id, body.message.message_id);
+  }
+
+  res.sendStatus(200);
 });
 
+// === Запуск сервера ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
