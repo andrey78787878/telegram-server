@@ -272,6 +272,9 @@ app.post('/callback', async (req, res) => {
   }
 });
 
+const { router: authRouter } = require('./auth');
+app.use(authRouter);
+
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
