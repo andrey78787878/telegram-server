@@ -7,6 +7,8 @@ const { google } = require('googleapis');
 const credentialsPath = '/etc/secrets/credentials.json';
 const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
 
+});
+
 if (!fs.existsSync(credentialsPath)) {
   throw new Error(`Файл ${credentialsPath} не найден. Проверьте подключение секрета на Render.`);
 }
@@ -26,7 +28,7 @@ const userStates = {};
 
 const auth = new google.auth.GoogleAuth({
   keyFile: '/etc/secrets/credentials.json',
-  scopes: ['https://www.googleapis.com/auth/drive'],
+  scopes: ['https://www.googleapis.com/auth/drive']
 });
 const driveService = google.drive({ version: 'v3', auth });
 
