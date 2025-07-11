@@ -3,13 +3,13 @@ const path = require("path");
 const axios = require("axios");
 const { google } = require("googleapis");
 
-// Указание абсолютного пути к credentials.json
+// Абсолютный путь к credentials.json
 const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
 
-// ID папки на Google Диске, куда будут сохраняться фото
+// ID папки на Google Диске
 const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
 
-// Авторизация через сервисный аккаунт
+// Авторизация
 const auth = new google.auth.GoogleAuth({
   keyFile: SERVICE_ACCOUNT_FILE,
   scopes: ["https://www.googleapis.com/auth/drive"],
@@ -27,8 +27,12 @@ async function uploadTelegramPhotoToDrive(fileId, telegramToken) {
     const fileInfo = await axios.get(
       `https://api.telegram.org/bot${telegramToken}/getFile?file_id=${fileId}`
     );
-    const filePath = fileInfo.data.result.file_path;
 
+    if (!fileInfo.data.result || !fileInfo.data.result.file_path) {
+      throw new Error("file_path отсутствует в ответе Telegram");
+    }
+
+    const filePath = fileInfo.data.result.file_path;
     const url = `https://api.telegram.org/file/bot${telegramToken}/${filePath}`;
     const response = await axios.get(url, { responseType: "stream" });
 
@@ -58,7 +62,7 @@ async function uploadTelegramPhotoToDrive(fileId, telegramToken) {
     const webLink = `https://drive.google.com/uc?id=${fileIdOnDrive}&export=view`;
     return webLink;
   } catch (error) {
-    console.error("Ошибка при загрузке фото на Google Диск:", error.message);
+    console.error("Ошибка при загрузке фото на Google Диск:", error.response?.data || error.message);
     throw error;
   }
 }
