@@ -1,18 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
-const credentialsPath = '/etc/secrets/credentials.json';
-const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
-
-});
-
-if (!fs.existsSync(credentialsPath)) {
-  throw new Error(`Файл ${credentialsPath} не найден. Проверьте подключение секрета на Render.`);
-}
-
 
 const app = express();
 app.use(express.json());
@@ -21,33 +9,9 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const PORT = process.env.PORT || 3000;
 
 const userStates = {};
-
-const auth = new google.auth.GoogleAuth({
-  keyFile: '/etc/secrets/credentials.json',
-  scopes: ['https://www.googleapis.com/auth/drive']
-});
-const driveService = google.drive({ version: 'v3', auth });
-
-async function uploadToDriveFromUrl(fileUrl, fileName) {
-  const tempPath = path.join(__dirname, fileName);
-  const response = await axios.get(fileUrl, { responseType: 'stream' });
-  const writer = fs.createWriteStream(tempPath);
-  response.data.pipe(writer);
-  await new Promise((resolve, reject) => writer.on('finish', resolve).on('error', reject));
-
-  const file = await driveService.files.create({
-    requestBody: { name: fileName, parents: [FOLDER_ID] },
-    media: { mimeType: 'image/jpeg', body: fs.createReadStream(tempPath) },
-    fields: 'id',
-  });
-  await driveService.permissions.create({ fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' } });
-  fs.unlinkSync(tempPath);
-  return `https://drive.google.com/uc?id=${file.data.id}`;
-}
 
 function buildFollowUpButtons(row) {
   return {
@@ -211,16 +175,15 @@ app.post('/callback', async (req, res) => {
         return res.sendStatus(200);
       }
 
-if (state.stage === 'awaiting_photo' && body.message.photo) {
-  const fileId = body.message.photo.slice(-1)[0].file_id;
-  const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-  const fileUrl = `${TELEGRAM_FILE_API}/${fileRes.data.result.file_path}`;
-  state.photo = fileUrl;  // просто ссылка на фото из Telegram
-  state.stage = 'awaiting_sum';
-  await askForSum(chatId);
-  return res.sendStatus(200);
-}
-
+      if (state.stage === 'awaiting_photo' && body.message.photo) {
+        const fileId = body.message.photo.slice(-1)[0].file_id;
+        const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+        const fileUrl = `${TELEGRAM_FILE_API}/${fileRes.data.result.file_path}`;
+        state.photo = fileUrl;  // просто ссылка на фото из Telegram
+        state.stage = 'awaiting_sum';
+        await askForSum(chatId);
+        return res.sendStatus(200);
+      }
 
       if (state.stage === 'awaiting_sum') {
         if (!/^\d+$/.test(text.trim())) {
@@ -281,8 +244,7 @@ if (state.stage === 'awaiting_photo' && body.message.photo) {
   }
 });
 
-const { router: authRouter } = require('./auth');
-app.use(authRouter);
+// Убираем импорт и подключение auth.js, т.к. сервисный аккаунт не нужен
 
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
