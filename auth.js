@@ -1,3 +1,4 @@
+// auth.js (обновлённая версия для Render)
 const express = require('express');
 const { google } = require('googleapis');
 const fs = require('fs');
@@ -11,24 +12,34 @@ const SCOPES = [
 
 const TOKEN_PATH = path.join(__dirname, '../token.json');
 
-// ✅ Используем GOOGLE_CREDENTIALS из переменной окружения
-const creds = process.env.GOOGLE_CREDENTIALS;
-if (!creds) throw new Error('Credentials не загружены.');
-const credentials = JSON.parse(creds);
+// Проверяем и разбираем переменную среды
+function loadCredentials() {
+  if (!process.env.GOOGLE_CREDENTIALS) {
+    throw new Error('❌ Переменная среды GOOGLE_CREDENTIALS не установлена.');
+  }
+  const raw = process.env.GOOGLE_CREDENTIALS;
+  return JSON.parse(raw);
+}
 
 function createOAuthClient() {
+  const credentials = loadCredentials();
   const { client_id, client_secret, redirect_uris } = credentials.installed;
   return new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 }
 
 router.get('/auth/google', (req, res) => {
-  const oAuth2Client = createOAuthClient();
-  const authUrl = oAuth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPES,
-    prompt: 'consent',
-  });
-  res.redirect(authUrl);
+  try {
+    const oAuth2Client = createOAuthClient();
+    const authUrl = oAuth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: SCOPES,
+      prompt: 'consent',
+    });
+    res.redirect(authUrl);
+  } catch (error) {
+    console.error('Ошибка инициализации клиента:', error);
+    res.status(500).send('Ошибка инициализации авторизации.');
+  }
 });
 
 router.get('/auth/google/callback', async (req, res) => {
@@ -38,9 +49,8 @@ router.get('/auth/google/callback', async (req, res) => {
   try {
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
-
     fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
-    res.send('✅ Аутентификация прошла успешно. Токены сохранены.');
+    res.send('✅ Авторизация прошла успешно. Токены сохранены.');
   } catch (error) {
     console.error('Ошибка при получении токена:', error);
     res.status(500).send('❌ Ошибка при авторизации.');
