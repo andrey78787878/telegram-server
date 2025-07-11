@@ -1,70 +1,73 @@
+const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
-const open = require('open');
+
+const router = express.Router();
 
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const TOKEN_PATH = path.join(__dirname, 'token.json');
 const CREDENTIALS_PATH = path.join(__dirname, 'credentials.json');
 
-function loadSavedCredentialsIfExist() {
-  try {
-    const content = fs.readFileSync(TOKEN_PATH);
-    const credentials = JSON.parse(content);
-    return google.auth.fromJSON(credentials);
-  } catch (err) {
-    return null;
-  }
+// Читаем credentials.json
+function loadCredentials() {
+  const content = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+  return JSON.parse(content).web;
 }
 
-async function saveCredentials(client) {
-  const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
-  const key = client.credentials;
-  const payload = {
-    type: 'authorized_user',
-    client_id: credentials.installed.client_id,
-    client_secret: credentials.installed.client_secret,
-    refresh_token: key.refresh_token,
-  };
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(payload));
+// Сохраняем токен
+function saveToken(token) {
+  fs.writeFileSync(TOKEN_PATH, JSON.stringify(token));
 }
 
-async function authorize() {
-  const client = loadSavedCredentialsIfExist();
-  if (client) {
-    console.log('✅ Уже авторизован с сохранённым токеном.');
-    return client;
+// Загружаем токен если есть
+function loadToken() {
+  if (fs.existsSync(TOKEN_PATH)) {
+    const token = fs.readFileSync(TOKEN_PATH);
+    return JSON.parse(token);
   }
+  return null;
+}
 
-  const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
-  const { client_secret, client_id, redirect_uris } = credentials.installed;
+// OAuth2 клиент
+function createOAuthClient() {
+  const { client_id, client_secret, redirect_uris } = loadCredentials();
+  return new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+}
 
-  const oAuth2Client = new google.auth.OAuth2(
-    client_id, client_secret, redirect_uris[0]
-  );
-
-  const authUrl = oAuth2Client.generateAuthUrl({
+// Старт авторизации
+router.get('/auth/google', (req, res) => {
+  const oAuth2Client = createOAuthClient();
+  const url = oAuth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES,
   });
+  res.redirect(url);
+});
 
-  console.log('🔗 Открой эту ссылку в браузере, чтобы авторизовать доступ:');
-  console.log(authUrl);
+// Callback после авторизации
+router.get('/auth/google/callback', async (req, res) => {
+  const oAuth2Client = createOAuthClient();
+  const code = req.query.code;
 
-  await open(authUrl);
-
-  const readline = require('readline').createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  readline.question('📥 Вставь сюда код авторизации: ', async (code) => {
-    readline.close();
+  try {
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
-    await saveCredentials(oAuth2Client);
-    console.log('✅ Авторизация прошла успешно, токен сохранён.');
-  });
+    saveToken(tokens);
+    res.send('✅ Авторизация прошла успешно! Токен сохранён.');
+  } catch (error) {
+    console.error('❌ Ошибка авторизации:', error);
+    res.status(500).send('Ошибка при авторизации.');
+  }
+});
+
+// Возвращает авторизованного клиента
+async function getAuthorizedClient() {
+  const token = loadToken();
+  if (!token) throw new Error('❌ Токен не найден. Перейди по /auth/google для авторизации.');
+  const oAuth2Client = createOAuthClient();
+  oAuth2Client.setCredentials(token);
+  return oAuth2Client;
 }
 
-authorize();
+module.exports = { router, getAuthorizedClient };
