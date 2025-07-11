@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
 const credentialsPath = '/etc/secrets/credentials.json';
+const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
 
 if (!fs.existsSync(credentialsPath)) {
   throw new Error(`Файл ${credentialsPath} не найден. Проверьте подключение секрета на Render.`);
