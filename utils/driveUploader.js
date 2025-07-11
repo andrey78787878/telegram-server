@@ -7,7 +7,7 @@ const { google } = require("googleapis");
 const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
 
 // ID папки на Google Диске, куда будут сохраняться фото
-const FOLDER_ID = "1lYjywHLtUgVRhV9dxW0yIhCJtEfl30ClaYSECjrD8ENyh1YDLEYEvbnegKe4_-HK2QlLWzVF";
+const FOLDER_ID = "1bNhj1ipb97ShLKQ2z6iV8uiNE6dW2YVk";
 
 // Авторизация через сервисный аккаунт
 const auth = new google.auth.GoogleAuth({
