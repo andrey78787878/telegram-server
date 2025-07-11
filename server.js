@@ -4,6 +4,8 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
+const credentialsPath = '/etc/secrets/credentials.json';
+const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
 
 const app = express();
 app.use(express.json());
