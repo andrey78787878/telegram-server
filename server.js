@@ -211,16 +211,16 @@ app.post('/callback', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (state.stage === 'awaiting_photo' && body.message.photo) {
-        const fileId = body.message.photo.slice(-1)[0].file_id;
-        const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-        const fileUrl = `${TELEGRAM_FILE_API}/${fileRes.data.result.file_path}`;
-        const driveLink = await uploadToDriveFromUrl(fileUrl, `work_${state.row}_${Date.now()}.jpg`);
-        state.photo = driveLink;
-        state.stage = 'awaiting_sum';
-        await askForSum(chatId);
-        return res.sendStatus(200);
-      }
+if (state.stage === 'awaiting_photo' && body.message.photo) {
+  const fileId = body.message.photo.slice(-1)[0].file_id;
+  const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+  const fileUrl = `${TELEGRAM_FILE_API}/${fileRes.data.result.file_path}`;
+  state.photo = fileUrl;  // просто ссылка на фото из Telegram
+  state.stage = 'awaiting_sum';
+  await askForSum(chatId);
+  return res.sendStatus(200);
+}
+
 
       if (state.stage === 'awaiting_sum') {
         if (!/^\d+$/.test(text.trim())) {
