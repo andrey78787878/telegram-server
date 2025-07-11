@@ -1,4 +1,4 @@
-// auth.js (обновлённая версия для Render)
+// auth.js (для Render)
 const express = require('express');
 const { google } = require('googleapis');
 const fs = require('fs');
@@ -12,21 +12,28 @@ const SCOPES = [
 
 const TOKEN_PATH = path.join(__dirname, '../token.json');
 
-// Проверяем и разбираем переменную среды
+// Загружаем credentials из переменной окружения
 function loadCredentials() {
   if (!process.env.GOOGLE_CREDENTIALS) {
     throw new Error('❌ Переменная среды GOOGLE_CREDENTIALS не установлена.');
   }
-  const raw = process.env.GOOGLE_CREDENTIALS;
-  return JSON.parse(raw);
+
+  try {
+    const raw = Buffer.from(process.env.GOOGLE_CREDENTIALS, 'base64').toString('utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error('❌ Ошибка при разборе GOOGLE_CREDENTIALS: ' + err.message);
+  }
 }
 
+// Создаём клиента OAuth2
 function createOAuthClient() {
   const credentials = loadCredentials();
-  const { client_id, client_secret, redirect_uris } = credentials.installed;
+  const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
   return new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 }
 
+// Старт авторизации
 router.get('/auth/google', (req, res) => {
   try {
     const oAuth2Client = createOAuthClient();
@@ -42,6 +49,7 @@ router.get('/auth/google', (req, res) => {
   }
 });
 
+// Обработка кода авторизации
 router.get('/auth/google/callback', async (req, res) => {
   const code = req.query.code;
   const oAuth2Client = createOAuthClient();
