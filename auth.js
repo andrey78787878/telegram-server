@@ -4,16 +4,19 @@ const fs = require('fs');
 const path = require('path');
 const router = express.Router();
 
-const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
-const TOKEN_PATH = path.join(__dirname, '../token.json');
-
 const SCOPES = [
   'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/spreadsheets'
 ];
 
+const TOKEN_PATH = path.join(__dirname, '../token.json');
+
+// ✅ Используем GOOGLE_CREDENTIALS из переменной окружения
+const creds = process.env.GOOGLE_CREDENTIALS;
+if (!creds) throw new Error('Credentials не загружены.');
+const credentials = JSON.parse(creds);
+
 function createOAuthClient() {
-  const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
   const { client_id, client_secret, redirect_uris } = credentials.installed;
   return new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 }
