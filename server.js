@@ -98,36 +98,10 @@ app.post('/webhook', async (req, res) => {
       }
     }
 
-    /require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
-const credentialsPath = '/etc/secrets/credentials.json';
-const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
-
-});
-
-if (!fs.existsSync(credentialsPath)) {
-  throw new Error(`Файл ${credentialsPath} не найден. Проверьте подключение секрета на Render.`);
-}
-
-
-const app = express();
-app.use(express.json());
-// Telegram Bot Server Logic (Complete Flow)
+  // Telegram Bot Server Logic (Complete Flow)
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
-const FormData = require('form-data');
-
-const credentialsPath = '/etc/secrets/credentials.json';
-const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
-
 const app = express();
 app.use(express.json());
 
@@ -135,17 +109,9 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const PORT = process.env.PORT || 3000;
 
 const userStates = {};
-
-const auth = new google.auth.GoogleAuth({
-  credentials,
-  scopes: ['https://www.googleapis.com/auth/drive']
-});
-
-const drive = google.drive({ version: 'v3', auth });
 
 // === HANDLERS === //
 app.post('/webhook', async (req, res) => {
