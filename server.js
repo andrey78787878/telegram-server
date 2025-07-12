@@ -86,13 +86,19 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (action === 'select_executor' && executor) {
+        if (!userStates[chatId]) {
+          userStates[chatId] = { originalText: message.text };
+        } else if (!userStates[chatId].originalText) {
+          userStates[chatId].originalText = message.text;
+        }
+
         if (executor === 'Текстовой подрядчик') {
           userStates[chatId].stage = 'awaiting_executor_name';
           await sendMessage(chatId, 'Введите имя подрядчика вручную:');
           return res.sendStatus(200);
         }
 
-        const originalText = userStates[chatId]?.originalText || message.text;
+        const originalText = userStates[chatId].originalText;
         const alreadyInProgress = originalText.includes('🟢 В работе');
         const alreadyExecutor = originalText.includes('👷 Исполнитель:');
 
