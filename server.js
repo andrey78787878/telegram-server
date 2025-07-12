@@ -32,8 +32,6 @@ app.post('/webhook', async (req, res) => {
     }
   });
 
-этот лучше?
-
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -96,8 +94,7 @@ async function askForSum(chatId) {
   userStates[chatId].serviceMessages.push(msgId);
 }
 
-app.post('/callback', async (req, res) => {
-  console.log('📥 Webhook получен:', JSON.stringify(req.body, null, 2));
+app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
 
@@ -128,13 +125,13 @@ app.post('/callback', async (req, res) => {
           return res.sendStatus(200);
         }
 
-        const originalText = userStates[chatId]?.originalText || message.text;
-        const cleanedText = originalText
-          .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
-          .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
-          .replace(/🟢 В работе\n👷 Исполнитель:.*(\n)?/g, '')
-          .trim();
-        const updatedText = `${cleanedText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+        const originalText = message.text;
+        const alreadyInProgress = originalText.includes('🟢 В работе');
+        const alreadyExecutor = originalText.includes('👷 Исполнитель:');
+
+        let updatedText = originalText;
+        if (!alreadyInProgress) updatedText += `\n\n🟢 В работе`;
+        if (!alreadyExecutor) updatedText += `\n👷 Исполнитель: ${executor}`;
 
         const keyboard = {
           inline_keyboard: [
@@ -148,6 +145,7 @@ app.post('/callback', async (req, res) => {
         };
 
         await editMessageText(chatId, messageId, updatedText, keyboard);
+
         const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
           reply_to_message_id: messageId
         });
@@ -182,7 +180,7 @@ app.post('/callback', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      if (action === 'delayed' || action === 'cancelled') {
+      if (action === 'delayed' || action === 'cancel') {
         await axios.post(GAS_WEB_APP_URL, { data: { action, row, executor: username } });
         const status = action === 'delayed' ? 'Ожидает поставки' : 'Отменена';
         const updated = `${message.text}\n\n📌 Статус: ${status}\n👤 Исполнитель: ${username}`;
@@ -198,13 +196,16 @@ app.post('/callback', async (req, res) => {
       const state = userStates[chatId];
 
       if (!state) return res.sendStatus(200);
-
       state.lastUserMessageId = userMessageId;
 
       if (state.stage === 'awaiting_executor_name') {
         const executor = text.trim();
         await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row: state.row, executor } });
-        const updatedText = `${state.originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+
+        let updatedText = state.originalText;
+        if (!updatedText.includes('🟢 В работе')) updatedText += `\n\n🟢 В работе`;
+        if (!updatedText.includes('👷 Исполнитель:')) updatedText += `\n👷 Исполнитель: ${executor}`;
+
         await editMessageText(chatId, state.messageId, updatedText, buildFollowUpButtons(state.row));
         await sendMessage(chatId, `✅ Заявка #${state.row} принята в работу исполнителем ${executor}`, { reply_to_message_id: state.messageId });
         delete userStates[chatId];
@@ -215,7 +216,7 @@ app.post('/callback', async (req, res) => {
         const fileId = body.message.photo.slice(-1)[0].file_id;
         const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
         const fileUrl = `${TELEGRAM_FILE_API}/${fileRes.data.result.file_path}`;
-        state.photo = fileUrl;  // просто ссылка на фото из Telegram
+        state.photo = fileUrl;
         state.stage = 'awaiting_sum';
         await askForSum(chatId);
         return res.sendStatus(200);
@@ -246,8 +247,8 @@ app.post('/callback', async (req, res) => {
           .replace(/\n?💰 Сумма: .*$/m, '')
           .replace(/\n?👤 Исполнитель: .*$/m, '')
           .replace(/\n?✅ Статус: .*$/m, '')
-          .replace(/\n?⏱ Просрочка: .*$/m, '')
-          .replace(/\n?✅ Заявка закрыта\..*$/m, '');
+          .replace(/\n?💬 Комментарий: .*$/m, '')
+          .trim();
 
         const updatedText = `${cleanedText}
 📎 Фото: <a href="${photo}">ссылка</a>
@@ -279,8 +280,6 @@ app.post('/callback', async (req, res) => {
     res.sendStatus(500);
   }
 });
-
-// Убираем импорт и подключение auth.js, т.к. сервисный аккаунт не нужен
 
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
