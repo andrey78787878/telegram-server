@@ -1,37 +1,3 @@
-app.post('/webhook', async (req, res) => {
-  const body = req.body;
-
-  try {
-    // === 1. Обработка нажатий на кнопки (callback_query)
-    if (body.callback_query) {
-      console.log('➡️ Получен callback_query:', body.callback_query);
-
-      const dataRaw = body.callback_query.data;
-      const chatId = body.callback_query.message.chat.id;
-      const messageId = body.callback_query.message.message_id;
-      const username = '@' + (body.callback_query.from.username || body.callback_query.from.first_name);
-
-      // --- Если кнопка: выбор исполнителя
-      if (dataRaw.startsWith('select_executor:')) {
-  const parts = dataRaw.split(':');
-  const row = parts[1];
-  const executor = parts[2];
-
-  if (!row || !executor) {
-    console.warn("⚠️ Неверный формат select_executor:", dataRaw);
-    return res.sendStatus(200);
-  }
-
-  console.log(`👤 Выбран исполнитель ${executor} для заявки #${row}`);
-
-  await axios.post(GAS_WEB_APP_URL, {
-    data: {
-      action: 'markInProgress',
-      row,
-      executor
-    }
-  });
-
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -47,6 +13,16 @@ const PORT = process.env.PORT || 3000;
 
 const userStates = {};
 
+const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
+
+function buildExecutorButtons(row) {
+  return {
+    inline_keyboard: EXECUTORS.map(ex => [
+      { text: ex, callback_data: `select_executor:${row}:${ex}` }
+    ])
+  };
+}
+
 function buildFollowUpButtons(row) {
   return {
     inline_keyboard: [[
@@ -54,15 +30,6 @@ function buildFollowUpButtons(row) {
       { text: 'Ожидает поставки ⏳', callback_data: `delayed:${row}` },
       { text: 'Отмена ❌', callback_data: `cancelled:${row}` },
     ]]
-  };
-}
-
-const EXECUTORS = ['@EvelinaB87','@Olim19','@Oblayor_04_09','Текстовой подрядчик'];
-function buildExecutorButtons(row) {
-  return {
-    inline_keyboard: EXECUTORS.map(ex => [
-      { text: ex, callback_data: `select_executor:${row}:${ex}` }
-    ])
   };
 }
 
@@ -125,7 +92,7 @@ app.post('/webhook', async (req, res) => {
           return res.sendStatus(200);
         }
 
-        const originalText = message.text;
+        const originalText = userStates[chatId]?.originalText || message.text;
         const alreadyInProgress = originalText.includes('🟢 В работе');
         const alreadyExecutor = originalText.includes('👷 Исполнитель:');
 
@@ -223,7 +190,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (state.stage === 'awaiting_sum') {
-        if (!/^\d+$/.test(text.trim())) {
+        if (!/^[0-9]+$/.test(text.trim())) {
           await sendMessage(chatId, '❗ Введите сумму только цифрами.');
           return res.sendStatus(200);
         }
