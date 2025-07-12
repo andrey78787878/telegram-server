@@ -1,3 +1,121 @@
+app.post('/webhook', async (req, res) => {
+  const body = req.body;
+
+  try {
+    // === 1. Обработка нажатий на кнопки (callback_query)
+    if (body.callback_query) {
+      console.log('➡️ Получен callback_query:', body.callback_query);
+
+      const dataRaw = body.callback_query.data;
+      const chatId = body.callback_query.message.chat.id;
+      const messageId = body.callback_query.message.message_id;
+      const username = '@' + (body.callback_query.from.username || body.callback_query.from.first_name);
+
+      // --- Если кнопка: выбор исполнителя
+      if (dataRaw.startsWith('select_executor:')) {
+        const parts = dataRaw.split(':');
+        const row = parts[1];
+        const executor = parts[2];
+
+        if (!row || !executor) {
+          console.warn("⚠️ Неверный формат select_executor:", dataRaw);
+          return res.sendStatus(200);
+        }
+
+        console.log(`👤 Выбран исполнитель ${executor} для заявки #${row}`);
+
+        await axios.post(GAS_WEB_APP_URL, {
+          data: {
+            action: 'markInProgress',
+            row,
+            executor
+          }
+        });
+
+        await editMessageText(
+          chatId,
+          messageId,
+          `🟢 Заявка #${row} в работе.\n👤 Исполнитель: ${executor}`,
+          buildFollowUpButtons(row)
+        );
+
+        return res.sendStatus(200);
+      }
+
+      // --- Все остальные кнопки (выполнено, отмена, задержка)
+      let data;
+      try {
+        data = JSON.parse(dataRaw);
+      } catch (e) {
+        console.warn("⚠️ Невалидный JSON в callback_data:", dataRaw);
+        return res.sendStatus(200);
+      }
+
+      const { action, row, messageId: originalMessageId } = data;
+
+      if (action === 'in_progress' && row) {
+        await axios.post(GAS_WEB_APP_URL, {
+          data: {
+            action: 'markInProgress',
+            row,
+            executor: username
+          }
+        });
+
+        await editMessageText(
+          chatId,
+          messageId,
+          `🟢 Заявка #${row} в работе.\n👤 Исполнитель: ${username}`,
+          buildFollowUpButtons(row)
+        );
+
+        return res.sendStatus(200);
+      }
+
+      if (action === 'completed' && row) {
+        userStates[chatId] = { stage: 'awaiting_photo', row, messageId, username };
+        console.log(`📸 Ожидается фото от ${username} для заявки #${row}`);
+        await askForPhoto(chatId);
+        return res.sendStatus(200);
+      }
+
+      if ((action === 'delayed' || action === 'cancelled') && row) {
+        await axios.post(GAS_WEB_APP_URL, {
+          data: {
+            action,
+            row,
+            executor: username
+          }
+        });
+
+        await editMessageText(
+          chatId,
+          messageId,
+          `📌 Заявка #${row}\n⚠️ Статус: ${action === 'delayed' ? 'Ожидает поставки' : 'Отменена'}\n👤 Исполнитель: ${username}`
+        );
+
+        return res.sendStatus(200);
+      }
+    }
+
+    /require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const { google } = require('googleapis');
+const credentialsPath = '/etc/secrets/credentials.json';
+const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
+
+});
+
+if (!fs.existsSync(credentialsPath)) {
+  throw new Error(`Файл ${credentialsPath} не найден. Проверьте подключение секрета на Render.`);
+}
+
+
+const app = express();
+app.use(express.json());
 // Telegram Bot Server Logic (Complete Flow)
 require('dotenv').config();
 const express = require('express');
