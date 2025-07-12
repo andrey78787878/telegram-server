@@ -13,24 +13,46 @@ app.post('/webhook', async (req, res) => {
 
       // --- Если кнопка: выбор исполнителя
       if (dataRaw.startsWith('select_executor:')) {
-        const parts = dataRaw.split(':');
-        const row = parts[1];
-        const executor = parts[2];
+  const parts = dataRaw.split(':');
+  const row = parts[1];
+  const executor = parts[2];
 
-        if (!row || !executor) {
-          console.warn("⚠️ Неверный формат select_executor:", dataRaw);
-          return res.sendStatus(200);
-        }
+  if (!row || !executor) {
+    console.warn("⚠️ Неверный формат select_executor:", dataRaw);
+    return res.sendStatus(200);
+  }
 
-        console.log(`👤 Выбран исполнитель ${executor} для заявки #${row}`);
+  console.log(`👤 Выбран исполнитель ${executor} для заявки #${row}`);
 
-        await axios.post(GAS_WEB_APP_URL, {
-          data: {
-            action: 'markInProgress',
-            row,
-            executor
-          }
-        });
+  await axios.post(GAS_WEB_APP_URL, {
+    data: {
+      action: 'markInProgress',
+      row,
+      executor
+    }
+  });
+
+  const originalText = body.callback_query.message.text;
+  const cleanedText = originalText
+    .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
+    .replace(/\n?✅ Заявка.*?закрыта.*?(\n|$)/gs, '')
+    .trim();
+
+  const updatedText = `${cleanedText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+
+  await editMessageText(
+    chatId,
+    messageId,
+    updatedText,
+    buildFollowUpButtons(row)
+  );
+
+  await sendMessage(chatId, `📌 Заявка #${row} принята в работу исполнителем ${executor}`, {
+    reply_to_message_id: messageId
+  });
+
+  return res.sendStatus(200);
+}
 
         const originalText = body.callback_query.message.text;
         const cleanedText = originalText
