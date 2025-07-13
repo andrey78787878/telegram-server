@@ -184,17 +184,17 @@ module.exports = (app, userStates) => {
             console.error('❌ Ошибка обработки webhook:', err);
           }
 
-          const updatedText = `📌 Заявка #${row} закрыта.\n\n` +
+          const summaryText = `📌 Заявка #${row} закрыта.\n\n` +
             `📍 Пиццерия: ${result.branch || '–'}\n` +
             `📋 Проблема: ${result.problem || '–'}\n` +
             `💬 Комментарий: ${comment}\n` +
-            `📎 Фото: <a href=\"${photo || 'https://google.com'}\">ссылка</a>\n` +
+            `📎 Фото: <a href="${photo || 'https://google.com'}">ссылка</a>\n` +
             `💰 Сумма: ${sum} сум\n` +
             `👤 Исполнитель: ${executor}\n` +
             `✅ Статус: Выполнено\n` +
             `⏱ Просрочка: ${result.delay || 0} дн.`;
 
-          await editMessageText(chatId, sourceMessageId, updatedText);
+          await sendMessage(chatId, summaryText);
 
           setTimeout(async () => {
             console.log(`⏳ Обновляем ссылку на фото на Google Диске для заявки #${row}`);
@@ -205,8 +205,8 @@ module.exports = (app, userStates) => {
                 return;
               }
               const drivePhoto = r.data.url;
-              const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href=\"${drivePhoto}\">ссылка</a>`);
-              await editMessageText(chatId, sourceMessageId, replacedText);
+              const replacedText = summaryText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
+              await sendMessage(chatId, replacedText);
             } catch (err) {
               console.error(`❌ Ошибка при обновлении ссылки:`, err.response?.data || err.message);
             }
