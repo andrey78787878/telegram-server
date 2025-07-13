@@ -213,7 +213,7 @@ module.exports = (app, userStates) => {
           const comment = text.trim();
           const { row, photo, sum, username, messageId, serviceMessages } = state;
 
-          const { data: { result } } = await axios.post(GAS_WEB_APP_URL, {
+          const { data: result } = await axios.post(GAS_WEB_APP_URL, {
             data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId }
           });
 
