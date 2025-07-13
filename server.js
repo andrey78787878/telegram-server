@@ -15,23 +15,6 @@ const PORT = process.env.PORT || 3000;
 
 const userStates = {};
 
-async function uploadToDriveFromUrl(fileUrl, fileName) {
-  const tempPath = path.join(__dirname, fileName);
-  const response = await axios.get(fileUrl, { responseType: 'stream' });
-  const writer = fs.createWriteStream(tempPath);
-  response.data.pipe(writer);
-  await new Promise((resolve, reject) => writer.on('finish', resolve).on('error', reject));
-
-  const file = await driveService.files.create({
-    requestBody: { name: fileName, parents: [FOLDER_ID] },
-    media: { mimeType: 'image/jpeg', body: fs.createReadStream(tempPath) },
-    fields: 'id',
-  });
-  await driveService.permissions.create({ fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' } });
-  fs.unlinkSync(tempPath);
-  return `https://drive.google.com/uc?id=${file.data.id}`;
-}
-
 function buildFollowUpButtons(row) {
   return {
     inline_keyboard: [[
