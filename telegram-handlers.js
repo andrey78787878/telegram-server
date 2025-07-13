@@ -249,14 +249,16 @@ module.exports = (app, userStates) => {
             }
           }, 60000);
 
+          // Удаляем только сервисные сообщения, НЕ финальное сообщение
           setTimeout(() => {
-            [...(serviceMessages || []), userMessageId].forEach(msgId => {
+            const messagesToDelete = [...(serviceMessages || []), state.lastUserMessageId];
+            messagesToDelete.forEach(msgId => {
               axios.post(`${TELEGRAM_API}/deleteMessage`, {
                 chat_id: chatId,
                 message_id: msgId
               }).catch(() => {});
             });
-          }, 60000);
+          }, 20000);
 
           delete userStates[chatId];
           return res.sendStatus(200);
