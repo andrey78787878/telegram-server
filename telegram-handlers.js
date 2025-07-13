@@ -85,9 +85,7 @@ module.exports = (app, userStates) => {
             return res.sendStatus(200);
           }
           await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: userStates[chatId]?.sourceMessageId || messageId });
-          // Убираем из исходного текста старый статус и ставим новый
           const updatedText = `${message.text.replace(/🟢 В работе\n👷 Исполнитель:.*?\n?/s, '')}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
-          // Кнопки "Выполнено", "Ожидает поставки", "Отмена"
           const buttons = {
             inline_keyboard: [
               [
@@ -99,7 +97,8 @@ module.exports = (app, userStates) => {
           };
           await editMessageText(chatId, messageId, updatedText, buttons);
           userStates[chatId].executor = executor;
-          userStates[chatId].sourceMessageId = messageId;
+          userStates[chatId].sourceMessageId = userStates[chatId]?.sourceMessageId || messageId;
+          userStates[chatId].originalMessageId = userStates[chatId]?.originalMessageId || messageId;
           return res.sendStatus(200);
         }
 
@@ -110,7 +109,8 @@ module.exports = (app, userStates) => {
             messageId,
             serviceMessages: [],
             sourceMessageId: userStates[chatId]?.sourceMessageId || messageId,
-            executor: userStates[chatId]?.executor || null
+            executor: userStates[chatId]?.executor || null,
+            originalMessageId: userStates[chatId]?.originalMessageId || messageId
           };
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения.');
           userStates[chatId].serviceMessages.push(prompt);
@@ -165,7 +165,7 @@ module.exports = (app, userStates) => {
         if (state.stage === 'awaiting_comment') {
           const comment = text;
           state.serviceMessages.push(msgId);
-          const { row, sum, photo, sourceMessageId, executor } = state;
+          const { row, sum, photo, sourceMessageId, executor, originalMessageId } = state;
 
           console.log(`✏️ Обновляем заявку #${row} с фото, суммой и комментарием`);
           console.log(`ℹ️ Используемая ссылка на фото: ${photo}`);
@@ -196,26 +196,8 @@ module.exports = (app, userStates) => {
             `✅ Статус: Выполнено\n` +
             `⏱ Просрочка: ${result.delay || 0} дн.`;
 
-          // Отправляем итоговое сообщение ответом на материнское
-          await sendMessage(chatId, summaryText, { reply_to_message_id: sourceMessageId });
-
-          // Редактируем материнское сообщение: убираем кнопки и добавляем сверху "📌 Заявка закрыта", если ещё нет
-          let parentText = '';
-          try {
-            // Получаем текст исходного сообщения из callback_query если доступно
-            if (body.callback_query?.message?.text) {
-              parentText = body.callback_query.message.text;
-            } else {
-              // Альтернативно - можно получить через Telegram API getMessage, но лучше полагаться на локальные данные
-              parentText = ''; // или оставить пустым
-            }
-          } catch {
-            parentText = '';
-          }
-          if (!parentText.startsWith('📌 Заявка закрыта')) {
-            parentText = '📌 Заявка закрыта\n\n' + parentText;
-          }
-          await editMessageText(chatId, sourceMessageId, parentText, { inline_keyboard: [] });
+          await sendMessage(chatId, summaryText, { reply_to_message_id: originalMessageId });
+          await editMessageText(chatId, originalMessageId, `📌 Заявка закрыта\n\n${result.originalText || ''}`, { inline_keyboard: [] });
 
           setTimeout(async () => {
             console.log(`⏳ Обновляем ссылку на фото на Google Диске для заявки #${row}`);
@@ -227,8 +209,7 @@ module.exports = (app, userStates) => {
               }
               const drivePhoto = r.data.url;
               const replacedText = summaryText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
-              // Можно обновить итоговое сообщение, если есть ID, но сейчас его нет
-              // await sendMessage(chatId, replacedText, { reply_to_message_id: sourceMessageId });
+              await sendMessage(chatId, replacedText, { reply_to_message_id: originalMessageId });
             } catch (err) {
               console.error(`❌ Ошибка при обновлении ссылки:`, err.response?.data || err.message);
             }
@@ -250,6 +231,3 @@ module.exports = (app, userStates) => {
     }
   });
 };
-
-
-      
