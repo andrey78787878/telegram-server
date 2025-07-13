@@ -175,7 +175,6 @@ module.exports = (app, userStates) => {
         const state = userStates[chatId];
 
         if (!state) return res.sendStatus(200);
-        state.lastUserMessageId = userMessageId;
 
         if (state.stage === 'awaiting_executor_name') {
           const executor = text.trim();
@@ -195,19 +194,22 @@ module.exports = (app, userStates) => {
           const fileUrl = `${TELEGRAM_FILE_API}/${fileRes.data.result.file_path}`;
           state.photo = fileUrl;
           state.stage = 'awaiting_sum';
+          state.serviceMessages.push(userMessageId);
           await askForSum(chatId);
           return res.sendStatus(200);
         }
 
         if (state.stage === 'awaiting_sum') {
           if (!/^\d+$/.test(text.trim())) {
-            await sendMessage(chatId, '❗ Введите сумму только цифрами.');
+            const warnMsgId = await sendMessage(chatId, '❗ Введите сумму только цифрами.');
+            state.serviceMessages.push(warnMsgId);
             return res.sendStatus(200);
           }
           state.sum = text.trim();
           state.stage = 'awaiting_comment';
+          state.serviceMessages.push(userMessageId);
           const commentMsgId = await sendMessage(chatId, '✏️ Введите комментарий к выполненной заявке:');
-          userStates[chatId].serviceMessages.push(commentMsgId);
+          state.serviceMessages.push(commentMsgId);
           return res.sendStatus(200);
         }
 
@@ -253,7 +255,6 @@ module.exports = (app, userStates) => {
           // Удаляем только сервисные сообщения, НЕ финальное сообщение
           setTimeout(() => {
             const messagesToDelete = [...(serviceMessages || [])];
-            if (state.lastUserMessageId) messagesToDelete.push(state.lastUserMessageId);
             messagesToDelete.forEach(msgId => {
               axios.post(`${TELEGRAM_API}/deleteMessage`, {
                 chat_id: chatId,
