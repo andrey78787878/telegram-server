@@ -59,8 +59,11 @@ module.exports = (app, userStates) => {
         const executor = parts[2];
 
         if (action === 'in_progress') {
+          await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
+
           const keyboard = buildExecutorButtons(row);
-          await editMessageText(chatId, messageId, message.text + '\n\nВыберите исполнителя:', keyboard);
+          const newText = message.text + '\n\nВыберите исполнителя:';
+          await editMessageText(chatId, messageId, newText, keyboard);
           userStates[chatId] = { row, sourceMessageId: messageId, serviceMessages: [] };
           return res.sendStatus(200);
         }
@@ -68,10 +71,7 @@ module.exports = (app, userStates) => {
         if (action === 'select_executor') {
           if (!userStates[chatId]) return res.sendStatus(200);
 
-          const selectedExecutor = executor;
-          const row = userStates[chatId].row;
-
-          if (selectedExecutor === 'Текстовой подрядчик') {
+          if (executor === 'Текстовой подрядчик') {
             userStates[chatId].awaiting_manual_executor = true;
             const prompt = await sendMessage(chatId, 'Введите имя подрядчика вручную:');
             userStates[chatId].serviceMessages.push(prompt);
@@ -92,9 +92,9 @@ module.exports = (app, userStates) => {
           const originalMessageId = originalIdRes.data.message_id;
           const originalText = originalTextRes.data.originalText || '';
 
-          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor: selectedExecutor, message_id: originalMessageId });
+          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
 
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${selectedExecutor}`;
+          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
 
           const buttons = {
             inline_keyboard: [
@@ -108,7 +108,7 @@ module.exports = (app, userStates) => {
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
 
-          userStates[chatId].executor = selectedExecutor;
+          userStates[chatId].executor = executor;
           userStates[chatId].sourceMessageId = originalMessageId;
           userStates[chatId].originalMessageId = originalMessageId;
           return res.sendStatus(200);
@@ -133,7 +133,6 @@ module.exports = (app, userStates) => {
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения.');
           userStates[chatId].serviceMessages.push(prompt);
 
-          // Убираем кнопки сразу при выборе "Выполнено"
           await editMessageText(chatId, originalMessageId, message.text, { inline_keyboard: [] });
 
           return res.sendStatus(200);
