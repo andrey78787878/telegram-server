@@ -56,9 +56,11 @@ module.exports = (app, userStates) => {
     userStates[chatId].serviceMessages.push(msgId);
   }
 
-  app.post('/callback', async (req, res) => {
+  // ✅ ОБРАБОТЧИК WEBHOOK
+  app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
+      console.log('📩 Получен update:', JSON.stringify(body, null, 2));
 
       if (body.callback_query) {
         const { data: raw, message, from } = body.callback_query;
@@ -210,7 +212,7 @@ module.exports = (app, userStates) => {
             `📍 Пиццерия: ${result.branch}\n` +
             `📋 Проблема: ${result.problem}\n` +
             `💬 Комментарий: ${comment}\n` +
-            `📎 Фото: <a href=\"${photo}\">ссылка</a>\n` +
+            `📎 Фото: <a href="${photo}">ссылка</a>\n` +
             `💰 Сумма: ${sum} сум\n` +
             `👤 Исполнитель: ${username}\n` +
             `✅ Статус: Выполнено\n` +
@@ -218,19 +220,21 @@ module.exports = (app, userStates) => {
 
           await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
+          // Обновление ссылки на Google Диск через 60 сек.
           setTimeout(async () => {
             try {
               const driveUrlRes = await axios.post(GAS_WEB_APP_URL, {
                 action: 'getDrivePhotoUrl', row
               });
               const drivePhoto = driveUrlRes.data.url;
-              const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href=\"${drivePhoto}\">ссылка</a>`);
+              const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
               await editMessageText(chatId, messageId, replacedText, { inline_keyboard: [] });
             } catch (err) {
               console.error('❌ Ошибка при обновлении ссылки на Диск:', err);
             }
           }, 60000);
 
+          // Удаление сервисных сообщений
           setTimeout(() => {
             [...(serviceMessages || []), userMessageId].forEach(msgId => {
               axios.post(`${TELEGRAM_API}/deleteMessage`, {
