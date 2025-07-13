@@ -84,7 +84,14 @@ module.exports = (app, userStates) => {
             sendMessage(chatId, 'Введите имя подрядчика вручную:');
             return res.sendStatus(200);
           }
-          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: userStates[chatId]?.sourceMessageId || messageId });
+
+          const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
+            action: 'getOriginalMessageId',
+            row
+          });
+          const originalMessageId = originalIdRes.data.message_id;
+
+          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
           const updatedText = `${message.text.replace(/🟢 В работе\n👷 Исполнитель:.*?\n?/s, '')}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
           const buttons = {
             inline_keyboard: [
@@ -95,22 +102,28 @@ module.exports = (app, userStates) => {
               ]
             ]
           };
-          await editMessageText(chatId, messageId, updatedText, buttons);
+          await editMessageText(chatId, originalMessageId, updatedText, buttons);
           userStates[chatId].executor = executor;
-          userStates[chatId].sourceMessageId = userStates[chatId]?.sourceMessageId || messageId;
-          userStates[chatId].originalMessageId = userStates[chatId]?.originalMessageId || messageId;
+          userStates[chatId].sourceMessageId = messageId;
+          userStates[chatId].originalMessageId = originalMessageId;
           return res.sendStatus(200);
         }
 
         if (action === 'done') {
+          const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
+            action: 'getOriginalMessageId',
+            row
+          });
+          const originalMessageId = originalIdRes.data.message_id;
+
           userStates[chatId] = {
             row,
             stage: 'awaiting_photo',
             messageId,
             serviceMessages: [],
-            sourceMessageId: userStates[chatId]?.sourceMessageId || messageId,
+            sourceMessageId: messageId,
             executor: userStates[chatId]?.executor || null,
-            originalMessageId: userStates[chatId]?.originalMessageId || messageId
+            originalMessageId
           };
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения.');
           userStates[chatId].serviceMessages.push(prompt);
