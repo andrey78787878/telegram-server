@@ -1,37 +1,4 @@
-app.post('/webhook', async (req, res) => {
-  const body = req.body;
-
-  try {
-    // === 1. Обработка нажатий на кнопки (callback_query)
-    if (body.callback_query) {
-      console.log('➡️ Получен callback_query:', body.callback_query);
-
-      const dataRaw = body.callback_query.data;
-      const chatId = body.callback_query.message.chat.id;
-      const messageId = body.callback_query.message.message_id;
-      const username = '@' + (body.callback_query.from.username || body.callback_query.from.first_name);
-
-      // --- Если кнопка: выбор исполнителя
-      if (dataRaw.startsWith('select_executor:')) {
-  const parts = dataRaw.split(':');
-  const row = parts[1];
-  const executor = parts[2];
-
-  if (!row || !executor) {
-    console.warn("⚠️ Неверный формат select_executor:", dataRaw);
-    return res.sendStatus(200);
-  }
-
-  console.log(`👤 Выбран исполнитель ${executor} для заявки #${row}`);
-
-  await axios.post(GAS_WEB_APP_URL, {
-    data: {
-      action: 'markInProgress',
-      row,
-      executor
-    }
-  });
-
+// Telegram Bot Server Logic (Stable + Custom Flow)
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
