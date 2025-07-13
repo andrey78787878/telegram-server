@@ -37,16 +37,26 @@ module.exports = (app, userStates) => {
   }
 
   async function deleteMessage(chatId, msgId, finalId) {
-    if (msgId === finalId) return;
+    if (msgId === finalId) {
+      console.log(`ℹ️ Пропущено удаление финального сообщения ${msgId}`);
+      return;
+    }
+    console.log(`🗑 Попытка удалить сообщение ${msgId} (финал ${finalId})`);
     axios.post(`${TELEGRAM_API}/deleteMessage`, {
       chat_id: chatId,
       message_id: msgId
-    }).catch(() => {});
+    }).then(() => {
+      console.log(`🗑 Удалено сервисное сообщение ${msgId} чата ${chatId}`);
+    }).catch((err) => {
+      console.warn(`⚠️ Не удалось удалить сообщение ${msgId} чата ${chatId}`, err.response?.data || err.message);
+    });
   }
 
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
+      console.log('📩 Обновление Telegram:', JSON.stringify(body));
+
       if (body.callback_query) {
         const { data: raw, message, from } = body.callback_query;
         const chatId = message.chat.id;
@@ -60,8 +70,11 @@ module.exports = (app, userStates) => {
 
         if (action === 'in_progress') {
           const keyboard = buildExecutorButtons(row);
-          await editMessageText(chatId, messageId, message.text + '\n\nВыберите исполнителя:', keyboard);
+          const msgId = await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
+            reply_markup: keyboard
+          });
           userStates[chatId] = { row, sourceMessageId: messageId };
+          setTimeout(() => deleteMessage(chatId, msgId, messageId), 60000);
           return res.sendStatus(200);
         }
 
@@ -80,8 +93,7 @@ module.exports = (app, userStates) => {
 
           await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
 
-          const newText = message.text.replace(/🟢 В работе.*|📌 Заявка закрыта.*|\n\nВыберите исполнителя:/s, '').trim();
-          const updatedText = `${newText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+          const updatedText = `${message.text.replace(/🟢 В работе\n👷 Исполнитель:.*?\n?/s, '')}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
 
           const buttons = {
             inline_keyboard: [
@@ -93,7 +105,14 @@ module.exports = (app, userStates) => {
             ]
           };
 
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
+          // Пытаемся отредактировать исходное сообщение с кнопками
+          try {
+            await editMessageText(chatId, originalMessageId, updatedText, buttons);
+          } catch (err) {
+            console.warn('⚠️ Не удалось обновить исходное сообщение. Отправляем новое с кнопками.', err.response?.data || err.message);
+            const msgId = await sendMessage(chatId, updatedText, { reply_markup: buttons });
+            userStates[chatId].sourceMessageId = msgId;
+          }
 
           userStates[chatId].executor = executor;
           userStates[chatId].sourceMessageId = originalMessageId;
@@ -113,7 +132,7 @@ module.exports = (app, userStates) => {
             stage: 'awaiting_photo',
             messageId,
             serviceMessages: [],
-            sourceMessageId: originalMessageId,
+            sourceMessageId: messageId,
             executor: userStates[chatId]?.executor || null,
             originalMessageId
           };
@@ -172,6 +191,9 @@ module.exports = (app, userStates) => {
           state.serviceMessages.push(msgId);
           const { row, sum, photo, sourceMessageId, executor, originalMessageId } = state;
 
+          console.log(`✏️ Обновляем заявку #${row} с фото, суммой и комментарием`);
+          console.log(`ℹ️ Используемая ссылка на фото: ${photo}`);
+
           let result = {};
           try {
             const response = await axios.post(GAS_WEB_APP_URL, {
@@ -184,7 +206,9 @@ module.exports = (app, userStates) => {
               message_id: sourceMessageId
             });
             result = response.data.result || {};
-          } catch (err) {}
+          } catch (err) {
+            console.error('❌ Ошибка обработки webhook:', err);
+          }
 
           const summaryText = `📌 Заявка #${row} закрыта.\n\n` +
             `📍 Пиццерия: ${result.branch || '–'}\n` +
@@ -200,13 +224,19 @@ module.exports = (app, userStates) => {
           await editMessageText(chatId, originalMessageId, `📌 Заявка закрыта\n\n${result.originalText || ''}`, { inline_keyboard: [] });
 
           setTimeout(async () => {
+            console.log(`⏳ Обновляем ссылку на фото на Google Диске для заявки #${row}`);
             try {
               const r = await axios.post(GAS_WEB_APP_URL, { action: 'getDrivePhotoUrl', row });
-              if (!r.data.url) return;
+              if (!r.data.url) {
+                console.warn(`⚠️ Ссылка на фото с Google Диска не найдена для заявки #${row}`);
+                return;
+              }
               const drivePhoto = r.data.url;
               const replacedText = summaryText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
               await sendMessage(chatId, replacedText, { reply_to_message_id: originalMessageId });
-            } catch (err) {}
+            } catch (err) {
+              console.error(`❌ Ошибка при обновлении ссылки:`, err.response?.data || err.message);
+            }
           }, 180000);
 
           setTimeout(() => {
@@ -220,6 +250,7 @@ module.exports = (app, userStates) => {
 
       res.sendStatus(200);
     } catch (err) {
+      console.error('❌ Ошибка обработки webhook:', err);
       res.sendStatus(500);
     }
   });
