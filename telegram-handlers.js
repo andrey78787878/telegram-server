@@ -129,6 +129,10 @@ module.exports = (app, userStates) => {
           };
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения.');
           userStates[chatId].serviceMessages.push(prompt);
+
+          // Убираем кнопки сразу при выборе "Выполнено"
+          await editMessageText(chatId, originalMessageId, message.text, { inline_keyboard: [] });
+
           return res.sendStatus(200);
         }
       }
@@ -200,6 +204,12 @@ module.exports = (app, userStates) => {
             result = response.data.result || {};
           } catch (err) {}
 
+          if (!result || result.branch === undefined) {
+            await sendMessage(chatId, `❗ Заявка уже закрыта или не найдена. Повтор не требуется.`);
+            delete userStates[chatId];
+            return res.sendStatus(200);
+          }
+
           const summaryText = `📌 Заявка #${row} закрыта.\n\n` +
             `📍 Пиццерия: ${result.branch || '–'}\n` +
             `📋 Проблема: ${result.problem || '–'}\n` +
@@ -213,7 +223,7 @@ module.exports = (app, userStates) => {
           const finalMsgId = await sendMessage(chatId, summaryText, { reply_to_message_id: originalMessageId });
           state.finalMessageId = finalMsgId;
 
-          await editMessageText(chatId, originalMessageId, `📌 Заявка закрыта\n\n${result.originalText || ''}`);
+          await editMessageText(chatId, originalMessageId, `📌 Заявка закрыта\n\n${result.originalText || ''}`, { inline_keyboard: [] });
 
           setTimeout(async () => {
             try {
