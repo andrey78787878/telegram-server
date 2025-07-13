@@ -1,21 +1,14 @@
 {
-  "name": "telegram-gsheet-bot",
+  "name": "telegram-bot-server",
   "version": "1.0.0",
-  "description": "Telegram bot with Google Drive and Google Sheets integration",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.6.7",
-    "express": "^4.18.2",
-    "form-data": "^4.0.0",
-    "googleapis": "^133.0.0",
-    "dotenv": "^16.3.1"
-  },
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "author": "",
-  "license": "ISC"
+    "axios": "^1.6.0",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2"
+  }
 }
