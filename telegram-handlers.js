@@ -11,9 +11,9 @@ module.exports = (app, userStates) => {
   function buildFollowUpButtons(row) {
     return {
       inline_keyboard: [[
-        { text: 'Выполнено ✅', callback_data: `completed:${row}` },
+        { text: 'Выполнено ✅', callback_data: `done:${row}` },
         { text: 'Ожидает поставки ⏳', callback_data: `delayed:${row}` },
-        { text: 'Отмена ❌', callback_data: `cancelled:${row}` },
+        { text: 'Отмена ❌', callback_data: `cancel:${row}` },
       ]]
     };
   }
@@ -124,9 +124,9 @@ module.exports = (app, userStates) => {
             inline_keyboard: [
               [{ text: `✅ В работе ${executor}`, callback_data: 'noop' }],
               [
-                { text: 'Выполнено', callback_data: JSON.stringify({ action: 'done', row, messageId }) },
-                { text: 'Ожидает поставки', callback_data: JSON.stringify({ action: 'delayed', row, messageId }) },
-                { text: 'Отмена', callback_data: JSON.stringify({ action: 'cancel', row, messageId }) }
+                { text: 'Выполнено', callback_data: `done:${row}` },
+                { text: 'Ожидает поставки', callback_data: `delayed:${row}` },
+                { text: 'Отмена', callback_data: `cancel:${row}` }
               ]
             ]
           };
@@ -166,6 +166,11 @@ module.exports = (app, userStates) => {
           await editMessageText(chatId, messageId, updated);
           return res.sendStatus(200);
         }
+
+        // Если callback_data == 'noop' - ничего не делать
+        if (action === 'noop') {
+          return res.sendStatus(200);
+        }
       }
 
       if (body.message) {
@@ -190,8 +195,10 @@ module.exports = (app, userStates) => {
 
         if (state.stage === 'awaiting_photo' && body.message.photo) {
           const fileId = body.message.photo.slice(-1)[0].file_id;
+          console.log('📸 Получено фото с file_id:', fileId);
           const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
           const fileUrl = `${TELEGRAM_FILE_API}/${fileRes.data.result.file_path}`;
+          console.log('📁 Скачиваем фото по URL:', fileUrl);
           state.photo = fileUrl;
           state.stage = 'awaiting_sum';
           state.serviceMessages.push(userMessageId);
@@ -220,6 +227,8 @@ module.exports = (app, userStates) => {
           // Добавляем сообщение пользователя с комментарием в serviceMessages для удаления
           serviceMessages.push(userMessageId);
 
+          console.log(`✏️ Обновляем заявку #${row} с фото, суммой и комментарием`);
+
           const { data: { result } } = await axios.post(GAS_WEB_APP_URL, {
             action: 'updateAfterCompletion',
             row,
@@ -234,7 +243,7 @@ module.exports = (app, userStates) => {
             `📍 Пиццерия: ${result.branch}\n` +
             `📋 Проблема: ${result.problem}\n` +
             `💬 Комментарий: ${comment}\n` +
-            `📎 Фото: <a href=\"${photo}\">ссылка</a>\n` +
+            `📎 Фото: <a href="${photo}">ссылка</a>\n` +
             `💰 Сумма: ${sum} сум\n` +
             `👤 Исполнитель: ${username}\n` +
             `✅ Статус: Выполнено\n` +
@@ -246,29 +255,39 @@ module.exports = (app, userStates) => {
           // Через 60 секунд подменяем ссылку на фото на ссылку с Google Диска
           setTimeout(async () => {
             try {
+              console.log(`⏳ Обновляем ссылку на фото на Google Диске для заявки #${row}`);
               const driveUrlRes = await axios.post(GAS_WEB_APP_URL, {
                 action: 'getDrivePhotoUrl', row
               });
               const drivePhoto = driveUrlRes.data.url;
-              const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href=\"${drivePhoto}\">ссылка</a>`);
-              await editMessageText(chatId, messageId, replacedText, { inline_keyboard: [] });
+
+              if (drivePhoto) {
+                const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
+                await editMessageText(chatId, messageId, replacedText, { inline_keyboard: [] });
+                console.log(`✅ Ссылка на фото обновлена для заявки #${row}`);
+              } else {
+                console.warn(`⚠️ Ссылка на фото с Google Диска не найдена для заявки #${row}`);
+              }
             } catch (err) {
               console.error('❌ Ошибка при обновлении ссылки на Диск:', err);
             }
           }, 60000);
 
-          // --- ОТДЕЛЬНАЯ ЗАЩИТА ОТ АВТОМАТИЧЕСКОГО УДАЛЕНИЯ ФИНАЛЬНОГО СООБЩЕНИЯ ---
-          // Удаляем ТОЛЬКО сервисные сообщения и ответы пользователя на запросы,
-          // но НЕ удаляем финальное сообщение с messageId.
+          // --- Удаляем сервисные сообщения и сообщения пользователя, НЕ финальное ---
           setTimeout(() => {
             const messagesToDelete = [...(serviceMessages || [])];
             messagesToDelete.forEach(msgId => {
-              // Защита — если ID совпадает с финальным сообщением, не удалять
               if (msgId !== messageId) {
                 axios.post(`${TELEGRAM_API}/deleteMessage`, {
                   chat_id: chatId,
                   message_id: msgId
-                }).catch(() => {});
+                }).then(() => {
+                  console.log(`🗑 Удалено сервисное сообщение ${msgId} чата ${chatId}`);
+                }).catch(() => {
+                  console.warn(`⚠️ Не удалось удалить сообщение ${msgId} чата ${chatId}`);
+                });
+              } else {
+                console.log(`ℹ️ Пропущено удаление финального сообщения ${msgId}`);
               }
             });
           }, 20000);
