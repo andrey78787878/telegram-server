@@ -85,7 +85,9 @@ module.exports = (app, userStates) => {
             return res.sendStatus(200);
           }
           await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: userStates[chatId]?.sourceMessageId || messageId });
+          // Убираем из исходного текста старый статус и ставим новый
           const updatedText = `${message.text.replace(/🟢 В работе\n👷 Исполнитель:.*?\n?/s, '')}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
+          // Кнопки "Выполнено", "Ожидает поставки", "Отмена"
           const buttons = {
             inline_keyboard: [
               [
@@ -112,18 +114,6 @@ module.exports = (app, userStates) => {
           };
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения.');
           userStates[chatId].serviceMessages.push(prompt);
-          return res.sendStatus(200);
-        }
-
-        if (action === 'delayed' || action === 'cancelled') {
-          await axios.post(GAS_WEB_APP_URL, {
-            action,
-            row,
-            executor: username
-          });
-          const statusText = action === 'delayed' ? '⏳ Ожидает поставки' : '❌ Отменена';
-          const updated = `${message.text}\n\n📌 Статус: ${statusText}\n👤 Исполнитель: ${username}`;
-          await editMessageText(chatId, messageId, updated, { inline_keyboard: [] });
           return res.sendStatus(200);
         }
       }
@@ -196,8 +186,7 @@ module.exports = (app, userStates) => {
             console.error('❌ Ошибка обработки webhook:', err);
           }
 
-          // Отправляем новое финальное сообщение с reply_to_message_id = sourceMessageId (материнское сообщение)
-          const finalMessageText = `📌 Заявка #${row} закрыта.\n\n` +
+          const summaryText = `📌 Заявка #${row} закрыта.\n\n` +
             `📍 Пиццерия: ${result.branch || '–'}\n` +
             `📋 Проблема: ${result.problem || '–'}\n` +
             `💬 Комментарий: ${comment}\n` +
@@ -207,17 +196,26 @@ module.exports = (app, userStates) => {
             `✅ Статус: Выполнено\n` +
             `⏱ Просрочка: ${result.delay || 0} дн.`;
 
-          await sendMessage(chatId, finalMessageText, {
-            reply_to_message_id: sourceMessageId,
-            disable_web_page_preview: true
-          });
+          // Отправляем итоговое сообщение ответом на материнское
+          await sendMessage(chatId, summaryText, { reply_to_message_id: sourceMessageId });
 
-          // Редактируем материнское сообщение: добавляем в начало "📌 Заявка закрыта" и убираем кнопки
-          let updatedParentText = message.text || '';
-          if (!updatedParentText.startsWith('📌 Заявка закрыта')) {
-            updatedParentText = '📌 Заявка закрыта\n\n' + updatedParentText;
+          // Редактируем материнское сообщение: убираем кнопки и добавляем сверху "📌 Заявка закрыта", если ещё нет
+          let parentText = '';
+          try {
+            // Получаем текст исходного сообщения из callback_query если доступно
+            if (body.callback_query?.message?.text) {
+              parentText = body.callback_query.message.text;
+            } else {
+              // Альтернативно - можно получить через Telegram API getMessage, но лучше полагаться на локальные данные
+              parentText = ''; // или оставить пустым
+            }
+          } catch {
+            parentText = '';
           }
-          await editMessageText(chatId, sourceMessageId, updatedParentText, { inline_keyboard: [] });
+          if (!parentText.startsWith('📌 Заявка закрыта')) {
+            parentText = '📌 Заявка закрыта\n\n' + parentText;
+          }
+          await editMessageText(chatId, sourceMessageId, parentText, { inline_keyboard: [] });
 
           setTimeout(async () => {
             console.log(`⏳ Обновляем ссылку на фото на Google Диске для заявки #${row}`);
@@ -228,9 +226,9 @@ module.exports = (app, userStates) => {
                 return;
               }
               const drivePhoto = r.data.url;
-              const replacedText = finalMessageText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
-              // Обновление финального сообщения по message_id не реализовано, потому что
-              // id финального сообщения не сохраняется, но можно расширить по желанию
+              const replacedText = summaryText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
+              // Можно обновить итоговое сообщение, если есть ID, но сейчас его нет
+              // await sendMessage(chatId, replacedText, { reply_to_message_id: sourceMessageId });
             } catch (err) {
               console.error(`❌ Ошибка при обновлении ссылки:`, err.response?.data || err.message);
             }
@@ -238,7 +236,7 @@ module.exports = (app, userStates) => {
 
           setTimeout(() => {
             state.serviceMessages.forEach(mid => deleteMessage(chatId, mid, sourceMessageId));
-          }, 20000);
+          }, 30000);
 
           delete userStates[chatId];
           return res.sendStatus(200);
@@ -252,3 +250,6 @@ module.exports = (app, userStates) => {
     }
   });
 };
+
+
+      
