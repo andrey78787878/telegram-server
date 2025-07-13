@@ -206,7 +206,8 @@ module.exports = (app, userStates) => {
           }
           state.sum = text.trim();
           state.stage = 'awaiting_comment';
-          await sendMessage(chatId, '✏️ Введите комментарий к выполненной заявке:');
+          const commentMsgId = await sendMessage(chatId, '✏️ Введите комментарий к выполненной заявке:');
+          userStates[chatId].serviceMessages.push(commentMsgId);
           return res.sendStatus(200);
         }
 
@@ -251,7 +252,8 @@ module.exports = (app, userStates) => {
 
           // Удаляем только сервисные сообщения, НЕ финальное сообщение
           setTimeout(() => {
-            const messagesToDelete = [...(serviceMessages || []), state.lastUserMessageId];
+            const messagesToDelete = [...(serviceMessages || [])];
+            if (state.lastUserMessageId) messagesToDelete.push(state.lastUserMessageId);
             messagesToDelete.forEach(msgId => {
               axios.post(`${TELEGRAM_API}/deleteMessage`, {
                 chat_id: chatId,
