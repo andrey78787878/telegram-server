@@ -68,7 +68,10 @@ module.exports = (app, userStates) => {
         if (action === 'select_executor') {
           if (!userStates[chatId]) return res.sendStatus(200);
 
-          if (executor === 'Текстовой подрядчик') {
+          const selectedExecutor = executor;
+          const row = userStates[chatId].row;
+
+          if (selectedExecutor === 'Текстовой подрядчик') {
             userStates[chatId].awaiting_manual_executor = true;
             const prompt = await sendMessage(chatId, 'Введите имя подрядчика вручную:');
             userStates[chatId].serviceMessages.push(prompt);
@@ -89,9 +92,9 @@ module.exports = (app, userStates) => {
           const originalMessageId = originalIdRes.data.message_id;
           const originalText = originalTextRes.data.originalText || '';
 
-          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
+          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor: selectedExecutor, message_id: originalMessageId });
 
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${selectedExecutor}`;
 
           const buttons = {
             inline_keyboard: [
@@ -105,7 +108,7 @@ module.exports = (app, userStates) => {
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
 
-          userStates[chatId].executor = executor;
+          userStates[chatId].executor = selectedExecutor;
           userStates[chatId].sourceMessageId = originalMessageId;
           userStates[chatId].originalMessageId = originalMessageId;
           return res.sendStatus(200);
