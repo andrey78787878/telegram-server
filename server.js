@@ -1,4 +1,4 @@
-// ✅ server.js — полный Telegram бот с подтягиванием заявки из таблицы
+// ✅ server.js — полный Telegram бот с подтягиванием заявки из таблицы и работающими кнопками
 
 require('dotenv').config();
 const express = require('express');
@@ -35,15 +35,18 @@ app.post('/webhook', async (req, res) => {
 
 // === Обработка кнопок === //
 async function handleCallback(query, res) {
-  const { data, message, from, id } = query;
-  const [action, row, extra] = data.split(':');
+  const { data: dataRaw, message, from, id } = query;
   const chat_id = message.chat.id;
   const message_id = message.message_id;
   const username = '@' + (from.username || from.first_name);
 
   await tg('answerCallbackQuery', { callback_query_id: id });
 
-  if (action === 'select_executor') {
+  if (dataRaw.startsWith('select_executor:')) {
+    const parts = dataRaw.split(':');
+    const row = parts[1];
+    const executor = parts[2];
+
     const { data: rowData } = await axios.get(`${GAS_WEB_APP_URL}?get=row&row=${row}`);
 
     const updated =
@@ -52,34 +55,38 @@ async function handleCallback(query, res) {
       `🛠 Классификация: ${rowData.classification || '—'}\n` +
       `📂 Категория: ${rowData.category || '—'}\n` +
       `📝 Суть: ${rowData.problem || '—'}\n\n` +
-      `🟢 В работе\n👷 Исполнитель: ${extra}`;
+      `🟢 В работе\n👷 Исполнитель: ${executor}`;
 
     const reply_markup = {
       inline_keyboard: [[
-        { text: 'Выполнено ✅', callback_data: `done:${row}:${extra}` },
-        { text: 'Ожидает поставки ⏳', callback_data: `delayed:${row}:${extra}` },
-        { text: 'Отмена ❌', callback_data: `cancel:${row}:${extra}` }
+        { text: 'Выполнено ✅', callback_data: `done:${row}:${executor}` },
+        { text: 'Ожидает поставки ⏳', callback_data: `delayed:${row}:${executor}` },
+        { text: 'Отмена ❌', callback_data: `cancel:${row}:${executor}` }
       ]]
     };
 
     await tg('editMessageText', { chat_id, message_id, text: updated, parse_mode: 'HTML', reply_markup });
 
     await axios.post(GAS_WEB_APP_URL, {
-      data: { action: 'in_progress', row, message_id, executor: extra }
+      data: { action: 'in_progress', row, message_id, executor }
     });
 
     await tg('sendMessage', {
       chat_id,
       reply_to_message_id: message_id,
-      text: `📌 Заявка #${row} принята в работу исполнителем ${extra}`
+      text: `📌 Заявка #${row} принята в работу исполнителем ${executor}`
     });
 
     return res.sendStatus(200);
   }
 
-  if (action === 'done') {
+  if (dataRaw.startsWith('done:')) {
+    const parts = dataRaw.split(':');
+    const row = parts[1];
+    const executor = parts[2];
+
     userStates[from.id] = {
-      step: 'awaiting_photo', row, executor: extra, message_id, chat_id, service: []
+      step: 'awaiting_photo', row, executor, message_id, chat_id, service: []
     };
     const msg = await tg('sendMessage', {
       chat_id,
@@ -90,13 +97,17 @@ async function handleCallback(query, res) {
     return res.sendStatus(200);
   }
 
-  if (action === 'delayed' || action === 'cancel') {
-    const status = action === 'delayed' ? 'Ожидает поставки' : 'Отменена';
-    const updated = `${message.text}\n\n📌 Статус: ${status}\n👤 Исполнитель: ${extra}`;
+  if (dataRaw.startsWith('delayed:') || dataRaw.startsWith('cancel:')) {
+    const parts = dataRaw.split(':');
+    const row = parts[1];
+    const executor = parts[2];
+    const status = dataRaw.startsWith('delayed:') ? 'Ожидает поставки' : 'Отменена';
+
+    const updated = `${message.text}\n\n📌 Статус: ${status}\n👤 Исполнитель: ${executor}`;
     await tg('editMessageText', { chat_id, message_id, text: updated, parse_mode: 'HTML' });
 
     await axios.post(GAS_WEB_APP_URL, {
-      data: { action, row, executor: extra }
+      data: { action: dataRaw.startsWith('delayed:') ? 'delayed' : 'cancel', row, executor }
     });
     return res.sendStatus(200);
   }
