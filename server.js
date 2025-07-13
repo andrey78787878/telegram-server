@@ -7,7 +7,6 @@ app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const PORT = process.env.PORT || 3000;
@@ -20,7 +19,7 @@ async function checkPendingRequestsAndSend() {
     const res = await axios.post(GAS_WEB_APP_URL, { action: 'getPendingMessages' });
     const pending = res.data;
 
-    if (!pending || !Array.isArray(pending)) {
+    if (!pending || !Array.isArray(pending) || pending.length === 0) {
       console.log('ℹ️ Нет заявок для отправки.');
       return;
     }
@@ -65,8 +64,8 @@ async function checkPendingRequestsAndSend() {
   }
 }
 
-// ✅ ДОБАВЬ ЭТО: ручной запуск отправки
-app.post('/webhook', async (req, res) => {
+// ✅ Ручной запуск отправки заявок (не конфликтует с Telegram webhook)
+app.post('/send-pending', async (req, res) => {
   const { action } = req.body;
   if (action === 'sendPending') {
     await checkPendingRequestsAndSend();
@@ -75,16 +74,15 @@ app.post('/webhook', async (req, res) => {
   res.status(400).send('❌ Неверный action');
 });
 
+// 📦 Подключение логики Telegram
+const setupTelegramHandlers = require('./telegram-handlers');
+setupTelegramHandlers(app, userStates);
+
 // 🚀 Автостарт при запуске сервера
-checkPendingRequestsAndSend(); // при старте
-// 📦 Каждые 2 минуты
-setInterval(checkPendingRequestsAndSend, 2 * 60 * 1000);
+checkPendingRequestsAndSend(); // один раз при старте
+setInterval(checkPendingRequestsAndSend, 2 * 60 * 1000); // каждые 2 минуты
 
 // 🔊 Запуск Express сервера
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
-
-// 📦 Подключение логики Telegram
-const setupTelegramHandlers = require('./telegram-handlers');
-setupTelegramHandlers(app, userStates);
