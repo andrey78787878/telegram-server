@@ -63,7 +63,6 @@ async function askForSum(chatId) {
 }
 
 app.post('/callback', async (req, res) => {
-  console.log('📥 Webhook получен:', JSON.stringify(req.body, null, 2));
   try {
     const body = req.body;
 
@@ -79,12 +78,22 @@ app.post('/callback', async (req, res) => {
       const executor = parts.executor || parts[2] || null;
 
       if (action === 'in_progress') {
-        userStates[chatId] = { originalText: message.text, row, messageId };
+        userStates[chatId] = { row, messageId };
+        try {
+          const response = await axios.post(GAS_WEB_APP_URL, {
+            action: 'getOriginalText',
+            row
+          });
+          userStates[chatId].originalText = response.data.text || message.text;
+        } catch (err) {
+          userStates[chatId].originalText = message.text;
+        }
         const keyboard = buildExecutorButtons(row);
         await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
           reply_to_message_id: messageId,
           reply_markup: keyboard
         });
+        return res.sendStatus(200);
       }
 
       if (action === 'select_executor' && executor) {
@@ -141,8 +150,7 @@ app.post('/callback', async (req, res) => {
           row,
           messageId,
           username,
-          serviceMessages: [],
-          originalText: message.text
+          serviceMessages: []
         };
         await askForPhoto(chatId);
         return res.sendStatus(200);
@@ -200,30 +208,36 @@ app.post('/callback', async (req, res) => {
 
       if (state.stage === 'awaiting_comment') {
         const comment = text.trim();
-        const { row, photo, sum, username, messageId, originalText, serviceMessages } = state;
+        const { row, photo, sum, username, messageId, serviceMessages } = state;
 
-        await axios.post(GAS_WEB_APP_URL, {
+        const { data: { result } } = await axios.post(GAS_WEB_APP_URL, {
           data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId }
         });
 
-        const cleanedText = originalText
-          .replace(/\n?🟢 В работе.*?(\n👷 Исполнитель:.*)?/, '')
-          .replace(/\n?📎 Фото: .*$/m, '')
-          .replace(/\n?💰 Сумма: .*$/m, '')
-          .replace(/\n?👤 Исполнитель: .*$/m, '')
-          .replace(/\n?✅ Статус: .*$/m, '')
-          .replace(/\n?⏱ Просрочка: .*$/m, '')
-          .replace(/\n?✅ Заявка закрыта\..*$/m, '');
-
-        const updatedText = `${cleanedText}
-📎 Фото: <a href="${photo}">ссылка</a>
-💰 Сумма: ${sum} сум
-👤 Исполнитель: ${username}
-✅ Статус: Выполнено
-💬 Комментарий: ${comment}`.trim();
+        const updatedText = `📌 Заявка #${row} закрыта.\n\n` +
+          `📍 Пиццерия: ${result.branch}\n` +
+          `📋 Проблема: ${result.problem}\n` +
+          `💬 Комментарий: ${comment}\n` +
+          `📎 Фото: <a href=\"${photo}\">ссылка</a>\n` +
+          `💰 Сумма: ${sum} сум\n` +
+          `👤 Исполнитель: ${username}\n` +
+          `✅ Статус: Выполнено\n` +
+          `⏱ Просрочка: ${result.delay || 0} дн.`;
 
         await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
-        await sendMessage(chatId, `📌 Заявка №${row} закрыта.`, { reply_to_message_id: messageId });
+
+        setTimeout(async () => {
+          try {
+            const driveUrlRes = await axios.post(GAS_WEB_APP_URL, {
+              action: 'getDrivePhotoUrl', row
+            });
+            const drivePhoto = driveUrlRes.data.url;
+            const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href=\"${drivePhoto}\">ссылка</a>`);
+            await editMessageText(chatId, messageId, replacedText, { inline_keyboard: [] });
+          } catch (err) {
+            console.error('❌ Ошибка при обновлении ссылки на Диск:', err);
+          }
+        }, 60000);
 
         setTimeout(() => {
           [...(serviceMessages || []), userMessageId].forEach(msgId => {
