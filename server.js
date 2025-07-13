@@ -103,7 +103,17 @@ app.post('/callback', async (req, res) => {
           return res.sendStatus(200);
         }
 
-        const originalText = userStates[chatId]?.originalText || message.text;
+        let originalText = userStates[chatId]?.originalText;
+        if (!originalText) {
+          try {
+            const response = await axios.post(GAS_WEB_APP_URL, { action: 'getOriginalText', row });
+            originalText = response.data.text || message.text;
+            userStates[chatId].originalText = originalText;
+          } catch {
+            originalText = message.text;
+          }
+        }
+
         const cleanedText = originalText
           .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
           .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
