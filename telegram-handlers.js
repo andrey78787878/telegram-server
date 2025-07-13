@@ -102,7 +102,14 @@ module.exports = (app, userStates) => {
               ]
             ]
           };
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
+          try {
+  await editMessageText(chatId, originalMessageId, updatedText, buttons);
+} catch (err) {
+  console.warn('⚠️ Не удалось обновить исходное сообщение. Отправляем новое с кнопками.');
+  const msgId = await sendMessage(chatId, updatedText, { reply_markup: buttons });
+  userStates[chatId].sourceMessageId = msgId;
+}
+
           userStates[chatId].executor = executor;
           userStates[chatId].sourceMessageId = messageId;
           userStates[chatId].originalMessageId = originalMessageId;
