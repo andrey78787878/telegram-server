@@ -191,6 +191,13 @@ module.exports = (app, userStates) => {
           state.serviceMessages.push(msgId);
           const { row, sum, photo, sourceMessageId, executor, originalMessageId } = state;
 
+          // Защита от повторной обработки заявки
+          if (state.completionProcessed) {
+            console.log(`⚠️ Заявка #${row} уже была обработана - пропускаем повтор.`);
+            return res.sendStatus(200);
+          }
+          state.completionProcessed = true;
+
           console.log(`✏️ Обновляем заявку #${row} с фото, суммой и комментарием`);
           console.log(`ℹ️ Используемая ссылка на фото: ${photo}`);
 
@@ -224,6 +231,7 @@ module.exports = (app, userStates) => {
           await editMessageText(chatId, originalMessageId, `📌 Заявка закрыта\n\n${result.originalText || ''}`, { inline_keyboard: [] });
 
           setTimeout(async () => {
+            if (!state.completionProcessed) return; // Защита от повторного вызова
             console.log(`⏳ Обновляем ссылку на фото на Google Диске для заявки #${row}`);
             try {
               const r = await axios.post(GAS_WEB_APP_URL, { action: 'getDrivePhotoUrl', row });
@@ -240,6 +248,7 @@ module.exports = (app, userStates) => {
           }, 180000);
 
           setTimeout(() => {
+            if (!state.completionProcessed) return; // Защита от повторного вызова
             state.serviceMessages.forEach(mid => deleteMessage(chatId, mid, sourceMessageId));
           }, 30000);
 
