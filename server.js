@@ -73,5 +73,8 @@ app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
 
+const setupTelegramHandlers = require('./telegram-handlers');
+setupTelegramHandlers(app, userStates);
+
 // 📤 Экспорт функции для cron (если потребуется использовать в других модулях)
 module.exports = { checkPendingRequestsAndSend };
