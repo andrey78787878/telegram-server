@@ -42,21 +42,14 @@ module.exports = (app, userStates) => {
       return;
     }
     console.log(`🗑 Попытка удалить сообщение ${msgId} (финал ${finalId})`);
-    try {
-      await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-        chat_id: chatId,
-        message_id: msgId
-      });
+    axios.post(`${TELEGRAM_API}/deleteMessage`, {
+      chat_id: chatId,
+      message_id: msgId
+    }).then(() => {
       console.log(`🗑 Удалено сервисное сообщение ${msgId} чата ${chatId}`);
-    } catch (err) {
+    }).catch((err) => {
       console.warn(`⚠️ Не удалось удалить сообщение ${msgId} чата ${chatId}`, err.response?.data || err.message);
-    }
-  }
-
-  // Функция для получения номера заявки из текста (примерно по шаблону #число)
-  function extractRowNumber(text) {
-    const m = text.match(/#(\d+)/);
-    return m ? m[1] : null;
+    });
   }
 
   app.post('/webhook', async (req, res) => {
@@ -75,31 +68,31 @@ module.exports = (app, userStates) => {
         const row = parts[1];
         const executor = parts[2];
 
-        if (action === 'select_executor') {
-          if (!userStates[chatId]) {
-            return res.sendStatus(200);
-          }
+        if (action === 'in_progress') {
+          const keyboard = buildExecutorButtons(row);
+          const msgId = await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
+            reply_markup: keyboard
+          });
+          userStates[chatId] = { row, sourceMessageId: messageId };
+          setTimeout(() => deleteMessage(chatId, msgId, messageId), 60000);
+          return res.sendStatus(200);
+        }
 
+        if (action === 'select_executor') {
           if (executor === 'Текстовой подрядчик') {
             userStates[chatId].awaiting_manual_executor = true;
-            const promptId = await sendMessage(chatId, 'Введите имя подрядчика вручную:');
-            userStates[chatId].serviceMessages.push(promptId);
+            sendMessage(chatId, 'Введите имя подрядчика вручную:');
             return res.sendStatus(200);
           }
 
-          // Получаем оригинальное сообщение по row
           const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
             action: 'getOriginalMessageId',
             row
           });
           const originalMessageId = originalIdRes.data.message_id;
 
-          // Записываем статус "В работе" и исполнителя в таблицу через GAS
           await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
-
-          // Обновляем исходное сообщение с новым статусом и кнопками действий
           const updatedText = `${message.text.replace(/🟢 В работе\n👷 Исполнитель:.*?\n?/s, '')}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
-
           const buttons = {
             inline_keyboard: [
               [
@@ -109,17 +102,16 @@ module.exports = (app, userStates) => {
               ]
             ]
           };
-
           try {
-            await editMessageText(chatId, originalMessageId, updatedText, buttons);
-          } catch (err) {
-            console.warn('⚠️ Не удалось обновить исходное сообщение. Отправляем новое с кнопками.', err.response?.data || err.message);
-            const msgId = await sendMessage(chatId, updatedText, { reply_markup: buttons });
-            userStates[chatId].sourceMessageId = msgId;
-          }
+  await editMessageText(chatId, originalMessageId, updatedText, buttons);
+} catch (err) {
+  console.warn('⚠️ Не удалось обновить исходное сообщение. Отправляем новое с кнопками.');
+  const msgId = await sendMessage(chatId, updatedText, { reply_markup: buttons });
+  userStates[chatId].sourceMessageId = msgId;
+}
 
           userStates[chatId].executor = executor;
-          userStates[chatId].sourceMessageId = originalMessageId;
+          userStates[chatId].sourceMessageId = messageId;
           userStates[chatId].originalMessageId = originalMessageId;
           return res.sendStatus(200);
         }
@@ -136,7 +128,7 @@ module.exports = (app, userStates) => {
             stage: 'awaiting_photo',
             messageId,
             serviceMessages: [],
-            sourceMessageId: originalMessageId,
+            sourceMessageId: messageId,
             executor: userStates[chatId]?.executor || null,
             originalMessageId
           };
@@ -151,19 +143,8 @@ module.exports = (app, userStates) => {
         const chatId = msg.chat.id;
         const text = msg.text;
         const msgId = msg.message_id;
-
-        // Если это новая заявка (пример: содержит #номер), сразу отправляем кнопки выбора исполнителя
-        const row = extractRowNumber(text);
-        if (row && !userStates[chatId]) {
-          const keyboard = buildExecutorButtons(row);
-          const msgIdExec = await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
-            reply_markup: keyboard
-          });
-          userStates[chatId] = { row, sourceMessageId: msgIdExec, serviceMessages: [] };
-          return res.sendStatus(200);
-        }
-
         const state = userStates[chatId];
+
         if (!state) return res.sendStatus(200);
 
         if (state.awaiting_manual_executor) {
@@ -235,8 +216,7 @@ module.exports = (app, userStates) => {
             `✅ Статус: Выполнено\n` +
             `⏱ Просрочка: ${result.delay || 0} дн.`;
 
-          const finalMsgId = await sendMessage(chatId, summaryText, { reply_to_message_id: originalMessageId });
-
+          await sendMessage(chatId, summaryText, { reply_to_message_id: originalMessageId });
           await editMessageText(chatId, originalMessageId, `📌 Заявка закрыта\n\n${result.originalText || ''}`, { inline_keyboard: [] });
 
           setTimeout(async () => {
@@ -249,7 +229,7 @@ module.exports = (app, userStates) => {
               }
               const drivePhoto = r.data.url;
               const replacedText = summaryText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
-              await editMessageText(chatId, finalMsgId, replacedText);
+              await sendMessage(chatId, replacedText, { reply_to_message_id: originalMessageId });
             } catch (err) {
               console.error(`❌ Ошибка при обновлении ссылки:`, err.response?.data || err.message);
             }
@@ -262,8 +242,6 @@ module.exports = (app, userStates) => {
           delete userStates[chatId];
           return res.sendStatus(200);
         }
-
-        return res.sendStatus(200);
       }
 
       res.sendStatus(200);
