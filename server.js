@@ -76,7 +76,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 // 🚀 Автостарт при запуске сервера
-checkPendingRequestsAndSend();
+checkPendingRequestsAndSend(); // при старте
+// 📦 Каждые 2 минуты
+setInterval(checkPendingRequestsAndSend, 2 * 60 * 1000);
 
 // 🔊 Запуск Express сервера
 app.listen(PORT, () => {
