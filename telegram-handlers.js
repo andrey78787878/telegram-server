@@ -217,6 +217,9 @@ module.exports = (app, userStates) => {
           const comment = text.trim();
           const { row, photo, sum, username, messageId, serviceMessages } = state;
 
+          // Добавляем сообщение пользователя с комментарием в serviceMessages для удаления
+          serviceMessages.push(userMessageId);
+
           const { data: { result } } = await axios.post(GAS_WEB_APP_URL, {
             action: 'updateAfterCompletion',
             row,
@@ -237,8 +240,10 @@ module.exports = (app, userStates) => {
             `✅ Статус: Выполнено\n` +
             `⏱ Просрочка: ${result.delay || 0} дн.`;
 
+          // Обновляем финальное сообщение с итогами (НЕ удаляем его!)
           await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
+          // Через 60 секунд подменяем ссылку на фото на ссылку с Google Диска
           setTimeout(async () => {
             try {
               const driveUrlRes = await axios.post(GAS_WEB_APP_URL, {
@@ -252,17 +257,23 @@ module.exports = (app, userStates) => {
             }
           }, 60000);
 
-          // Удаляем только сервисные сообщения, НЕ финальное сообщение
+          // --- ОТДЕЛЬНАЯ ЗАЩИТА ОТ АВТОМАТИЧЕСКОГО УДАЛЕНИЯ ФИНАЛЬНОГО СООБЩЕНИЯ ---
+          // Удаляем ТОЛЬКО сервисные сообщения и ответы пользователя на запросы,
+          // но НЕ удаляем финальное сообщение с messageId.
           setTimeout(() => {
             const messagesToDelete = [...(serviceMessages || [])];
             messagesToDelete.forEach(msgId => {
-              axios.post(`${TELEGRAM_API}/deleteMessage`, {
-                chat_id: chatId,
-                message_id: msgId
-              }).catch(() => {});
+              // Защита — если ID совпадает с финальным сообщением, не удалять
+              if (msgId !== messageId) {
+                axios.post(`${TELEGRAM_API}/deleteMessage`, {
+                  chat_id: chatId,
+                  message_id: msgId
+                }).catch(() => {});
+              }
             });
           }, 20000);
 
+          // Очищаем состояние пользователя
           delete userStates[chatId];
           return res.sendStatus(200);
         }
