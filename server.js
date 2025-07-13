@@ -65,6 +65,16 @@ async function checkPendingRequestsAndSend() {
   }
 }
 
+// ✅ ДОБАВЬ ЭТО: ручной запуск отправки
+app.post('/webhook', async (req, res) => {
+  const { action } = req.body;
+  if (action === 'sendPending') {
+    await checkPendingRequestsAndSend();
+    return res.send('✅ Заявки успешно отправлены');
+  }
+  res.status(400).send('❌ Неверный action');
+});
+
 // 🚀 Автостарт при запуске сервера
 checkPendingRequestsAndSend();
 
@@ -73,8 +83,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
 
+// 📦 Подключение логики Telegram
 const setupTelegramHandlers = require('./telegram-handlers');
 setupTelegramHandlers(app, userStates);
-
-// 📤 Экспорт функции для cron (если потребуется использовать в других модулях)
-module.exports = { checkPendingRequestsAndSend };
