@@ -95,7 +95,6 @@ module.exports = (app, userStates) => {
             reply_markup: keyboard
           });
 
-          // удаляем сообщение с кнопками выбора
           setTimeout(() => {
             axios.post(`${TELEGRAM_API}/deleteMessage`, {
               chat_id: chatId,
@@ -216,7 +215,13 @@ module.exports = (app, userStates) => {
           const { row, photo, sum, username, messageId, serviceMessages } = state;
 
           const { data: { result } } = await axios.post(GAS_WEB_APP_URL, {
-            data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId }
+            action: 'updateAfterCompletion',
+            row,
+            photoUrl: photo,
+            sum,
+            comment,
+            executor: username,
+            message_id: messageId
           });
 
           const updatedText = `📌 Заявка #${row} закрыта.\n\n` +
