@@ -1,8 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -21,6 +19,7 @@ async function checkPendingRequestsAndSend() {
   try {
     const res = await axios.post(GAS_WEB_APP_URL, { action: 'getPendingMessages' });
     const pending = res.data;
+
     if (!pending || !Array.isArray(pending)) {
       console.log('ℹ️ Нет заявок для отправки.');
       return;
@@ -32,16 +31,16 @@ async function checkPendingRequestsAndSend() {
         initiator, phone, deadline
       } = rowObj;
 
-      const message = 📍 <b>Заявка #${row}</b>\n\n🍕 <b>Пиццерия:</b> ${pizzaria}\n🔧 <b>Классификация:</b> ${classif}\n📂 <b>Категория:</b> ${category}\n📋 <b>Проблема:</b> ${problem}\n👤 <b>Инициатор:</b> ${initiator}\n📞 <b>Тел:</b> ${phone}\n🕓 <b>Срок:</b> ${deadline};
+      const message = `📍 <b>Заявка #${row}</b>\n\n🍕 <b>Пиццерия:</b> ${pizzaria}\n🔧 <b>Классификация:</b> ${classif}\n📂 <b>Категория:</b> ${category}\n📋 <b>Проблема:</b> ${problem}\n👤 <b>Инициатор:</b> ${initiator}\n📞 <b>Тел:</b> ${phone}\n🕓 <b>Срок:</b> ${deadline}`;
 
       const keyboard = {
         inline_keyboard: [
-          [{ text: 'Принять в работу 🟢', callback_data: in_progress:${row} }]
+          [{ text: 'Принять в работу 🟢', callback_data: `in_progress:${row}` }]
         ]
       };
 
       try {
-        const resMsg = await axios.post(${TELEGRAM_API}/sendMessage, {
+        const resMsg = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: TELEGRAM_CHAT_ID,
           text: message,
           parse_mode: 'HTML',
@@ -56,9 +55,9 @@ async function checkPendingRequestsAndSend() {
           message_id
         });
 
-        console.log(✅ Заявка #${row} отправлена);
+        console.log(`✅ Заявка #${row} отправлена`);
       } catch (err) {
-        console.error(❌ Ошибка при отправке заявки #${row}:, err.response?.data || err.message);
+        console.error(`❌ Ошибка при отправке заявки #${row}:`, err.response?.data || err.message);
       }
     }
   } catch (err) {
@@ -71,8 +70,8 @@ checkPendingRequestsAndSend();
 
 // 🔊 Запуск Express сервера
 app.listen(PORT, () => {
-  console.log(🚀 Сервер запущен на порту ${PORT});
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
 
-// 📤 Экспорт функции для cron
+// 📤 Экспорт функции для cron (если потребуется использовать в других модулях)
 module.exports = { checkPendingRequestsAndSend };
