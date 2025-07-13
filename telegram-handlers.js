@@ -41,7 +41,7 @@ module.exports = (app, userStates) => {
       message_id: messageId,
       text,
       parse_mode: 'HTML',
-      reply_markup
+      ...(reply_markup && { reply_markup })
     });
   }
 
@@ -63,12 +63,20 @@ module.exports = (app, userStates) => {
       console.log('📩 Получен update:', JSON.stringify(body, null, 2));
 
       if (body.callback_query) {
+        console.log('🔘 Обработка callback_query...');
         const { data: raw, message, from } = body.callback_query;
         const chatId = message.chat.id;
         const messageId = message.message_id;
         const username = '@' + (from.username || from.first_name);
 
-        const parts = raw.startsWith('{') ? JSON.parse(raw) : raw.split(':');
+        let parts;
+        try {
+          parts = raw.startsWith('{') ? JSON.parse(raw) : raw.split(':');
+        } catch (err) {
+          console.error('❌ Ошибка парсинга callback_data:', raw, err);
+          return res.sendStatus(200); // Не возвращай 400 в Telegram
+        }
+
         const action = parts.action || parts[0];
         const row = Number(parts.row || parts[1]);
         const executor = parts.executor || parts[2] || null;
@@ -166,7 +174,6 @@ module.exports = (app, userStates) => {
         const state = userStates[chatId];
 
         if (!state) return res.sendStatus(200);
-
         state.lastUserMessageId = userMessageId;
 
         if (state.stage === 'awaiting_executor_name') {
@@ -174,7 +181,9 @@ module.exports = (app, userStates) => {
           await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row: state.row, executor } });
           const updatedText = `${state.originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
           await editMessageText(chatId, state.messageId, updatedText, buildFollowUpButtons(state.row));
-          await sendMessage(chatId, `✅ Заявка #${state.row} принята в работу исполнителем ${executor}`, { reply_to_message_id: state.messageId });
+          await sendMessage(chatId, `✅ Заявка #${state.row} принята в работу исполнителем ${executor}`, {
+            reply_to_message_id: state.messageId
+          });
           delete userStates[chatId];
           return res.sendStatus(200);
         }
@@ -220,7 +229,6 @@ module.exports = (app, userStates) => {
 
           await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
 
-          // Обновление ссылки на Google Диск через 60 сек.
           setTimeout(async () => {
             try {
               const driveUrlRes = await axios.post(GAS_WEB_APP_URL, {
@@ -234,7 +242,6 @@ module.exports = (app, userStates) => {
             }
           }, 60000);
 
-          // Удаление сервисных сообщений
           setTimeout(() => {
             [...(serviceMessages || []), userMessageId].forEach(msgId => {
               axios.post(`${TELEGRAM_API}/deleteMessage`, {
