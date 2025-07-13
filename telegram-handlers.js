@@ -84,7 +84,7 @@ module.exports = (app, userStates) => {
             sendMessage(chatId, 'Введите имя подрядчика вручную:');
             return res.sendStatus(200);
           }
-          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: messageId });
+          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: userStates[chatId]?.sourceMessageId || messageId });
           const updatedText = `${message.text.replace(/🟢 В работе\n👷 Исполнитель:.*?\n?/s, '')}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`.trim();
           const buttons = {
             inline_keyboard: [
@@ -107,7 +107,8 @@ module.exports = (app, userStates) => {
             stage: 'awaiting_photo',
             messageId,
             serviceMessages: [],
-            sourceMessageId: messageId
+            sourceMessageId: userStates[chatId]?.sourceMessageId || messageId,
+            executor: userStates[chatId]?.executor || null
           };
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения.');
           userStates[chatId].serviceMessages.push(prompt);
@@ -146,9 +147,7 @@ module.exports = (app, userStates) => {
         }
 
         if (state.stage === 'awaiting_sum') {
-          if (!/^
-?
-?\d+$/.test(text)) {
+          if (!/^\d+$/.test(text)) {
             const warn = await sendMessage(chatId, '❗ Введите сумму цифрами.');
             state.serviceMessages.push(warn);
             return res.sendStatus(200);
@@ -164,29 +163,34 @@ module.exports = (app, userStates) => {
         if (state.stage === 'awaiting_comment') {
           const comment = text;
           state.serviceMessages.push(msgId);
-          const { row, sum, photo, sourceMessageId } = state;
+          const { row, sum, photo, sourceMessageId, executor } = state;
 
           console.log(`✏️ Обновляем заявку #${row} с фото, суммой и комментарием`);
           console.log(`ℹ️ Используемая ссылка на фото: ${photo}`);
 
-          const response = await axios.post(GAS_WEB_APP_URL, {
-            action: 'updateAfterCompletion',
-            row,
-            sum,
-            comment,
-            photoUrl: photo,
-            executor: state.executor,
-            message_id: sourceMessageId
-          });
+          let result = {};
+          try {
+            const response = await axios.post(GAS_WEB_APP_URL, {
+              action: 'updateAfterCompletion',
+              row,
+              sum,
+              comment,
+              photoUrl: photo,
+              executor,
+              message_id: sourceMessageId
+            });
+            result = response.data.result || {};
+          } catch (err) {
+            console.error('❌ Ошибка обработки webhook:', err);
+          }
 
-          const result = response.data.result;
           const updatedText = `📌 Заявка #${row} закрыта.\n\n` +
-            `📍 Пиццерия: ${result.branch}\n` +
-            `📋 Проблема: ${result.problem}\n` +
+            `📍 Пиццерия: ${result.branch || '–'}\n` +
+            `📋 Проблема: ${result.problem || '–'}\n` +
             `💬 Комментарий: ${comment}\n` +
             `📎 Фото: <a href=\"${photo || 'https://google.com'}\">ссылка</a>\n` +
             `💰 Сумма: ${sum} сум\n` +
-            `👤 Исполнитель: ${state.executor}\n` +
+            `👤 Исполнитель: ${executor}\n` +
             `✅ Статус: Выполнено\n` +
             `⏱ Просрочка: ${result.delay || 0} дн.`;
 
@@ -208,7 +212,6 @@ module.exports = (app, userStates) => {
             }
           }, 180000);
 
-          // Удаление сервисных сообщений
           setTimeout(() => {
             state.serviceMessages.forEach(mid => deleteMessage(chatId, mid, sourceMessageId));
           }, 30000);
