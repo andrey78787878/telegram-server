@@ -114,6 +114,18 @@ module.exports = (app, userStates) => {
           userStates[chatId].serviceMessages.push(prompt);
           return res.sendStatus(200);
         }
+
+        if (action === 'delayed' || action === 'cancelled') {
+          await axios.post(GAS_WEB_APP_URL, {
+            action,
+            row,
+            executor: username
+          });
+          const statusText = action === 'delayed' ? '⏳ Ожидает поставки' : '❌ Отменена';
+          const updated = `${message.text}\n\n📌 Статус: ${statusText}\n👤 Исполнитель: ${username}`;
+          await editMessageText(chatId, messageId, updated, { inline_keyboard: [] });
+          return res.sendStatus(200);
+        }
       }
 
       if (body.message) {
@@ -184,7 +196,8 @@ module.exports = (app, userStates) => {
             console.error('❌ Ошибка обработки webhook:', err);
           }
 
-          const summaryText = `📌 Заявка #${row} закрыта.\n\n` +
+          // Отправляем новое финальное сообщение с reply_to_message_id = sourceMessageId (материнское сообщение)
+          const finalMessageText = `📌 Заявка #${row} закрыта.\n\n` +
             `📍 Пиццерия: ${result.branch || '–'}\n` +
             `📋 Проблема: ${result.problem || '–'}\n` +
             `💬 Комментарий: ${comment}\n` +
@@ -194,7 +207,17 @@ module.exports = (app, userStates) => {
             `✅ Статус: Выполнено\n` +
             `⏱ Просрочка: ${result.delay || 0} дн.`;
 
-          await sendMessage(chatId, summaryText);
+          await sendMessage(chatId, finalMessageText, {
+            reply_to_message_id: sourceMessageId,
+            disable_web_page_preview: true
+          });
+
+          // Редактируем материнское сообщение: добавляем в начало "📌 Заявка закрыта" и убираем кнопки
+          let updatedParentText = message.text || '';
+          if (!updatedParentText.startsWith('📌 Заявка закрыта')) {
+            updatedParentText = '📌 Заявка закрыта\n\n' + updatedParentText;
+          }
+          await editMessageText(chatId, sourceMessageId, updatedParentText, { inline_keyboard: [] });
 
           setTimeout(async () => {
             console.log(`⏳ Обновляем ссылку на фото на Google Диске для заявки #${row}`);
@@ -205,8 +228,9 @@ module.exports = (app, userStates) => {
                 return;
               }
               const drivePhoto = r.data.url;
-              const replacedText = summaryText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
-              await sendMessage(chatId, replacedText);
+              const replacedText = finalMessageText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
+              // Обновление финального сообщения по message_id не реализовано, потому что
+              // id финального сообщения не сохраняется, но можно расширить по желанию
             } catch (err) {
               console.error(`❌ Ошибка при обновлении ссылки:`, err.response?.data || err.message);
             }
@@ -214,7 +238,7 @@ module.exports = (app, userStates) => {
 
           setTimeout(() => {
             state.serviceMessages.forEach(mid => deleteMessage(chatId, mid, sourceMessageId));
-          }, 30000);
+          }, 20000);
 
           delete userStates[chatId];
           return res.sendStatus(200);
