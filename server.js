@@ -3,17 +3,6 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { google } = require('googleapis');
-const credentialsPath = '/etc/secrets/credentials.json';
-const SERVICE_ACCOUNT_FILE = "/etc/secrets/credentials.json";
-
-});
-
-if (!fs.existsSync(credentialsPath)) {
-  throw new Error(`Файл ${credentialsPath} не найден. Проверьте подключение секрета на Render.`);
-}
-
-
 const app = express();
 app.use(express.json());
 
@@ -25,12 +14,6 @@ const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const PORT = process.env.PORT || 3000;
 
 const userStates = {};
-
-const auth = new google.auth.GoogleAuth({
-  keyFile: '/etc/secrets/credentials.json',
-  scopes: ['https://www.googleapis.com/auth/drive']
-});
-const driveService = google.drive({ version: 'v3', auth });
 
 async function uploadToDriveFromUrl(fileUrl, fileName) {
   const tempPath = path.join(__dirname, fileName);
