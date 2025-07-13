@@ -247,9 +247,6 @@ if (state.stage === 'awaiting_photo' && body.message.photo) {
   }
 });
 
-const { router: authRouter } = require('./auth');
-app.use(authRouter);
-
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });
