@@ -1,3 +1,4 @@
+// telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
   const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -56,14 +57,12 @@ module.exports = (app, userStates) => {
     userStates[chatId].serviceMessages.push(msgId);
   }
 
-  // ✅ ОБРАБОТЧИК WEBHOOK
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
       console.log('📩 Получен update:', JSON.stringify(body, null, 2));
 
       if (body.callback_query) {
-        console.log('🔘 Обработка callback_query...');
         const { data: raw, message, from } = body.callback_query;
         const chatId = message.chat.id;
         const messageId = message.message_id;
@@ -74,7 +73,7 @@ module.exports = (app, userStates) => {
           parts = raw.startsWith('{') ? JSON.parse(raw) : raw.split(':');
         } catch (err) {
           console.error('❌ Ошибка парсинга callback_data:', raw, err);
-          return res.sendStatus(200); // Не возвращай 400 в Telegram
+          return res.sendStatus(200);
         }
 
         const action = parts.action || parts[0];
@@ -89,11 +88,21 @@ module.exports = (app, userStates) => {
           } catch {
             userStates[chatId].originalText = message.text;
           }
+
           const keyboard = buildExecutorButtons(row);
-          await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
+          const infoMsgId = await sendMessage(chatId, `Выберите исполнителя для заявки #${row}:`, {
             reply_to_message_id: messageId,
             reply_markup: keyboard
           });
+
+          // удаляем сообщение с кнопками выбора
+          setTimeout(() => {
+            axios.post(`${TELEGRAM_API}/deleteMessage`, {
+              chat_id: chatId,
+              message_id: infoMsgId
+            }).catch(() => {});
+          }, 60000);
+
           return res.sendStatus(200);
         }
 
@@ -106,9 +115,8 @@ module.exports = (app, userStates) => {
 
           const originalText = userStates[chatId]?.originalText || message.text;
           const cleanedText = originalText
-            .replace(/🟢 Заявка #\d+ в работе\.\n👷 Исполнитель: @\S+\n*/g, '')
-            .replace(/✅ Заявка #\d+ закрыта\..*?\n*/gs, '')
-            .replace(/🟢 В работе\n👷 Исполнитель:.*(\n)?/g, '')
+            .replace(/🟢 В работе.*\n?/g, '')
+            .replace(/👷 Исполнитель:.*\n?/g, '')
             .trim();
 
           const updatedText = `${cleanedText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
@@ -125,16 +133,6 @@ module.exports = (app, userStates) => {
           };
 
           await editMessageText(chatId, messageId, updatedText, keyboard);
-          const infoMsg = await sendMessage(chatId, `📌 Заявка №${row} принята в работу исполнителем ${executor}`, {
-            reply_to_message_id: messageId
-          });
-
-          setTimeout(() => {
-            axios.post(`${TELEGRAM_API}/deleteMessage`, {
-              chat_id: chatId,
-              message_id: infoMsg
-            }).catch(() => {});
-          }, 60000);
 
           await axios.post(GAS_WEB_APP_URL, {
             action: 'in_progress',
@@ -158,10 +156,14 @@ module.exports = (app, userStates) => {
           return res.sendStatus(200);
         }
 
-        if (action === 'delayed' || action === 'cancelled') {
-          await axios.post(GAS_WEB_APP_URL, { data: { action, row, executor: username } });
-          const status = action === 'delayed' ? 'Ожидает поставки' : 'Отменена';
-          const updated = `${message.text}\n\n📌 Статус: ${status}\n👤 Исполнитель: ${username}`;
+        if (action === 'delayed' || action === 'cancel') {
+          await axios.post(GAS_WEB_APP_URL, {
+            action,
+            row,
+            executor: username
+          });
+          const statusText = action === 'delayed' ? '⏳ Ожидает поставки' : '❌ Отменена';
+          const updated = `${message.text}\n\n📌 Статус: ${statusText}\n👤 Исполнитель: ${username}`;
           await editMessageText(chatId, messageId, updated);
           return res.sendStatus(200);
         }
@@ -178,7 +180,7 @@ module.exports = (app, userStates) => {
 
         if (state.stage === 'awaiting_executor_name') {
           const executor = text.trim();
-          await axios.post(GAS_WEB_APP_URL, { data: { action: 'markInProgress', row: state.row, executor } });
+          await axios.post(GAS_WEB_APP_URL, { action: 'markInProgress', row: state.row, executor });
           const updatedText = `${state.originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
           await editMessageText(chatId, state.messageId, updatedText, buildFollowUpButtons(state.row));
           await sendMessage(chatId, `✅ Заявка #${state.row} принята в работу исполнителем ${executor}`, {
@@ -213,21 +215,15 @@ module.exports = (app, userStates) => {
           const comment = text.trim();
           const { row, photo, sum, username, messageId, serviceMessages } = state;
 
-        const { data: result } = await axios.post(GAS_WEB_APP_URL, {
-  action: 'updateAfterCompletion',
-  row,
-  photoUrl: photo,
-  sum,
-  comment,
-  executor: username,
-  message_id: messageId
-});
+          const { data: { result } } = await axios.post(GAS_WEB_APP_URL, {
+            data: { action: 'updateAfterCompletion', row, photoUrl: photo, sum, comment, executor: username, message_id: messageId }
+          });
 
           const updatedText = `📌 Заявка #${row} закрыта.\n\n` +
             `📍 Пиццерия: ${result.branch}\n` +
             `📋 Проблема: ${result.problem}\n` +
             `💬 Комментарий: ${comment}\n` +
-            `📎 Фото: <a href="${photo}">ссылка</a>\n` +
+            `📎 Фото: <a href=\"${photo}\">ссылка</a>\n` +
             `💰 Сумма: ${sum} сум\n` +
             `👤 Исполнитель: ${username}\n` +
             `✅ Статус: Выполнено\n` +
@@ -241,7 +237,7 @@ module.exports = (app, userStates) => {
                 action: 'getDrivePhotoUrl', row
               });
               const drivePhoto = driveUrlRes.data.url;
-              const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href="${drivePhoto}">ссылка</a>`);
+              const replacedText = updatedText.replace(/<a href=.*?>ссылка<\/a>/, `<a href=\"${drivePhoto}\">ссылка</a>`);
               await editMessageText(chatId, messageId, replacedText, { inline_keyboard: [] });
             } catch (err) {
               console.error('❌ Ошибка при обновлении ссылки на Диск:', err);
