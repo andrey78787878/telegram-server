@@ -28,20 +28,15 @@ module.exports = (app, userStates) => {
 
   async function editMessageText(chatId, messageId, text, reply_markup) {
     try {
-      const updatedText = text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-
       await axios.post(`${TELEGRAM_API}/editMessageText`, {
         chat_id: chatId,
         message_id: messageId,
-        text: updatedText,
+        text,
         parse_mode: 'HTML',
         ...(reply_markup && { reply_markup })
       });
     } catch (error) {
-      console.error(`Ошибка изменения сообщения:`, error.message);
+      console.error('Ошибка изменения сообщения:', error.message);
     }
   }
 
@@ -52,13 +47,19 @@ module.exports = (app, userStates) => {
         message_id: msgId
       });
     } catch (e) {
-      console.warn(`Не удалось удалить сообщение:`, e.message);
+      console.warn('Не удалось удалить сообщение:', e.message);
     }
   }
 
-  async function cleanupServiceMessages(chatId, state) {
-    if (state.serviceMessages?.length) {
-      await Promise.all(state.serviceMessages.map(msgId => 
+  async function cleanupMessages(chatId, state) {
+    // Удаляем все сервисные сообщения и ответы пользователя
+    const messagesToDelete = [
+      ...(state.serviceMessages || []),
+      ...(state.userResponses || [])
+    ];
+    
+    if (messagesToDelete.length) {
+      await Promise.all(messagesToDelete.map(msgId => 
         deleteMessage(chatId, msgId).catch(console.error)
       ));
     }
@@ -69,6 +70,10 @@ module.exports = (app, userStates) => {
       const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${photo[photo.length - 1].file_id}`);
       const filePath = fileRes.data.result.file_path;
       state.photoUrl = `${TELEGRAM_FILE_API}/${filePath}`;
+      
+      // Сохраняем ID сообщения с фото (ответ пользователя)
+      if (!state.userResponses) state.userResponses = [];
+      state.userResponses.push(photo.message_id);
 
       const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
       state.serviceMessages.push(prompt);
@@ -79,9 +84,12 @@ module.exports = (app, userStates) => {
     }
   }
 
-  async function handleAmount(chatId, amount, state) {
+  async function handleAmount(chatId, text, messageId, state) {
     try {
-      state.amount = amount;
+      state.amount = text;
+      // Сохраняем ID сообщения с суммой (ответ пользователя)
+      state.userResponses.push(messageId);
+
       const prompt = await sendMessage(chatId, '📝 Введите комментарий к работе:');
       state.serviceMessages.push(prompt);
       state.stage = 'awaiting_comment';
@@ -90,8 +98,12 @@ module.exports = (app, userStates) => {
     }
   }
 
-  async function completeRequest(chatId, state) {
+  async function completeRequest(chatId, text, messageId, state) {
     try {
+      state.comment = text;
+      // Сохраняем ID сообщения с комментарием (ответ пользователя)
+      state.userResponses.push(messageId);
+
       const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
         action: 'getRequestText',
         row: state.row
@@ -109,21 +121,24 @@ module.exports = (app, userStates) => {
 
 ${originalText}`;
 
+      // Отправляем все данные в Google Sheets
       await axios.post(GAS_WEB_APP_URL, {
         action: 'complete',
         row: state.row,
-        photoUrl: state.photoUrl,
+        photoUrl: state.photoUrl,  // Запись в ячейку O
+        status: 'Выполнено',      // Обновление статуса в ячейке K
         amount: state.amount,
         comment: state.comment,
         message_id: state.originalMessageId
       });
 
       await editMessageText(chatId, state.originalMessageId, updatedText);
-      await cleanupServiceMessages(chatId, state);
+      await cleanupMessages(chatId, state);
       delete userStates[chatId];
       
     } catch (error) {
       await sendMessage(chatId, '⚠️ Ошибка при завершении заявки.');
+      console.error('Ошибка завершения:', error);
     }
   }
 
@@ -221,25 +236,34 @@ ${originalText}`;
             row,
             stage: 'awaiting_photo',
             originalMessageId,
-            serviceMessages: []
+            serviceMessages: [],
+            userResponses: []
           };
 
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
-          userStates[chatId].serviceMessages.push(prompt);
+          state.serviceMessages.push(prompt);
           await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
 
           return res.sendStatus(200);
         }
 
         if (action === 'delayed') {
-          await axios.post(GAS_WEB_APP_URL, { action: 'delayed', row });
+          await axios.post(GAS_WEB_APP_URL, { 
+            action: 'delayed', 
+            row,
+            status: 'Ожидает поставки' // Обновление статуса
+          });
           const updatedText = `${message.text}\n\n⏳ Ожидает поставки`;
           await editMessageText(chatId, messageId, updatedText);
           return res.sendStatus(200);
         }
 
         if (action === 'cancelled') {
-          await axios.post(GAS_WEB_APP_URL, { action: 'cancelled', row });
+          await axios.post(GAS_WEB_APP_URL, { 
+            action: 'cancelled', 
+            row,
+            status: 'Отменено' // Обновление статуса
+          });
           const updatedText = `${message.text}\n\n❌ Отменено`;
           await editMessageText(chatId, messageId, updatedText);
           return res.sendStatus(200);
@@ -283,7 +307,7 @@ ${originalText}`;
           };
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
-          await cleanupServiceMessages(chatId, state);
+          await cleanupMessages(chatId, state);
 
           userStates[chatId] = {
             ...state,
@@ -302,13 +326,12 @@ ${originalText}`;
         }
 
         if (state.stage === 'awaiting_amount') {
-          await handleAmount(chatId, text, state);
+          await handleAmount(chatId, text, message_id, state);
           return res.sendStatus(200);
         }
 
         if (state.stage === 'awaiting_comment') {
-          state.comment = text;
-          await completeRequest(chatId, state);
+          await completeRequest(chatId, text, message_id, state);
           return res.sendStatus(200);
         }
 
