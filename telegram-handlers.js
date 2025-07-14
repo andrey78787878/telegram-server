@@ -126,7 +126,7 @@ module.exports = (app, userStates) => {
               row
             }),
             axios.post(GAS_WEB_APP_URL, {
-              action: 'getOriginalText',
+              action: 'getRequestText',
               row
             })
           ]);
@@ -134,7 +134,7 @@ module.exports = (app, userStates) => {
           console.log('📩 Ответ от GAS:', originalIdRes.data, originalTextRes.data);
 
           const originalMessageId = originalIdRes.data?.message_id;
-          const originalText = originalTextRes.data?.originalText || '';
+          const originalText = originalTextRes.data?.text || '';
 
           if (!originalMessageId) {
             console.error(`❌ GAS не вернул message_id для строки ${row}:`, originalIdRes.data);
