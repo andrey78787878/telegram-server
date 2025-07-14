@@ -85,7 +85,7 @@ module.exports = (app, userStates) => {
       });
 
       // Обновляем сообщение о завершении
-      const [originalTextRes] = await axios.post(GAS_WEB_APP_URL, {
+      const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
         action: 'getRequestText',
         row: state.row
       });
@@ -99,7 +99,7 @@ module.exports = (app, userStates) => {
       if (state.serviceMessages && state.serviceMessages.length > 0) {
         await Promise.all(state.serviceMessages.map(msgId => 
           deleteMessage(chatId, msgId, state.originalMessageId).catch(console.error)
-        );
+        ));
       }
 
       // Очищаем состояние
@@ -185,7 +185,12 @@ module.exports = (app, userStates) => {
           }
 
           console.log('📤 Отправляем статус "В работе" в GAS');
-          await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
+          await axios.post(GAS_WEB_APP_URL, { 
+            action: 'in_progress', 
+            row, 
+            executor, 
+            message_id: originalMessageId 
+          });
 
           const updatedText = `${originalText}\n\n<b>🟢 В работе</b>\n👷 <b>Исполнитель:</b> ${executor}`;
 
@@ -199,7 +204,6 @@ module.exports = (app, userStates) => {
             ]
           };
 
-          console.log('✏️ Обновляем исходное сообщение с кнопками');
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
 
           if (originalMessageId !== messageId) {
@@ -210,7 +214,8 @@ module.exports = (app, userStates) => {
             ...userStates[chatId],
             executor,
             sourceMessageId: originalMessageId,
-            originalMessageId
+            originalMessageId,
+            awaiting_manual_executor: false
           };
 
           return res.sendStatus(200);
@@ -249,7 +254,6 @@ module.exports = (app, userStates) => {
         }
 
         if (action === 'delayed') {
-          // Обработка статуса "Ожидает поставки"
           await axios.post(GAS_WEB_APP_URL, { action: 'delayed', row });
           const updatedText = `${message.text}\n\n<b>⏳ Ожидает поставки</b>`;
           await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
@@ -257,7 +261,6 @@ module.exports = (app, userStates) => {
         }
 
         if (action === 'cancelled') {
-          // Обработка отмены
           await axios.post(GAS_WEB_APP_URL, { action: 'cancelled', row });
           const updatedText = `${message.text}\n\n<b>❌ Отменено</b>`;
           await editMessageText(chatId, messageId, updatedText, { inline_keyboard: [] });
