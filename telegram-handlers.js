@@ -1,4 +1,4 @@
-// telegram-handlers.js
+// telegram-handlers.js// telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
   const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -43,7 +43,12 @@ module.exports = (app, userStates) => {
       });
       console.log(`✏️ Изменено сообщение ${messageId} в чате ${chatId}`);
     } catch (error) {
-      console.error(`❌ Ошибка изменения сообщения ${messageId}:`, error.response?.data || error.message);
+      const desc = error.response?.data?.description || error.message;
+      if (desc.includes('message is not modified')) {
+        console.log(`ℹ️ Сообщение ${messageId} не изменено (тот же текст/markup)`);
+      } else {
+        console.error(`❌ Ошибка изменения сообщения ${messageId}:`, error.response?.data || error.message);
+      }
     }
   }
 
@@ -119,8 +124,13 @@ module.exports = (app, userStates) => {
             })
           ]);
 
-          const originalMessageId = originalIdRes.data.message_id;
-          const originalText = originalTextRes.data.originalText || '';
+          const originalMessageId = originalIdRes.data?.message_id;
+          const originalText = originalTextRes.data?.originalText || '';
+
+          if (!originalMessageId) {
+            console.error(`❌ GAS не вернул message_id для строки ${row}:`, originalIdRes.data);
+            return res.sendStatus(200);
+          }
 
           await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
 
@@ -153,7 +163,12 @@ module.exports = (app, userStates) => {
             action: 'getOriginalMessageId',
             row
           });
-          const originalMessageId = originalIdRes.data.message_id;
+          const originalMessageId = originalIdRes.data?.message_id;
+
+          if (!originalMessageId) {
+            console.error(`❌ Не найден originalMessageId для строки ${row}`);
+            return res.sendStatus(200);
+          }
 
           userStates[chatId] = {
             row,
