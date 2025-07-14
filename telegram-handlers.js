@@ -1,10 +1,11 @@
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+
 module.exports = (app, userStates) => {
-  const axios = require('axios');
   const BOT_TOKEN = process.env.BOT_TOKEN;
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-  const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
   const DELAY_BEFORE_DELETE = 15000;
 
@@ -95,7 +96,7 @@ module.exports = (app, userStates) => {
       console.log('Информация о файле получена:', fileRes.data);
       
       const filePath = fileRes.data.result.file_path;
-      const photoUrl = `${TELEGRAM_FILE_API}/${filePath}`;
+      const photoUrl = `${TELEGRAM_API.replace('/bot', '/file/bot')}/${filePath}`;
       
       // Обновляем состояние
       userStates[chatId] = {
@@ -237,7 +238,7 @@ ${originalText}`;
 
         console.log(`Действие: ${action}, Строка: ${row}, Исполнитель: ${executor}`);
 
-        if (action === 'in_progress') {
+        if (action === 'show_executors') {
           await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
           
           const keyboard = buildExecutorButtons(row);
@@ -304,7 +305,7 @@ ${originalText}`;
             originalMessageId,
             serviceMessages: [],
             userResponses: [],
-            stage: 'awaiting_photo' // Добавляем этап ожидания фото
+            stage: 'awaiting_photo'
           };
         }
         else if (action === 'done') {
