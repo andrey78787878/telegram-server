@@ -1,4 +1,4 @@
-// telegram-handlers.js// telegram-handlers.js
+// telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
   const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -33,6 +33,10 @@ module.exports = (app, userStates) => {
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
+
+      console.log(`📝 Пытаемся изменить сообщение ${messageId}`);
+      console.log('➡️ Новый текст:', updatedText);
+      console.log('➡️ Новые кнопки:', JSON.stringify(reply_markup, null, 2));
 
       await axios.post(`${TELEGRAM_API}/editMessageText`, {
         chat_id: chatId,
@@ -89,8 +93,10 @@ module.exports = (app, userStates) => {
         console.log(`➡️ Callback: ${action}, row: ${row}, executor: ${executor}`);
 
         if (action === 'in_progress') {
+          console.log('🧼 Удаляем кнопку "Принято в работу"');
           await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
 
+          console.log('🧱 Показываем кнопки выбора исполнителя');
           const keyboard = buildExecutorButtons(row);
           const newText = message.text + '\n\nВыберите исполнителя:';
           await editMessageText(chatId, messageId, newText, keyboard);
@@ -113,9 +119,10 @@ module.exports = (app, userStates) => {
 
           console.log(`👤 Выбран исполнитель: ${executor}`);
 
+          console.log('📡 Запрашиваем данные у GAS');
           const [originalIdRes, originalTextRes] = await Promise.all([
             axios.post(GAS_WEB_APP_URL, {
-              action: 'getOriginalMessageId',
+              action: 'getMessageId',
               row
             }),
             axios.post(GAS_WEB_APP_URL, {
@@ -123,6 +130,8 @@ module.exports = (app, userStates) => {
               row
             })
           ]);
+
+          console.log('📩 Ответ от GAS:', originalIdRes.data, originalTextRes.data);
 
           const originalMessageId = originalIdRes.data?.message_id;
           const originalText = originalTextRes.data?.originalText || '';
@@ -132,6 +141,7 @@ module.exports = (app, userStates) => {
             return res.sendStatus(200);
           }
 
+          console.log('📤 Отправляем статус "В работе" в GAS');
           await axios.post(GAS_WEB_APP_URL, { action: 'in_progress', row, executor, message_id: originalMessageId });
 
           const updatedText = `${originalText}\n\n<b>🟢 В работе</b>\n👷 <b>Исполнитель:</b> ${executor}`;
@@ -145,6 +155,10 @@ module.exports = (app, userStates) => {
               ]
             ]
           };
+
+          console.log('✏️ Обновляем исходное сообщение с кнопками');
+          console.log('➡️ updatedText:', updatedText);
+          console.log('➡️ buttons:', JSON.stringify(buttons, null, 2));
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
 
@@ -160,7 +174,7 @@ module.exports = (app, userStates) => {
 
         if (action === 'done') {
           const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
-            action: 'getOriginalMessageId',
+            action: 'getMessageId',
             row
           });
           const originalMessageId = originalIdRes.data?.message_id;
