@@ -1,4 +1,5 @@
 // telegram-handlers.js
+// telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
   const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -119,6 +120,7 @@ module.exports = (app, userStates) => {
       state.comment = text;
       state.userResponses.push(messageId);
 
+      // Получаем оригинальный текст заявки
       const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
         action: 'getRequestText',
         row: state.row
@@ -126,6 +128,7 @@ module.exports = (app, userStates) => {
       
       const originalText = originalTextRes.data?.text || '';
       
+      // Формируем обновленный текст
       const updatedText = `✅ Выполнено
 👷 Исполнитель: ${state.executor}
 💰 Сумма: ${state.amount}
@@ -138,16 +141,20 @@ ${originalText}`;
 
       // Отправка данных в Google Sheets
       const gasResponse = await axios.post(GAS_WEB_APP_URL, {
-        action: 'complete',
+        action: 'updateAfterCompletion',
         row: state.row,
         photoUrl: state.photoUrl,
-        status: 'Выполнено',
-        amount: state.amount,
+        sum: state.amount,
         comment: state.comment,
+        executor: state.executor,
         message_id: state.originalMessageId
       });
 
       console.log('GAS Response:', gasResponse.data);
+
+      if (gasResponse.data.error) {
+        throw new Error(gasResponse.data.error);
+      }
 
       await editMessageText(chatId, state.originalMessageId, updatedText);
       await cleanupMessages(chatId, state);
@@ -198,12 +205,17 @@ ${originalText}`;
 
           if (!originalMessageId) return;
 
-          await axios.post(GAS_WEB_APP_URL, { 
-            action: 'in_progress', 
+          // Обновляем статус в Google Sheets
+          const markResponse = await axios.post(GAS_WEB_APP_URL, { 
+            action: 'markInProgress', 
             row, 
             executor, 
             message_id: originalMessageId 
           });
+
+          if (markResponse.data.error) {
+            throw new Error(markResponse.data.error);
+          }
 
           const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
           const buttons = {
@@ -228,11 +240,15 @@ ${originalText}`;
           };
         }
         else if (action === 'delayed') {
-          await axios.post(GAS_WEB_APP_URL, { 
-            action: 'delayed', 
+          const markResponse = await axios.post(GAS_WEB_APP_URL, { 
+            action: 'markInProgress', 
             row,
             status: 'Ожидает поставки'
           });
+
+          if (markResponse.data.error) {
+            throw new Error(markResponse.data.error);
+          }
           
           const buttons = buildDelayedButtons(row);
           const updatedText = `${message.text}\n\n⏳ Ожидает поставки`;
@@ -261,6 +277,15 @@ ${originalText}`;
           userStates[chatId].serviceMessages = [prompt];
           await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
         }
+        else if (action === 'cancelled') {
+          await axios.post(GAS_WEB_APP_URL, { 
+            action: 'markInProgress', 
+            row,
+            status: 'Отменено'
+          });
+          const updatedText = `${message.text}\n\n❌ Отменено`;
+          await editMessageText(chatId, messageId, updatedText);
+        }
       }
       else if (body.message) {
         const { chat, message_id, text, photo } = body.message;
@@ -280,12 +305,17 @@ ${originalText}`;
 
           if (!originalMessageId) return;
 
-          await axios.post(GAS_WEB_APP_URL, { 
-            action: 'in_progress', 
+          // Обновляем статус в Google Sheets
+          const markResponse = await axios.post(GAS_WEB_APP_URL, { 
+            action: 'markInProgress', 
             row: state.row, 
             executor: text, 
             message_id: originalMessageId 
           });
+
+          if (markResponse.data.error) {
+            throw new Error(markResponse.data.error);
+          }
 
           const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${text}`;
           const buttons = {
