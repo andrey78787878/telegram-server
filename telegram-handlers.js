@@ -7,8 +7,14 @@ module.exports = (app, userStates) => {
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
+  const DELAY_BEFORE_DELETE = 15000; // 15 секунд задержки перед удалением
 
-  // Функция для создания кнопок выбора исполнителя
+  // Функция с задержкой
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Создание кнопок исполнителей
   function buildExecutorButtons(row) {
     return {
       inline_keyboard: EXECUTORS.map(ex => [
@@ -17,7 +23,18 @@ module.exports = (app, userStates) => {
     };
   }
 
-  // Универсальная функция отправки сообщений
+  // Кнопки для статуса "Ожидает поставки"
+  function buildDelayedButtons(row) {
+    return {
+      inline_keyboard: [
+        [
+          { text: '✅ Выполнено', callback_data: `done:${row}` },
+          { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+        ]
+      ]
+    };
+  }
+
   async function sendMessage(chatId, text, options = {}) {
     try {
       const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -33,7 +50,6 @@ module.exports = (app, userStates) => {
     }
   }
 
-  // Функция редактирования сообщений
   async function editMessageText(chatId, messageId, text, reply_markup) {
     try {
       await axios.post(`${TELEGRAM_API}/editMessageText`, {
@@ -48,9 +64,9 @@ module.exports = (app, userStates) => {
     }
   }
 
-  // Функция удаления сообщений
-  async function deleteMessage(chatId, msgId) {
+  async function deleteMessageWithDelay(chatId, msgId) {
     try {
+      await delay(DELAY_BEFORE_DELETE);
       await axios.post(`${TELEGRAM_API}/deleteMessage`, {
         chat_id: chatId,
         message_id: msgId
@@ -60,7 +76,6 @@ module.exports = (app, userStates) => {
     }
   }
 
-  // Очистка всех временных сообщений
   async function cleanupMessages(chatId, state) {
     try {
       const messagesToDelete = [
@@ -70,7 +85,7 @@ module.exports = (app, userStates) => {
       
       if (messagesToDelete.length) {
         await Promise.all(messagesToDelete.map(msgId => 
-          deleteMessage(chatId, msgId)
+          deleteMessageWithDelay(chatId, msgId)
         ));
       }
     } catch (error) {
@@ -78,42 +93,37 @@ module.exports = (app, userStates) => {
     }
   }
 
-  // Обработка полученного фото
   async function handlePhoto(chatId, photo, messageId, state) {
     try {
-      // Удаляем предыдущие временные сообщения
-      await cleanupMessages(chatId, state);
-
-      // Получаем информацию о файле
+      console.log('Начало обработки фото...');
+      
+      // Получаем информацию о файле (используем самое качественное фото)
       const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${photo[photo.length - 1].file_id}`);
+      console.log('Информация о файле получена:', fileRes.data);
+      
       const filePath = fileRes.data.result.file_path;
       state.photoUrl = `${TELEGRAM_FILE_API}/${filePath}`;
       
       // Сохраняем ID сообщения с фото
       state.userResponses = [messageId];
 
-      // Запрашиваем сумму
+      // Запрашиваем сумму с задержкой перед удалением
       const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
       state.serviceMessages = [prompt];
       state.stage = 'awaiting_amount';
       
+      console.log('Обработка фото завершена');
     } catch (error) {
       console.error('Ошибка при обработке фото:', error);
       await sendMessage(chatId, '⚠️ Ошибка при обработке фото. Попробуйте еще раз.');
     }
   }
 
-  // Обработка введенной суммы
   async function handleAmount(chatId, text, messageId, state) {
     try {
-      // Удаляем предыдущие временные сообщения
-      await cleanupMessages(chatId, state);
-
       state.amount = text;
-      // Сохраняем ID сообщения с суммой
-      state.userResponses = [messageId];
-
-      // Запрашиваем комментарий
+      state.userResponses.push(messageId);
+      
       const prompt = await sendMessage(chatId, '📝 Введите комментарий к работе:');
       state.serviceMessages = [prompt];
       state.stage = 'awaiting_comment';
@@ -123,15 +133,10 @@ module.exports = (app, userStates) => {
     }
   }
 
-  // Завершение заявки
   async function completeRequest(chatId, text, messageId, state) {
     try {
-      // Удаляем все временные сообщения
-      await cleanupMessages(chatId, state);
-
       state.comment = text;
-      // Сохраняем ID сообщения с комментарием
-      state.userResponses = [messageId];
+      state.userResponses.push(messageId);
 
       // Получаем оригинальный текст заявки
       const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
@@ -153,7 +158,7 @@ module.exports = (app, userStates) => {
 ${originalText}`;
 
       // Отправляем все данные в Google Sheets
-      await axios.post(GAS_WEB_APP_URL, {
+      const gasResponse = await axios.post(GAS_WEB_APP_URL, {
         action: 'complete',
         row: state.row,
         photoUrl: state.photoUrl,
@@ -163,8 +168,13 @@ ${originalText}`;
         message_id: state.originalMessageId
       });
 
+      console.log('Ответ от Google Sheets:', gasResponse.data);
+
       // Обновляем сообщение
       await editMessageText(chatId, state.originalMessageId, updatedText);
+      
+      // Удаляем временные сообщения с задержкой
+      await cleanupMessages(chatId, state);
       
       // Очищаем состояние
       delete userStates[chatId];
@@ -175,28 +185,35 @@ ${originalText}`;
     }
   }
 
-  // Обработчик вебхука
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
+      console.log('Входящий webhook:', JSON.stringify(body, null, 2));
+      
+      // Быстрый ответ серверу Telegram
+      res.sendStatus(200);
 
-      // Обработка callback_query (нажатия кнопок)
       if (body.callback_query) {
         const { data: raw, message, from, id: callbackId } = body.callback_query;
         const chatId = message.chat.id;
         const messageId = message.message_id;
 
+        console.log(`Обработка callback: ${raw} в чате ${chatId}`);
+
         // Отвечаем на callback
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { 
-          callback_query_id: callbackId 
-        }).catch(console.error);
+        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+          callback_query_id: callbackId,
+          text: "Обрабатываю...",
+          show_alert: false
+        }).catch(e => console.error('Ошибка ответа на callback:', e));
 
         const parts = raw.split(':');
         const action = parts[0];
         const row = parts[1];
         const executor = parts[2];
 
-        // Обработка действия "Принято в работу"
+        console.log(`Действие: ${action}, Строка: ${row}, Исполнитель: ${executor}`);
+
         if (action === 'in_progress') {
           await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
           
@@ -210,22 +227,19 @@ ${originalText}`;
             serviceMessages: [],
             userResponses: []
           };
-          return res.sendStatus(200);
+          return;
         }
 
-        // Обработка выбора исполнителя
         if (action === 'select_executor') {
           if (!userStates[chatId]) userStates[chatId] = {};
 
-          // Ручной ввод исполнителя
           if (executor === 'Текстовой подрядчик') {
             userStates[chatId].awaiting_manual_executor = true;
             const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
             userStates[chatId].serviceMessages = [prompt];
-            return res.sendStatus(200);
+            return;
           }
 
-          // Получаем данные о заявке
           const [originalIdRes, originalTextRes] = await Promise.all([
             axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
             axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
@@ -234,9 +248,8 @@ ${originalText}`;
           const originalMessageId = originalIdRes.data?.message_id;
           const originalText = originalTextRes.data?.text || '';
 
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) return;
 
-          // Обновляем статус в Google Sheets
           await axios.post(GAS_WEB_APP_URL, { 
             action: 'in_progress', 
             row, 
@@ -244,7 +257,6 @@ ${originalText}`;
             message_id: originalMessageId 
           });
 
-          // Формируем обновленное сообщение
           const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
           const buttons = {
             inline_keyboard: [
@@ -258,31 +270,21 @@ ${originalText}`;
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
           
-          // Если это не исходное сообщение - очищаем кнопки
           if (originalMessageId !== messageId) {
             await editMessageText(chatId, messageId, message.text);
           }
 
-          // Сохраняем состояние
           userStates[chatId] = {
-            ...userStates[chatId],
             executor,
+            row,
             sourceMessageId: originalMessageId,
             originalMessageId,
-            awaiting_manual_executor: false,
             serviceMessages: [],
             userResponses: []
           };
-
-          return res.sendStatus(200);
         }
-
-        // Обработка действия "Выполнено"
-        if (action === 'done') {
-          // Проверяем, не начат ли уже процесс завершения
-          if (userStates[chatId]?.stage === 'awaiting_photo') {
-            return res.sendStatus(200);
-          }
+        else if (action === 'done') {
+          if (userStates[chatId]?.stage === 'awaiting_photo') return;
 
           const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
             action: 'getMessageId',
@@ -290,9 +292,8 @@ ${originalText}`;
           });
           const originalMessageId = originalIdRes.data?.message_id;
 
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) return;
 
-          // Инициализируем состояние для завершения заявки
           userStates[chatId] = {
             row,
             stage: 'awaiting_photo',
@@ -301,38 +302,22 @@ ${originalText}`;
             userResponses: []
           };
 
-          // Запрашиваем фото выполнения
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
           userStates[chatId].serviceMessages = [prompt];
-          
           await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
-
-          return res.sendStatus(200);
         }
-
-        // Обработка действия "Ожидает поставки"
-        if (action === 'delayed') {
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-              ]
-            ]
-          };
-
+        else if (action === 'delayed') {
           await axios.post(GAS_WEB_APP_URL, { 
             action: 'delayed', 
             row,
             status: 'Ожидает поставки'
           });
+          
+          const buttons = buildDelayedButtons(row);
           const updatedText = `${message.text}\n\n⏳ Ожидает поставки`;
           await editMessageText(chatId, messageId, updatedText, buttons);
-          return res.sendStatus(200);
         }
-
-        // Обработка действия "Отмена"
-        if (action === 'cancelled') {
+        else if (action === 'cancelled') {
           await axios.post(GAS_WEB_APP_URL, { 
             action: 'cancelled', 
             row,
@@ -340,19 +325,18 @@ ${originalText}`;
           });
           const updatedText = `${message.text}\n\n❌ Отменено`;
           await editMessageText(chatId, messageId, updatedText);
-          return res.sendStatus(200);
         }
       }
-
-      // Обработка обычных сообщений
-      if (body.message) {
+      else if (body.message) {
         const { chat, message_id, text, photo } = body.message;
         const chatId = chat.id;
         const state = userStates[chatId];
 
-        if (!state) return res.sendStatus(200);
+        if (!state) {
+          console.log('Состояние не найдено для чата:', chatId);
+          return;
+        }
 
-        // Ручной ввод исполнителя
         if (state.awaiting_manual_executor) {
           const [originalIdRes, originalTextRes] = await Promise.all([
             axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row: state.row }),
@@ -362,9 +346,8 @@ ${originalText}`;
           const originalMessageId = originalIdRes.data?.message_id;
           const originalText = originalTextRes.data?.text || '';
 
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) return;
 
-          // Обновляем статус в Google Sheets
           await axios.post(GAS_WEB_APP_URL, { 
             action: 'in_progress', 
             row: state.row, 
@@ -372,7 +355,6 @@ ${originalText}`;
             message_id: originalMessageId 
           });
 
-          // Формируем обновленное сообщение
           const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${text}`;
           const buttons = {
             inline_keyboard: [
@@ -385,11 +367,8 @@ ${originalText}`;
           };
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
-          
-          // Удаляем временные сообщения
           await cleanupMessages(chatId, state);
 
-          // Обновляем состояние
           userStates[chatId] = {
             ...state,
             executor: text,
@@ -397,47 +376,23 @@ ${originalText}`;
             originalMessageId,
             awaiting_manual_executor: false
           };
-
-          return res.sendStatus(200);
         }
-
-        // Обработка фото выполнения
-        if (state.stage === 'awaiting_photo' && photo) {
+        else if (state.stage === 'awaiting_photo' && photo) {
+          console.log('Обработка фото для чата:', chatId);
           await handlePhoto(chatId, photo, message_id, state);
-          return res.sendStatus(200);
         }
-
-        // Обработка введенной суммы
-        if (state.stage === 'awaiting_amount') {
+        else if (state.stage === 'awaiting_amount') {
           await handleAmount(chatId, text, message_id, state);
-          return res.sendStatus(200);
         }
-
-        // Обработка комментария и завершение заявки
-        if (state.stage === 'awaiting_comment') {
+        else if (state.stage === 'awaiting_comment') {
           await completeRequest(chatId, text, message_id, state);
-          return res.sendStatus(200);
         }
-
-        // Если ожидается фото, но прислан текст
-        if (state.stage === 'awaiting_photo' && text) {
-          // Удаляем предыдущий запрос, если есть
-          if (state.serviceMessages && state.serviceMessages.length > 0) {
-            await deleteMessage(chatId, state.serviceMessages[0]);
-          }
-          
-          // Отправляем новое сообщение и сохраняем его ID
-          const newMessageId = await sendMessage(chatId, 'Пожалуйста, пришлите фото выполнения работы.');
-          state.serviceMessages = [newMessageId];
-          
-          return res.sendStatus(200);
+        else if (state.stage === 'awaiting_photo' && text) {
+          await sendMessage(chatId, 'Пожалуйста, пришлите фото выполнения работы.');
         }
       }
-
-      res.sendStatus(200);
     } catch (err) {
-      console.error('Webhook error:', err);
-      res.sendStatus(500);
+      console.error('Ошибка webhook:', err.stack);
     }
   });
 };
