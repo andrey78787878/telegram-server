@@ -1,7 +1,5 @@
-const axios = require('axios');
-const express = require('express');
-
-module.exports = (app) => {
+module.exports = (app, userStates) => {
+  const axios = require('axios');
   const BOT_TOKEN = process.env.BOT_TOKEN;
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
@@ -9,7 +7,6 @@ module.exports = (app) => {
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
   const DELAY_BEFORE_DELETE = 15000;
-  const userStates = {};
 
   // Вспомогательные функции
   async function sendMessage(chatId, text, options = {}) {
@@ -143,11 +140,21 @@ module.exports = (app) => {
       console.log('Текущее состояние:', JSON.stringify(state, null, 2));
 
       // Проверка обязательных полей
-      const requiredFields = ['executor', 'photoUrl', 'amount', 'row', 'originalMessageId'];
-      const missingFields = requiredFields.filter(field => !state[field]);
+      const requiredFields = {
+        executor: 'Исполнитель не указан',
+        photoUrl: 'Фото не прикреплено',
+        amount: 'Сумма не указана',
+        row: 'Номер строки не определен',
+        originalMessageId: 'ID сообщения не найдено'
+      };
+      
+      const missingFields = [];
+      for (const [field, error] of Object.entries(requiredFields)) {
+        if (!state[field]) missingFields.push(error);
+      }
       
       if (missingFields.length > 0) {
-        throw new Error(`Отсутствуют обязательные данные: ${missingFields.join(', ')}`);
+        throw new Error(`Не хватает данных:\n${missingFields.join('\n')}`);
       }
 
       // Получаем оригинальный текст заявки
@@ -296,7 +303,8 @@ ${originalText}`;
             sourceMessageId: originalMessageId,
             originalMessageId,
             serviceMessages: [],
-            userResponses: []
+            userResponses: [],
+            stage: 'awaiting_photo' // Добавляем этап ожидания фото
           };
         }
         else if (action === 'done') {
@@ -388,7 +396,8 @@ ${originalText}`;
             executor: text,
             sourceMessageId: originalMessageId,
             originalMessageId,
-            awaiting_manual_executor: false
+            awaiting_manual_executor: false,
+            stage: 'awaiting_photo'
           };
         }
         else if (state.stage === 'awaiting_photo' && photo) {
