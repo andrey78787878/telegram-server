@@ -106,7 +106,7 @@ module.exports = (app, userStates) => {
         }
 
         if (action === 'select_executor') {
-          if (!userStates[chatId]) return res.sendStatus(200);
+          if (!userStates[chatId]) userStates[chatId] = {};
 
           if (executor === 'Текстовой подрядчик') {
             userStates[chatId].awaiting_manual_executor = true;
@@ -166,9 +166,13 @@ module.exports = (app, userStates) => {
             await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
           }
 
-          userStates[chatId].executor = executor;
-          userStates[chatId].sourceMessageId = originalMessageId;
-          userStates[chatId].originalMessageId = originalMessageId;
+          userStates[chatId] = {
+            ...userStates[chatId],
+            executor,
+            sourceMessageId: originalMessageId,
+            originalMessageId
+          };
+
           return res.sendStatus(200);
         }
 
@@ -185,13 +189,13 @@ module.exports = (app, userStates) => {
           }
 
           userStates[chatId] = {
+            ...userStates[chatId],
             row,
             stage: 'awaiting_photo',
             messageId,
-            serviceMessages: [],
             sourceMessageId: originalMessageId,
-            executor: userStates[chatId]?.executor || null,
-            originalMessageId
+            originalMessageId,
+            serviceMessages: []
           };
 
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения.', {
