@@ -53,7 +53,11 @@ module.exports = (app, userStates) => {
         const messageId = message.message_id;
         const username = '@' + (from.username || from.first_name);
 
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackId });
+        try {
+          await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackId });
+        } catch (err) {
+          console.error("❌ Ошибка при ответе на callback_query:", err.message);
+        }
 
         const parts = raw.split(':');
         const action = parts[0];
@@ -112,6 +116,11 @@ module.exports = (app, userStates) => {
           };
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
+
+          // 🔧 Удалим кнопку "Принять в работу" из старого сообщения, если оно отличается от оригинального
+          if (originalMessageId !== messageId) {
+            await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
+          }
 
           userStates[chatId].executor = executor;
           userStates[chatId].sourceMessageId = originalMessageId;
