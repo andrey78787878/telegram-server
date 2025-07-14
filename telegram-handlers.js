@@ -1,353 +1,242 @@
-const axios = require('axios');
+// Конфигурация
+const CONFIG = {
+  SHEET_ID: '1u48GTrioEVs_3P3fxcX0e7pKZmYwZyE8HioWJHgRZTc',
+  SHEET_NAME: 'Заявки',
+  BOT_TOKEN: '8005595415:AAHxAw2UlTYwhSiEcMu5CpTBRT_3-epH12Q',
+  CHAT_ID: '-1002582747660',
+  EXECUTORS: ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'],
+  STATUS_COL: 10, // Колонка статуса (K)
+  EXECUTOR_COL: 16, // Колонка исполнителя (P)
+  MESSAGE_ID_COL: 17 // Колонка ID сообщения (Q)
+};
 
-module.exports = (app, userStates) => {
-  const BOT_TOKEN = process.env.BOT_TOKEN;
-  const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-  const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-  const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
-  const DELAY_BEFORE_DELETE = 15000;
-
-  // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-  const sendMessage = async (chatId, text, options = {}) => {
-    try {
-      const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text,
-        parse_mode: 'HTML',
-        ...options
-      });
-      return res.data.result.message_id;
-    } catch (error) {
-      console.error('Ошибка отправки сообщения:', error.message);
-      return null;
+// Главный обработчик
+function doPost(e) {
+  try {
+    if (!e?.postData?.contents) {
+      return createErrorResponse("Invalid request");
     }
+    
+    const data = JSON.parse(e.postData.contents);
+    
+    if (data.callback_query) {
+      return handleCallback(data.callback_query);
+    }
+    
+    if (data.action) {
+      return handleWebhook(data);
+    }
+    
+    return createErrorResponse("No valid data structure found");
+  } catch (error) {
+    console.error('Error:', error);
+    return createErrorResponse(error.message);
+  }
+}
+
+// Обработка вебхука
+function handleWebhook(data) {
+  const sheet = getSheet();
+  
+  switch(data.action) {
+    case 'complete':
+      return handleComplete(sheet, data);
+    case 'in_progress':
+      return handleInProgress(sheet, data);
+    default:
+      return createErrorResponse('Unknown action');
+  }
+}
+
+// Обработка callback
+function handleCallback(callback) {
+  try {
+    const [action, row, ...rest] = callback.data.split(':');
+    const sheet = getSheet();
+
+    switch(action) {
+      case 'show_executors':
+        return showExecutors(callback, row);
+      case 'select_executor':
+        return assignExecutor(sheet, callback, row, rest[0]);
+      default:
+        return createErrorResponse('Unknown callback action');
+    }
+  } catch (error) {
+    console.error('Callback error:', error);
+    return createErrorResponse(error.message);
+  }
+}
+
+// Основные функции
+function showExecutors(callback, row) {
+  const keyboard = {
+    inline_keyboard: CONFIG.EXECUTORS.map(executor => [{
+      text: executor,
+      callback_data: `select_executor:${row}:${encodeURIComponent(executor)}`
+    }])
   };
 
-  const editMessage = async (chatId, messageId, text, replyMarkup) => {
-    try {
-      await axios.post(`${TELEGRAM_API}/editMessageText`, {
-        chat_id: chatId,
-        message_id: messageId,
-        text,
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup
-      });
-    } catch (error) {
-      console.error('Ошибка редактирования сообщения:', error.message);
-    }
+  editMessage(callback.message.chat.id, callback.message.message_id, {reply_markup: keyboard});
+  return createSuccessResponse();
+}
+
+function assignExecutor(sheet, callback, row, executor) {
+  try {
+    const decodedExecutor = decodeURIComponent(executor);
+    
+    // Обновляем статус и исполнителя
+    sheet.getRange(row, CONFIG.EXECUTOR_COL).setValue(decodedExecutor);
+    sheet.getRange(row, CONFIG.STATUS_COL).setValue("В работе");
+    
+    // Убираем кнопки
+    editMessage(callback.message.chat.id, callback.message.message_id, {
+      reply_markup: {inline_keyboard: []}
+    });
+    
+    // Отправляем подтверждение
+    sendMessage(
+      callback.message.chat.id, 
+      `✅ ${decodedExecutor} назначен на заявку #${row}`,
+      callback.message.message_id
+    );
+    
+    return createSuccessResponse();
+  } catch (error) {
+    console.error('Error assigning executor:', error);
+    return createErrorResponse(error.message);
+  }
+}
+
+// Вспомогательные функции
+function getSheet() {
+  const spreadsheet = SpreadsheetApp.openById(CONFIG.SHEET_ID);
+  const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
+  
+  if (!sheet) {
+    throw new Error(`Sheet ${CONFIG.SHEET_NAME} not found`);
+  }
+  
+  return sheet;
+}
+
+function createSuccessResponse(data = {}) {
+  return ContentService.createTextOutput(JSON.stringify({ok: true, ...data}))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function createErrorResponse(message) {
+  return ContentService.createTextOutput(JSON.stringify({error: message}))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Telegram API функции
+function sendMessage(chatId, text, replyTo, replyMarkup) {
+  const url = `https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`;
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: 'HTML'
   };
+  
+  if (replyTo) payload.reply_to_message_id = replyTo;
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+  
+  const response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  
+  const result = JSON.parse(response.getContentText());
+  if (!result.ok) {
+    console.error('Telegram API error:', result);
+    throw new Error(result.description || 'Telegram API error');
+  }
+  
+  return result;
+}
 
-  const deleteMessage = async (chatId, messageId) => {
+function editMessage(chatId, messageId, params) {
+  const url = `https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/editMessageReplyMarkup`;
+  const response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      ...params
+    }),
+    muteHttpExceptions: true
+  });
+  
+  const result = JSON.parse(response.getContentText());
+  if (!result.ok) {
+    console.error('Telegram API edit error:', result);
+    throw new Error(result.description || 'Telegram API edit error');
+  }
+  
+  return result;
+}
+
+// Триггерная функция для проверки новых заявок
+function checkNewRequests() {
+  const sheet = getSheet();
+  const lastRow = sheet.getLastRow();
+  
+  if (lastRow < 2) return; // Нет данных
+  
+  const data = sheet.getRange(2, 1, lastRow - 1, 18).getValues();
+  
+  data.forEach((rowData, index) => {
+    const row = index + 2; // +2 потому что header и нумерация с 1
+    
     try {
-      await new Promise(resolve => setTimeout(resolve, DELAY_BEFORE_DELETE));
-      await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-        chat_id: chatId,
-        message_id: messageId
-      });
-    } catch (error) {
-      console.warn('Не удалось удалить сообщение:', error.message);
-    }
-  };
-
-  const cleanupMessages = async (chatId, state) => {
-    try {
-      const messagesToDelete = [
-        ...(state.serviceMessages || []),
-        ...(state.userResponses || [])
-      ];
-      
-      await Promise.all(messagesToDelete.map(msgId => 
-        deleteMessage(chatId, msgId)
-      ));
-    } catch (error) {
-      console.error('Ошибка при очистке сообщений:', error);
-    }
-  };
-
-  // ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
-  const handleNewRequest = async (chatId, row) => {
-    try {
-      const keyboard = {
-        inline_keyboard: [
-          [{
-            text: 'Принять в работу',
-            callback_data: `show_executors:${row}`
-          }]
-        ]
-      };
-      
-      await sendMessage(chatId, `📍 Заявка #${row} готова к обработке`, { reply_markup: keyboard });
-    } catch (error) {
-      console.error('Ошибка создания новой заявки:', error);
-    }
-  };
-
-  const showExecutors = async (chatId, messageId, row) => {
-    try {
-      const keyboard = {
-        inline_keyboard: EXECUTORS.map(executor => [
-          { text: executor, callback_data: `select_executor:${row}:${executor}` }
-        ])
-      };
-      
-      await editMessage(chatId, messageId, 'Выберите исполнителя:', keyboard);
-      userStates[chatId] = { row, serviceMessages: [messageId] };
-    } catch (error) {
-      console.error('Ошибка показа исполнителей:', error);
-    }
-  };
-
-  const assignExecutor = async (chatId, row, executor, originalMessageId) => {
-    try {
-      // Обновляем Google Sheets
-      const gasResponse = await axios.post(GAS_WEB_APP_URL, {
-        action: 'in_progress',
-        row,
-        executor,
-        message_id: originalMessageId
-      });
-
-      if (gasResponse.data?.error) throw new Error(gasResponse.data.error);
-
-      // Получаем текст заявки
-      const textRes = await axios.post(GAS_WEB_APP_URL, {
-        action: 'getRequestText',
-        row
-      });
-
-      const updatedText = `${textRes.data?.text || ''}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-      
-      const buttons = {
-        inline_keyboard: [
-          [
-            { text: '✅ Выполнено', callback_data: `done:${row}` },
-            { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-            { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-          ]
-        ]
-      };
-
-      await editMessage(chatId, originalMessageId, updatedText, buttons);
-      
-      // Сохраняем состояние
-      userStates[chatId] = {
-        executor,
-        row,
-        originalMessageId,
-        stage: 'awaiting_photo',
-        serviceMessages: [],
-        userResponses: []
-      };
-    } catch (error) {
-      console.error('Ошибка назначения исполнителя:', error);
-      await sendMessage(chatId, '⚠️ Ошибка при назначении исполнителя');
-    }
-  };
-
-  const handlePhoto = async (chatId, photo, messageId) => {
-    try {
-      const fileRes = await axios.get(`${TELEGRAM_API}/getFile?file_id=${photo[photo.length-1].file_id}`);
-      const photoUrl = `${TELEGRAM_API.replace('/bot', '/file/bot')}/${fileRes.data.result.file_path}`;
-      
-      userStates[chatId] = {
-        ...userStates[chatId],
-        photoUrl,
-        userResponses: [...(userStates[chatId].userResponses || []), messageId],
-        stage: 'awaiting_amount'
-      };
-
-      const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
-      userStates[chatId].serviceMessages = [prompt];
-    } catch (error) {
-      console.error('Ошибка обработки фото:', error);
-      await sendMessage(chatId, '⚠️ Ошибка при обработке фото');
-    }
-  };
-
-  const handleAmount = async (chatId, text, messageId) => {
-    try {
-      userStates[chatId] = {
-        ...userStates[chatId],
-        amount: text,
-        userResponses: [...(userStates[chatId].userResponses || []), messageId],
-        stage: 'awaiting_comment'
-      };
-      
-      const prompt = await sendMessage(chatId, '📝 Введите комментарий к работе:');
-      userStates[chatId].serviceMessages = [...(userStates[chatId].serviceMessages || []), prompt];
-    } catch (error) {
-      console.error('Ошибка обработки суммы:', error);
-      await sendMessage(chatId, '⚠️ Ошибка. Попробуйте еще раз.');
-    }
-  };
-
-  const completeRequest = async (chatId, comment, messageId) => {
-    try {
-      const state = userStates[chatId];
-      if (!state) throw new Error('Состояние не найдено');
-
-      // Проверка обязательных данных
-      if (!state.executor || !state.row || !state.originalMessageId) {
-        throw new Error('Недостаточно данных для завершения заявки');
-      }
-
-      // Отправляем данные в Google Sheets
-      const gasResponse = await axios.post(GAS_WEB_APP_URL, {
-        action: 'complete',
-        row: state.row,
-        photoUrl: state.photoUrl || '',
-        amount: state.amount || '',
-        comment: comment || '',
-        executor: state.executor,
-        message_id: state.originalMessageId
-      });
-
-      if (gasResponse.data?.error) throw new Error(gasResponse.data.error);
-
-      // Формируем итоговое сообщение
-      const textRes = await axios.post(GAS_WEB_APP_URL, {
-        action: 'getRequestText',
-        row: state.row
-      });
-
-      const completedText = `✅ Выполнено\n` +
-        `👷 Исполнитель: ${state.executor}\n` +
-        `💰 Сумма: ${state.amount || 'не указана'}\n` +
-        `📸 Фото: ${state.photoUrl ? 'есть' : 'нет'}\n` +
-        `📝 Комментарий: ${comment || 'не указан'}\n\n` +
-        `━━━━━━━━━━━━\n\n` +
-        (textRes.data?.text || '');
-
-      await editMessage(chatId, state.originalMessageId, completedText);
-      await cleanupMessages(chatId, state);
-      
-      // Очищаем состояние
-      delete userStates[chatId];
-    } catch (error) {
-      console.error('Ошибка завершения заявки:', error);
-      await sendMessage(chatId, `⚠️ Ошибка: ${error.message}`);
-    }
-  };
-
-  // ==================== ОБРАБОТКА ВХОДЯЩИХ СООБЩЕНИЙ ====================
-  app.post('/webhook', async (req, res) => {
-    try {
-      const { body } = req;
-      res.sendStatus(200);
-
-      // Обработка callback_query (нажатия кнопок)
-      if (body.callback_query) {
-        const { data, message, id: callbackId } = body.callback_query;
-        const chatId = message.chat.id;
-        const messageId = message.message_id;
-        const [action, row, executor] = data.split(':');
-
-        // Ответ на callback
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-          callback_query_id: callbackId
-        });
-
-        switch(action) {
-          case 'show_executors':
-            await showExecutors(chatId, messageId, row);
-            break;
-
-          case 'select_executor':
-            if (executor === 'Текстовой подрядчик') {
-              userStates[chatId] = { row, awaitingManualExecutor: true };
-              await sendMessage(chatId, '✏️ Введите имя подрядчика:');
-              break;
-            }
-
-            const messageIdRes = await axios.post(GAS_WEB_APP_URL, {
-              action: 'getMessageId',
-              row
-            });
-
-            if (messageIdRes.data?.message_id) {
-              await assignExecutor(chatId, row, executor, messageIdRes.data.message_id);
-            }
-            break;
-
-          case 'done':
-            const msgIdRes = await axios.post(GAS_WEB_APP_URL, {
-              action: 'getMessageId',
-              row
-            });
-
-            if (msgIdRes.data?.message_id) {
-              userStates[chatId] = {
-                row,
-                originalMessageId: msgIdRes.data.message_id,
-                stage: 'awaiting_photo'
-              };
-              await sendMessage(chatId, '📸 Пришлите фото выполнения:');
-            }
-            break;
-
-          case 'delayed':
-            await axios.post(GAS_WEB_APP_URL, { action: 'delayed', row });
-            await editMessage(chatId, messageId, `${message.text}\n\n⏳ Ожидает поставки`, {
-              inline_keyboard: [
-                [{ text: '✅ Выполнено', callback_data: `done:${row}` }]
-              ]
-            });
-            break;
-
-          case 'cancelled':
-            await axios.post(GAS_WEB_APP_URL, { action: 'cancelled', row });
-            await editMessage(chatId, messageId, `${message.text}\n\n❌ Отменено`);
-            break;
-        }
-      } 
-      // Обработка обычных сообщений
-      else if (body.message) {
-        const { chat, text, photo, message_id } = body.message;
-        const chatId = chat.id;
-        const state = userStates[chatId];
-
-        if (!state) return;
-
-        // Обработка ручного ввода подрядчика
-        if (state.awaitingManualExecutor) {
-          const messageIdRes = await axios.post(GAS_WEB_APP_URL, {
-            action: 'getMessageId',
-            row: state.row
-          });
-
-          if (messageIdRes.data?.message_id) {
-            await assignExecutor(chatId, state.row, text, messageIdRes.data.message_id);
-          }
-          return;
-        }
-
-        // Обработка по этапам работы
-        switch(state.stage) {
-          case 'awaiting_photo':
-            if (photo) {
-              await handlePhoto(chatId, photo, message_id);
-            } else {
-              await sendMessage(chatId, 'Пожалуйста, пришлите фото выполнения работы.');
-            }
-            break;
-
-          case 'awaiting_amount':
-            await handleAmount(chatId, text, message_id);
-            break;
-
-          case 'awaiting_comment':
-            await completeRequest(chatId, text, message_id);
-            break;
-        }
+      if (!rowData[CONFIG.EXECUTOR_COL - 1] && rowData[CONFIG.STATUS_COL - 1] === 'в очереди') {
+        sendRequestToTelegram(sheet, row, rowData);
+        Utilities.sleep(1000); // Задержка между отправками
       }
     } catch (error) {
-      console.error('Ошибка в обработчике webhook:', error);
+      console.error(`Error processing row ${row}:`, error);
     }
   });
+}
 
-  // ==================== ИНТЕРФЕЙС ДЛЯ GAS ====================
-  return {
-    handleNewRequest,
-    cleanupMessages
+// Функция отправки заявки в Telegram
+function sendRequestToTelegram(sheet, row, rowData) {
+  const isEmergency = rowData[2] && rowData[2].toString().toLowerCase().includes('аварийная');
+  const photoUrl = rowData[14]; // Столбец O (15)
+  
+  let message = `📍 <b>Заявка #${row}</b>\n\n` +
+    `🍕 <b>Пиццерия:</b> ${rowData[1] || '—'}\n` +
+    `🔧 <b>Классификация:</b> ${rowData[2] || '—'}\n` +
+    `📂 <b>Категория:</b> ${rowData[3] || '—'}\n` +
+    `📋 <b>Проблема:</b> ${rowData[4] || '—'}\n` +
+    `👤 <b>Инициатор:</b> ${rowData[5] || '—'}\n` +
+    `📞 <b>Телефон:</b> ${rowData[6] || '—'}\n` +
+    `📸 <b>Фото проблемы:</b> ${photoUrl ? `<a href="${photoUrl}">Ссылка</a>` : 'нет'}\n` +
+    `🕓 <b>Срок:</b> ${rowData[8] ? Utilities.formatDate(new Date(rowData[8]), "GMT+5", "dd.MM.yyyy") : '—'}`;
+
+  if (isEmergency) {
+    message = `🚨🚨🚨 <b>АВАРИЙНАЯ ЗАЯВКА!</b> 🚨🚨🚨\n\n${message}`;
+    sheet.getRange(row, 1, 1, 18).setBackground('#FFCCCC');
+  }
+
+  const keyboard = {
+    inline_keyboard: [[{
+      text: 'Принять в работу',
+      callback_data: `show_executors:${row}`
+    }]]
   };
-};
+
+  try {
+    const response = sendMessage(CONFIG.CHAT_ID, message, null, keyboard);
+    
+    sheet.getRange(row, CONFIG.MESSAGE_ID_COL).setValue(response.result.message_id);
+    sheet.getRange(row, CONFIG.STATUS_COL).setValue('отправлено');
+  } catch (error) {
+    console.error(`Error sending request #${row}:`, error);
+    sheet.getRange(row, CONFIG.STATUS_COL).setValue('ошибка отправки');
+  }
+}
