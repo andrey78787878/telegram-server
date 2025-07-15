@@ -1,4 +1,3 @@
-// telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
   const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -8,15 +7,14 @@ module.exports = (app, userStates) => {
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
-app.post('/webhook', async (req, res) => {
-  console.log('Received webhook:', req.body);
-  try {
-    // остальной код...
-  } catch (err) {
-    console.error('Full webhook error:', err.stack);
-    res.sendStatus(500);
+  // Улучшенное логирование
+  function logAction(chatId, action, data = {}) {
+    console.log(`[ACTION] ${new Date().toISOString()} Chat ${chatId}: ${action}`, data);
   }
-});
+
+  function logError(chatId, error, context = '') {
+    console.error(`[ERROR] ${new Date().toISOString()} Chat ${chatId}: ${context}`, error.stack || error);
+  }
 
   // Функция для создания кнопок выбора исполнителя
   function buildExecutorButtons(row) {
@@ -24,6 +22,19 @@ app.post('/webhook', async (req, res) => {
       inline_keyboard: EXECUTORS.map(ex => [
         { text: ex, callback_data: `select_executor:${row}:${ex}` }
       ])
+    };
+  }
+
+  // Функция для создания кнопок действий (выполнено/ожидает/отмена)
+  function buildActionButtons(row) {
+    return {
+      inline_keyboard: [
+        [
+          { text: '✅ Выполнено', callback_data: `done:${row}` },
+          { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+          { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+        ]
+      ]
     };
   }
 
@@ -36,9 +47,10 @@ app.post('/webhook', async (req, res) => {
         parse_mode: 'HTML',
         ...options
       });
+      logAction(chatId, 'Message sent', { text });
       return res.data.result.message_id;
     } catch (error) {
-      console.error('Ошибка отправки сообщения:', error.message);
+      logError(chatId, error, 'sendMessage');
       return null;
     }
   }
@@ -53,8 +65,9 @@ app.post('/webhook', async (req, res) => {
         parse_mode: 'HTML',
         ...(reply_markup && { reply_markup })
       });
+      logAction(chatId, 'Message edited', { messageId, text: text.substring(0, 50) + '...' });
     } catch (error) {
-      console.error('Ошибка изменения сообщения:', error.message);
+      logError(chatId, error, 'editMessageText');
     }
   }
 
@@ -65,8 +78,9 @@ app.post('/webhook', async (req, res) => {
         chat_id: chatId,
         message_id: msgId
       });
+      logAction(chatId, 'Message deleted', { msgId });
     } catch (e) {
-      console.warn('Не удалось удалить сообщение:', e.message);
+      logError(chatId, e, 'deleteMessage');
     }
   }
 
@@ -79,12 +93,13 @@ app.post('/webhook', async (req, res) => {
       ];
       
       if (messagesToDelete.length) {
+        logAction(chatId, 'Cleaning up messages', { count: messagesToDelete.length });
         await Promise.all(messagesToDelete.map(msgId => 
           deleteMessage(chatId, msgId)
         ));
       }
     } catch (error) {
-      console.error('Ошибка при очистке сообщений:', error);
+      logError(chatId, error, 'cleanupMessages');
     }
   }
 
@@ -107,8 +122,9 @@ app.post('/webhook', async (req, res) => {
       state.serviceMessages = [prompt];
       state.stage = 'awaiting_amount';
       
+      logAction(chatId, 'Photo received', { photoUrl: state.photoUrl });
     } catch (error) {
-      console.error('Ошибка при обработке фото:', error);
+      logError(chatId, error, 'handlePhoto');
       await sendMessage(chatId, '⚠️ Ошибка при обработке фото. Попробуйте еще раз.');
     }
   }
@@ -116,6 +132,12 @@ app.post('/webhook', async (req, res) => {
   // Обработка введенной суммы
   async function handleAmount(chatId, text, messageId, state) {
     try {
+      // Проверяем, что сумма - число
+      if (!/^\d+$/.test(text)) {
+        await sendMessage(chatId, '⚠️ Пожалуйста, введите сумму цифрами без пробелов и символов.');
+        return false;
+      }
+
       // Удаляем предыдущие временные сообщения
       await cleanupMessages(chatId, state);
 
@@ -127,9 +149,13 @@ app.post('/webhook', async (req, res) => {
       const prompt = await sendMessage(chatId, '📝 Введите комментарий к работе:');
       state.serviceMessages = [prompt];
       state.stage = 'awaiting_comment';
+      
+      logAction(chatId, 'Amount received', { amount: state.amount });
+      return true;
     } catch (error) {
-      console.error('Ошибка при обработке суммы:', error);
+      logError(chatId, error, 'handleAmount');
       await sendMessage(chatId, '⚠️ Ошибка. Попробуйте еще раз.');
+      return false;
     }
   }
 
@@ -179,8 +205,9 @@ ${originalText}`;
       // Очищаем состояние
       delete userStates[chatId];
       
+      logAction(chatId, 'Request completed', { row: state.row });
     } catch (error) {
-      console.error('Ошибка при завершении заявки:', error);
+      logError(chatId, error, 'completeRequest');
       await sendMessage(chatId, '⚠️ Ошибка при завершении заявки. Попробуйте еще раз.');
     }
   }
@@ -189,6 +216,7 @@ ${originalText}`;
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
+      logAction('system', 'Webhook received', { update_id: body.update_id });
 
       // Обработка callback_query (нажатия кнопок)
       if (body.callback_query) {
@@ -196,10 +224,16 @@ ${originalText}`;
         const chatId = message.chat.id;
         const messageId = message.message_id;
 
+        logAction(chatId, 'Button pressed', { 
+          buttonData: raw,
+          messageId,
+          from: from.username || from.id
+        });
+
         // Отвечаем на callback
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { 
           callback_query_id: callbackId 
-        }).catch(console.error);
+        }).catch(e => logError(chatId, e, 'answerCallbackQuery'));
 
         const parts = raw.split(':');
         const action = parts[0];
@@ -220,18 +254,26 @@ ${originalText}`;
             serviceMessages: [],
             userResponses: []
           };
+          
+          logAction(chatId, 'In progress - showing executors');
           return res.sendStatus(200);
         }
 
         // Обработка выбора исполнителя
         if (action === 'select_executor') {
-          if (!userStates[chatId]) userStates[chatId] = {};
+          if (!userStates[chatId]) {
+            userStates[chatId] = {};
+            logAction(chatId, 'New state created for executor selection');
+          }
 
           // Ручной ввод исполнителя
           if (executor === 'Текстовой подрядчик') {
             userStates[chatId].awaiting_manual_executor = true;
+            userStates[chatId].row = row;
             const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
             userStates[chatId].serviceMessages = [prompt];
+            
+            logAction(chatId, 'Manual executor requested');
             return res.sendStatus(200);
           }
 
@@ -244,7 +286,10 @@ ${originalText}`;
           const originalMessageId = originalIdRes.data?.message_id;
           const originalText = originalTextRes.data?.text || '';
 
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) {
+            logError(chatId, 'Original message ID not found', 'select_executor');
+            return res.sendStatus(200);
+          }
 
           // Обновляем статус в Google Sheets
           await axios.post(GAS_WEB_APP_URL, { 
@@ -256,15 +301,7 @@ ${originalText}`;
 
           // Формируем обновленное сообщение
           const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${row}` },
-                { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-              ]
-            ]
-          };
+          const buttons = buildActionButtons(row);
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
           
@@ -276,6 +313,7 @@ ${originalText}`;
           // Сохраняем состояние
           userStates[chatId] = {
             ...userStates[chatId],
+            row,
             executor,
             sourceMessageId: originalMessageId,
             originalMessageId,
@@ -284,6 +322,7 @@ ${originalText}`;
             userResponses: []
           };
 
+          logAction(chatId, 'Executor selected', { executor, row });
           return res.sendStatus(200);
         }
 
@@ -291,6 +330,7 @@ ${originalText}`;
         if (action === 'done') {
           // Проверяем, не начат ли уже процесс завершения
           if (userStates[chatId]?.stage === 'awaiting_photo') {
+            logAction(chatId, 'Already in completion process');
             return res.sendStatus(200);
           }
 
@@ -300,7 +340,10 @@ ${originalText}`;
           });
           const originalMessageId = originalIdRes.data?.message_id;
 
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) {
+            logError(chatId, 'Original message ID not found for done action');
+            return res.sendStatus(200);
+          }
 
           // Инициализируем состояние для завершения заявки
           userStates[chatId] = {
@@ -317,6 +360,7 @@ ${originalText}`;
           
           await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
 
+          logAction(chatId, 'Completion process started', { row });
           return res.sendStatus(200);
         }
 
@@ -329,6 +373,8 @@ ${originalText}`;
           });
           const updatedText = `${message.text}\n\n⏳ Ожидает поставки`;
           await editMessageText(chatId, messageId, updatedText);
+          
+          logAction(chatId, 'Request delayed', { row });
           return res.sendStatus(200);
         }
 
@@ -341,6 +387,8 @@ ${originalText}`;
           });
           const updatedText = `${message.text}\n\n❌ Отменено`;
           await editMessageText(chatId, messageId, updatedText);
+          
+          logAction(chatId, 'Request cancelled', { row });
           return res.sendStatus(200);
         }
       }
@@ -350,6 +398,11 @@ ${originalText}`;
         const { chat, message_id, text, photo } = body.message;
         const chatId = chat.id;
         const state = userStates[chatId];
+
+        logAction(chatId, 'Message received', { 
+          text: text || '(photo)', 
+          state: state ? JSON.stringify(state) : 'no state' 
+        });
 
         if (!state) return res.sendStatus(200);
 
@@ -363,7 +416,10 @@ ${originalText}`;
           const originalMessageId = originalIdRes.data?.message_id;
           const originalText = originalTextRes.data?.text || '';
 
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) {
+            logError(chatId, 'Original message ID not found for manual executor');
+            return res.sendStatus(200);
+          }
 
           // Обновляем статус в Google Sheets
           await axios.post(GAS_WEB_APP_URL, { 
@@ -375,15 +431,7 @@ ${originalText}`;
 
           // Формируем обновленное сообщение
           const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${text}`;
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${state.row}` },
-                { text: '⏳ Ожидает поставки', callback_data: `delayed:${state.row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${state.row}` }
-              ]
-            ]
-          };
+          const buttons = buildActionButtons(state.row);
 
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
           
@@ -399,6 +447,7 @@ ${originalText}`;
             awaiting_manual_executor: false
           };
 
+          logAction(chatId, 'Manual executor received', { executor: text });
           return res.sendStatus(200);
         }
 
@@ -410,7 +459,8 @@ ${originalText}`;
 
         // Обработка введенной суммы
         if (state.stage === 'awaiting_amount') {
-          await handleAmount(chatId, text, message_id, state);
+          const success = await handleAmount(chatId, text, message_id, state);
+          if (!success) return res.sendStatus(200); // Не удаляем сообщение при ошибке
           return res.sendStatus(200);
         }
 
@@ -429,7 +479,7 @@ ${originalText}`;
 
       res.sendStatus(200);
     } catch (err) {
-      console.error('Webhook error:', err);
+      logError('system', err, 'webhook');
       res.sendStatus(500);
     }
   });
