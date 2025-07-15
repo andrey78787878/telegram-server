@@ -13,8 +13,11 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 
 // ✅ Проверка переменных
-if (!BOT_TOKEN || !GAS_WEB_APP_URL || !TELEGRAM_CHAT_ID || !WEBHOOK_URL) {
-  console.error('❌ Не хватает переменных среды! Проверь .env файл.');
+const requiredEnvVars = ['BOT_TOKEN', 'GAS_WEB_APP_URL', 'TELEGRAM_CHAT_ID', 'WEBHOOK_URL'];
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingVars.length > 0) {
+  console.error('❌ Не хватает переменных среды:', missingVars.join(', '));
   process.exit(1);
 }
 
@@ -24,17 +27,27 @@ const userStates = {};
 // ✅ Установка вебхука
 async function setTelegramWebhook() {
   try {
-    const res = await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_URL}`);
+    const res = await axios.post(`${TELEGRAM_API}/setWebhook`, {
+      url: WEBHOOK_URL,
+      drop_pending_updates: true
+    });
     console.log('✅ Вебхук установлен:', res.data);
   } catch (err) {
     console.error('❌ Ошибка установки вебхука:', err.response?.data || err.message);
+    process.exit(1);
   }
 }
 
 // 🔁 Проверка отложенных заявок
 async function checkPendingRequestsAndSend() {
   try {
-    const res = await axios.post(GAS_WEB_APP_URL, { action: 'getPendingMessages' });
+    console.log('🔍 Проверка отложенных заявок...');
+    const res = await axios.post(GAS_WEB_APP_URL, { 
+      action: 'getPendingMessages' 
+    }, {
+      timeout: 10000 // 10 секунд таймаут
+    });
+    
     const pending = res.data;
 
     if (!pending || !Array.isArray(pending) || pending.length === 0) {
@@ -42,21 +55,30 @@ async function checkPendingRequestsAndSend() {
       return;
     }
 
-    for (const rowObj of pending) {
-      const {
-        row, pizzaria, classif, category, problem,
-        initiator, phone, deadline
-      } = rowObj;
+    console.log(`📨 Найдено ${pending.length} отложенных заявок`);
 
-      const message = `📍 <b>Заявка #${row}</b>\n\n🍕 <b>Пиццерия:</b> ${pizzaria}\n🔧 <b>Классификация:</b> ${classif}\n📂 <b>Категория:</b> ${category}\n📋 <b>Проблема:</b> ${problem}\n👤 <b>Инициатор:</b> ${initiator}\n📞 <b>Тел:</b> ${phone}\n🕓 <b>Срок:</b> ${deadline}`;
-
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: 'Принять в работу 🟢', callback_data: `in_progress:${row}` }]
-        ]
-      };
-
+    for (const [index, rowObj] of pending.entries()) {
       try {
+        const {
+          row, pizzaria, classif, category, problem,
+          initiator, phone, deadline
+        } = rowObj;
+
+        const message = `📍 <b>Заявка #${row}</b>\n\n` +
+          `🍕 <b>Пиццерия:</b> ${pizzaria || '—'}\n` +
+          `🔧 <b>Классификация:</b> ${classif || '—'}\n` +
+          `📂 <b>Категория:</b> ${category || '—'}\n` +
+          `📋 <b>Проблема:</b> ${problem || '—'}\n` +
+          `👤 <b>Инициатор:</b> ${initiator || '—'}\n` +
+          `📞 <b>Тел:</b> ${phone || '—'}\n` +
+          `🕓 <b>Срок:</b> ${deadline || '—'}`;
+
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: 'Принять в работу 🟢', callback_data: `in_progress:${row}` }]
+          ]
+        };
+
         const resMsg = await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: TELEGRAM_CHAT_ID,
           text: message,
@@ -64,32 +86,56 @@ async function checkPendingRequestsAndSend() {
           reply_markup: keyboard
         });
 
-        const message_id = resMsg.data.result.message_id;
-
         await axios.post(GAS_WEB_APP_URL, {
           action: 'markMessageSent',
           row,
-          message_id
+          message_id: resMsg.data.result.message_id
         });
 
-        console.log(`✅ Заявка #${row} отправлена`);
+        console.log(`✅ [${index + 1}/${pending.length}] Заявка #${row} отправлена`);
+        
+        // Небольшая задержка между отправками
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
       } catch (err) {
-        console.error(`❌ Ошибка при отправке заявки #${row}:`, err.response?.data || err.message);
+        console.error(`❌ Ошибка при отправке заявки:`, err.response?.data || err.message);
       }
     }
   } catch (err) {
-    console.error('❌ Ошибка при запросе отложенных заявок:', err.response?.data || err.message);
+    console.error('❌ Ошибка при запросе отложенных заявок:', err.message);
   }
 }
 
 // 🔘 Ручной вызов через POST
 app.post('/send-pending', async (req, res) => {
-  const { action } = req.body;
-  if (action === 'sendPending') {
-    await checkPendingRequestsAndSend();
-    return res.send('✅ Заявки успешно отправлены');
+  try {
+    const { action, secret } = req.body;
+    
+    if (secret !== process.env.API_SECRET) {
+      return res.status(403).json({ error: 'Доступ запрещен' });
+    }
+    
+    if (action === 'sendPending') {
+      await checkPendingRequestsAndSend();
+      return res.json({ status: 'success', message: 'Заявки успешно отправлены' });
+    }
+    
+    res.status(400).json({ error: 'Неверный action' });
+  } catch (err) {
+    console.error('Ошибка в /send-pending:', err);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
-  res.status(400).send('❌ Неверный action');
+});
+
+// 🏓 Проверка работоспособности
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    services: {
+      telegram: !!BOT_TOKEN,
+      google_sheets: !!GAS_WEB_APP_URL
+    }
+  });
 });
 
 // 📦 Telegram-хендлеры
@@ -98,13 +144,12 @@ try {
   setupTelegramHandlers(app, userStates);
   console.log('✅ Telegram-хендлеры подключены');
 } catch (e) {
-  console.error('❌ Ошибка загрузки telegram-handlers.js:', e.message);
+  console.error('❌ Ошибка загрузки telegram-handlers.js:', e);
+  process.exit(1);
 }
 
 // 🚀 Запуск сервера
 app.listen(PORT, async () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  await setTelegramWebhook();
-  await checkPendingRequestsAndSend(); // начальная проверка
-  setInterval(checkPendingRequestsAndSend, 2 * 60 * 1000); // каждые 2 минуты
-});
+  
+  
