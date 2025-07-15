@@ -62,6 +62,15 @@ module.exports = (app, userStates) => {
     }
   }
 
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async function deleteMessageWithDelay(chatId, msgId, delayMs = 15000) {
+    await delay(delayMs);
+    await deleteMessage(chatId, msgId);
+  }
+
   async function getFileLink(fileId) {
     const file = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
     const filePath = file.data.result.file_path;
@@ -105,10 +114,13 @@ module.exports = (app, userStates) => {
 
         if (action === 'select_executor') {
           if (!userStates[chatId]) userStates[chatId] = { row };
+
           if (executor === 'Текстовой подрядчик') {
-            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
             userStates[chatId].awaiting_manual_executor = true;
+            userStates[chatId].stage = 'awaiting_manual_executor';
+            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
             userStates[chatId].serviceMessages = [prompt];
+            deleteMessageWithDelay(chatId, prompt);
             return res.sendStatus(200);
           }
 
@@ -159,6 +171,7 @@ module.exports = (app, userStates) => {
           };
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
           userStates[chatId].serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
           return res.sendStatus(200);
         }
 
@@ -176,7 +189,50 @@ module.exports = (app, userStates) => {
       }
 
       if (body.message) {
-        // ... другие события, если нужно
+        const { message } = body;
+        const chatId = message.chat.id;
+        const state = userStates[chatId];
+
+        if (state?.stage === 'awaiting_manual_executor' && message.text) {
+          const executor = message.text;
+          const row = state.row;
+          const originalMessageId = state.sourceMessageId || state.originalMessageId;
+
+          const [textRes] = await Promise.all([
+            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
+          ]);
+          const originalText = textRes.data?.text || '';
+
+          await axios.post(GAS_WEB_APP_URL, {
+            action: 'in_progress',
+            row,
+            executor,
+            message_id: originalMessageId
+          });
+
+          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+          const buttons = {
+            inline_keyboard: [
+              [
+                { text: '✅ Выполнено', callback_data: `done:${row}` },
+                { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+                { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+              ]
+            ]
+          };
+
+          await editMessageText(chatId, originalMessageId, updatedText, buttons);
+          deleteMessageWithDelay(chatId, message.message_id);
+
+          userStates[chatId] = {
+            ...userStates[chatId],
+            row,
+            executor,
+            originalMessageId,
+            stage: null,
+            serviceMessages: []
+          };
+        }
       }
 
       res.sendStatus(200);
