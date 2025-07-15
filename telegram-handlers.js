@@ -100,13 +100,14 @@ module.exports = (app, userStates) => {
     const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
     const originalText = textRes.data?.text || '';
 
-    const updatedText = `${originalText}
-
-✅ Заявка закрыта.
-👷 Исполнитель: ${executor}
+    const updatedText = `👷 Исполнитель: ${executor}
 💰 Сумма: ${amount || '0'}
 📸 Фото: <a href="${photoUrl}">ссылка</a>
-📝 Комментарий: ${comment}`;
+📝 Комментарий: ${comment}
+
+━━━━━━━━━━━━
+
+${originalText}`;
 
     await axios.post(GAS_WEB_APP_URL, {
       action: 'complete',
@@ -182,6 +183,7 @@ module.exports = (app, userStates) => {
           const photoUrl = await getFileLink(message.photo.at(-1).file_id);
           state.photoUrl = photoUrl;
           state.userResponses.push(message.message_id);
+          console.log(`📸 Получено фото от пользователя: ${photoUrl}`);
 
           const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
           state.stage = 'awaiting_amount';
@@ -193,6 +195,7 @@ module.exports = (app, userStates) => {
         if (state.stage === 'awaiting_amount' && message.text) {
           state.amount = message.text.trim();
           state.userResponses.push(message.message_id);
+          console.log(`💰 Получена сумма от пользователя: ${state.amount}`);
 
           const prompt = await sendMessage(chatId, '📝 Добавьте комментарий:');
           state.stage = 'awaiting_comment';
@@ -203,6 +206,7 @@ module.exports = (app, userStates) => {
 
         if (state.stage === 'awaiting_comment' && message.text) {
           state.userResponses.push(message.message_id);
+          console.log(`📝 Получен комментарий от пользователя: ${message.text}`);
           await completeRequest(chatId, state, message.message_id, message.text);
           return res.sendStatus(200);
         }
