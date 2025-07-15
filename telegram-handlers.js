@@ -79,7 +79,6 @@ module.exports = (app, userStates) => {
     }
   }
 
-  // Основные обработчики
   function buildExecutorButtons(row) {
     return {
       inline_keyboard: EXECUTORS.map(ex => [
@@ -150,7 +149,6 @@ module.exports = (app, userStates) => {
       
       console.log('Текущее состояние:', JSON.stringify(state, null, 2));
 
-      // Проверка обязательных полей
       const requiredFields = {
         executor: 'Исполнитель не указан',
         photoUrl: 'Фото не прикреплено',
@@ -168,7 +166,6 @@ module.exports = (app, userStates) => {
         throw new Error(`Не хватает данных:\n${missingFields.join('\n')}`);
       }
 
-      // Получаем оригинальный текст заявки
       const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
         action: 'getRequestText',
         row: state.row
@@ -176,7 +173,6 @@ module.exports = (app, userStates) => {
       
       const originalText = originalTextRes.data?.text || '';
       
-      // Формируем обновленный текст
       const updatedText = `✅ Выполнено
 👷 Исполнитель: ${state.executor}
 💰 Сумма: ${state.amount}
@@ -187,7 +183,6 @@ module.exports = (app, userStates) => {
 
 ${originalText}`;
 
-      // Отправляем данные в Google Sheets
       const gasResponse = await axios.post(GAS_WEB_APP_URL, {
         action: 'complete',
         row: state.row,
@@ -204,18 +199,13 @@ ${originalText}`;
         throw new Error(gasResponse.data.error);
       }
 
-      // Обновляем сообщение
       const editResult = await editMessageText(chatId, state.originalMessageId, updatedText);
       
       if (!editResult.success) {
-        // Если не удалось изменить, отправляем новое сообщение
         await sendMessage(chatId, updatedText);
       }
       
-      // Удаляем временные сообщения
       await cleanupMessages(chatId, state);
-      
-      // Очищаем состояние
       delete userStates[chatId];
       
     } catch (error) {
@@ -256,7 +246,6 @@ ${originalText}`;
 
         console.log(`Обработка callback: ${raw} в чате ${chatId}`);
 
-        // Отвечаем на callback
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
           callback_query_id: callbackId,
           text: "Обрабатываю...",
@@ -283,76 +272,59 @@ ${originalText}`;
             serviceMessages: [],
             userResponses: []
           };
-          return;
         }
+        else if (action === 'select_executor') {
+          if (!userStates[chatId]) userStates[chatId] = {};
 
-        if (action === 'select_executor') {
-  if (!userStates[chatId]) userStates[chatId] = {};
+          if (executor === 'Текстовой подрядчик') {
+            userStates[chatId].awaiting_manual_executor = true;
+            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
+            userStates[chatId].serviceMessages = [prompt];
+          } else {
+            try {
+              const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
+                action: 'getRequestText',
+                row: row
+              });
+              
+              const originalText = originalTextRes.data?.text || '';
+              const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+              
+              const buttons = {
+                inline_keyboard: [
+                  [
+                    { text: '✅ Выполнено', callback_data: `done:${row}` },
+                    { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+                    { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+                  ]
+                ]
+              };
 
-  if (executor === 'Текстовой подрядчик') {
-    userStates[chatId].awaiting_manual_executor = true;
-    const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
-    userStates[chatId].serviceMessages = [prompt];
-    return;
-  }
+              const editResult = await editMessageText(chatId, messageId, updatedText, buttons);
+              
+              if (!editResult.success) {
+                await sendMessage(chatId, updatedText, { reply_markup: buttons });
+              }
 
-  try {
-    // Получаем оригинальный текст заявки
-    const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
-      action: 'getRequestText',
-      row: row
-    });
-    
-    const originalText = originalTextRes.data?.text || '';
-    
-    // Формируем обновленный текст с исполнителем
-    const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-    
-    // Создаем клавиатуру с кнопками
-    const buttons = {
-      inline_keyboard: [
-        [
-          { text: '✅ Выполнено', callback_data: `done:${row}` },
-          { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-          { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-        ]
-      ]
-    };
+              userStates[chatId] = {
+                executor,
+                row,
+                originalMessageId: messageId,
+                serviceMessages: [],
+                userResponses: [],
+                stage: 'awaiting_photo'
+              };
 
-    // Обновляем сообщение
-    const editResult = await editMessageText(chatId, messageId, updatedText, buttons);
-    
-    if (!editResult.success) {
-      // Если не удалось изменить, отправляем новое сообщение
-      await sendMessage(chatId, updatedText, { reply_markup: buttons });
-    }
-
-    // Обновляем состояние
-    userStates[chatId] = {
-      executor,
-      row,
-      originalMessageId: messageId,
-      serviceMessages: [],
-      userResponses: [],
-      stage: 'awaiting_photo'
-    };
-
-    // Обновляем данные в Google Sheets
-    await axios.post(GAS_WEB_APP_URL, {
-      action: 'in_progress',
-      row: row,
-      executor: executor,
-      message_id: messageId
-    });
-
-  } catch (error) {
-    console.error('Ошибка при выборе исполнителя:', error);
-    await sendMessage(chatId, '⚠️ Произошла ошибка при выборе исполнителя');
-  }
-}
-else if (action === 'done') {
-  // ... остальной код обработки done ...
-}
+              await axios.post(GAS_WEB_APP_URL, {
+                action: 'in_progress',
+                row: row,
+                executor: executor,
+                message_id: messageId
+              });
+            } catch (error) {
+              console.error('Ошибка при выборе исполнителя:', error);
+              await sendMessage(chatId, '⚠️ Произошла ошибка при выборе исполнителя');
+            }
           }
         }
         else if (action === 'done') {
@@ -418,7 +390,6 @@ else if (action === 'done') {
               throw new Error('Не удалось получить ID сообщения из таблицы');
             }
 
-            // Получаем оригинальный текст заявки
             const originalTextRes = await axios.post(GAS_WEB_APP_URL, { 
               action: 'getRequestText', 
               row: state.row 
@@ -427,7 +398,6 @@ else if (action === 'done') {
             const originalText = originalTextRes.data?.text || '';
             const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${text}`;
 
-            // Обновляем данные в Google Sheets
             await axios.post(GAS_WEB_APP_URL, { 
               action: 'in_progress', 
               row: state.row, 
@@ -435,7 +405,6 @@ else if (action === 'done') {
               message_id: originalMessageId 
             });
 
-            // Создаем клавиатуру с кнопками
             const buttons = {
               inline_keyboard: [
                 [
@@ -446,7 +415,6 @@ else if (action === 'done') {
               ]
             };
 
-            // Редактируем сообщение
             const editResult = await editMessageText(
               chatId, 
               originalMessageId, 
