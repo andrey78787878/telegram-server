@@ -246,29 +246,32 @@ ${originalText}`;
         }
 
         if (action === 'done') {
-          const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
-            action: 'getMessageId',
-            row
-          });
-          const originalMessageId = originalIdRes.data?.message_id;
+  const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
+    action: 'getMessageId',
+    row
+  });
+  const originalMessageId = originalIdRes.data?.message_id;
 
-          if (!originalMessageId) return res.sendStatus(200);
+  if (!originalMessageId) return res.sendStatus(200);
 
-          userStates[chatId] = {
-            ...(userStates[chatId] || {}),
-            row,
-            stage: 'awaiting_photo',
-            originalMessageId,
-            serviceMessages: [],
-            userResponses: []
-          };
+  userStates[chatId] = {
+    ...(userStates[chatId] || {}),
+    row,
+    stage: 'awaiting_photo',
+    originalMessageId,
+    serviceMessages: [],
+    userResponses: []
+  };
 
-          const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
-          state.serviceMessages.push(prompt);
-          await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
+  const state = userStates[chatId]; // ✅ добавь это!
 
-          return res.sendStatus(200);
-        }
+  const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
+  state.serviceMessages.push(prompt);
+  await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
+
+  return res.sendStatus(200);
+}
+    
 
         if (action === 'delayed') {
           await axios.post(GAS_WEB_APP_URL, { 
