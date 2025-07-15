@@ -201,17 +201,14 @@ module.exports = (app, userStates) => {
         }
 
         if (action === 'done') {
-          if (!userStates[chatId]) userStates[chatId] = {};
-
-          const idRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
-          const originalMessageId = idRes.data?.message_id;
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!userStates[chatId]) {
+            console.warn('⚠️ Нет состояния для пользователя. Кнопка "Выполнено" нажата без контекста.');
+            return res.sendStatus(200);
+          }
 
           userStates[chatId] = {
             ...userStates[chatId],
             stage: 'awaiting_photo',
-            row,
-            originalMessageId,
             serviceMessages: [],
             userResponses: []
           };
