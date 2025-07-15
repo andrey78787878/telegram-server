@@ -8,6 +8,16 @@ module.exports = (app, userStates) => {
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
+app.post('/webhook', async (req, res) => {
+  console.log('Received webhook:', req.body);
+  try {
+    // остальной код...
+  } catch (err) {
+    console.error('Full webhook error:', err.stack);
+    res.sendStatus(500);
+  }
+});
+
   // Функция для создания кнопок выбора исполнителя
   function buildExecutorButtons(row) {
     return {
