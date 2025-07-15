@@ -287,9 +287,6 @@ ${originalText}`;
         }
 
         if (action === 'select_executor') {
-          if (!userStates[chatId]) userStates[chatId] = {};
-
-          if (action === 'select_executor') {
   if (!userStates[chatId]) userStates[chatId] = {};
 
   if (executor === 'Текстовой подрядчик') {
@@ -352,6 +349,10 @@ ${originalText}`;
     console.error('Ошибка при выборе исполнителя:', error);
     await sendMessage(chatId, '⚠️ Произошла ошибка при выборе исполнителя');
   }
+}
+else if (action === 'done') {
+  // ... остальной код обработки done ...
+}
           }
         }
         else if (action === 'done') {
