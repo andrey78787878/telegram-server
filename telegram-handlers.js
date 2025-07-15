@@ -169,7 +169,7 @@ ${originalText}`;
           return res.sendStatus(200);
         }
 
-       if (action === 'select_executor') {
+     if (action === 'select_executor') {
   if (!userStates[chatId]) userStates[chatId] = {};
 
   if (executor === 'Текстовой подрядчик') {
@@ -179,9 +179,10 @@ ${originalText}`;
     return res.sendStatus(200);
   }
 
+  // Получаем message_id и все данные строки
   const [originalIdRes, rowDataRes] = await Promise.all([
     axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
-    axios.post(GAS_WEB_APP_URL, { action: 'getRequestRow', row })
+    axios.post(GAS_WEB_APP_URL, { action: 'getRequestRow', row }) // этот экшен должен вернуть массив значений строки
   ]);
 
   const originalMessageId = originalIdRes.data?.message_id;
@@ -189,29 +190,31 @@ ${originalText}`;
 
   if (!originalMessageId || !rowData) return res.sendStatus(200);
 
-  // Обновляем данные в таблице
-  await axios.post(GAS_WEB_APP_URL, {
-    action: 'in_progress',
-    row,
-    executor,
-    message_id: originalMessageId
+  await axios.post(GAS_WEB_APP_URL, { 
+    action: 'in_progress', 
+    row, 
+    executor, 
+    message_id: originalMessageId 
   });
 
+  // Формируем новый текст
   const formatDate = (val) => {
     const d = new Date(val);
-    return Utilities.formatDate(d, "GMT+5", "dd.MM.yyyy");
+    return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
   };
 
-  const updatedText =
-    `📍 Заявка #${row}\n\n` +
-    `🍕 Пиццерия: ${rowData[1] || '—'}\n` +
-    `🔧 Классификация: ${rowData[2] || '—'}\n` +
-    `📂 Категория: ${rowData[3] || '—'}\n` +
-    `📋 Проблема: ${rowData[4] || '—'}\n` +
-    `👤 Инициатор: ${rowData[5] || '—'}\n` +
-    `📞 Телефон: ${rowData[6] || '—'}\n` +
-    `🕓 Срок: ${rowData[8] ? formatDate(rowData[8]) : '—'}\n\n` +
-    `🟢 В работе\n👷 Исполнитель: ${executor}`;
+  const updatedText = `📍 Заявка #${row}
+
+🍕 Пиццерия: ${rowData[1] || '—'}
+🔧 Классификация: ${rowData[2] || '—'}
+📂 Категория: ${rowData[3] || '—'}
+📋 Проблема: ${rowData[4] || '—'}
+👤 Инициатор: ${rowData[5] || '—'}
+📞 Телефон: ${rowData[6] || '—'}
+🕓 Срок: ${rowData[8] ? formatDate(rowData[8]) : '—'}
+
+🟢 В работе
+👷 Исполнитель: ${executor}`;
 
   const buttons = {
     inline_keyboard: [
@@ -224,8 +227,6 @@ ${originalText}`;
   };
 
   await editMessageText(chatId, originalMessageId, updatedText, buttons);
-
-  // Если выбрали в другом сообщении — убираем кнопки от старого
   if (originalMessageId !== messageId) {
     await editMessageText(chatId, messageId, message.text);
   }
