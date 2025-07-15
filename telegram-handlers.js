@@ -121,7 +121,6 @@ module.exports = (app, userStates) => {
     await cleanupMessages(chatId, state);
     delete userStates[chatId];
 
-    // Запланировать замену ссылки через 3 минуты
     setTimeout(async () => {
       const finalRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
       const finalText = finalRes.data?.text || originalText;
@@ -196,7 +195,9 @@ module.exports = (app, userStates) => {
         }
 
         // остальная логика (done, delayed, cancelled...) без изменений ↓
+      }
 
+      res.sendStatus(200);
     } catch (error) {
       console.error('Ошибка в webhook:', error.message);
       res.sendStatus(500);
