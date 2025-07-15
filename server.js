@@ -4,6 +4,12 @@ module.exports = (app, userStates) => {
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+const originalIdRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
+if (!originalIdRes.data || !originalIdRes.data.message_id) {
+  logEvent('Invalid response from GAS for messageId', { response: originalIdRes.data });
+  return;
+}
+const originalMessageId = originalIdRes.data.message_id;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
   const DELAY_BEFORE_DELETE = 15000;
