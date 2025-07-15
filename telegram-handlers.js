@@ -1,12 +1,10 @@
 // telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
-  const { google } = require('googleapis');
   const BOT_TOKEN = process.env.BOT_TOKEN;
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-  const DRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
@@ -107,7 +105,7 @@ module.exports = (app, userStates) => {
 ✅ Заявка закрыта.
 👷 Исполнитель: ${executor}
 💰 Сумма: ${amount || '0'}
-📸 Фото: <a href=\"${photoUrl}\">ссылка</a>
+📸 Фото: <a href="${photoUrl}">ссылка</a>
 📝 Комментарий: ${comment}`;
 
     await axios.post(GAS_WEB_APP_URL, {
@@ -150,6 +148,25 @@ module.exports = (app, userStates) => {
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
           userStates[chatId].serviceMessages.push(prompt);
           deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
+
+        if (action === 'delayed') {
+          await axios.post(GAS_WEB_APP_URL, {
+            action: 'delayed',
+            row,
+            status: 'Ожидает поставки'
+          });
+
+          const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
+          const originalText = textRes.data?.text || '';
+
+          const updatedText = `${originalText}
+
+⏳ Статус: Ожидает поставки`;
+          const finalButtons = buildFinalButtons(row);
+
+          await editMessageText(chatId, messageId, updatedText, finalButtons);
           return res.sendStatus(200);
         }
       }
