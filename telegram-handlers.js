@@ -1,10 +1,12 @@
 // telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
+  const { google } = require('googleapis');
   const BOT_TOKEN = process.env.BOT_TOKEN;
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+  const DRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
@@ -21,7 +23,6 @@ module.exports = (app, userStates) => {
       inline_keyboard: [
         [
           { text: '✅ Выполнено', callback_data: `done:${row}` },
-          { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
           { text: '❌ Отмена', callback_data: `cancelled:${row}` }
         ]
       ]
@@ -41,10 +42,15 @@ module.exports = (app, userStates) => {
 
   async function editMessageText(chatId, messageId, text, reply_markup) {
     try {
+      const updatedText = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
       await axios.post(`${TELEGRAM_API}/editMessageText`, {
         chat_id: chatId,
         message_id: messageId,
-        text,
+        text: updatedText,
         parse_mode: 'HTML',
         ...(reply_markup && { reply_markup })
       });
@@ -90,41 +96,19 @@ module.exports = (app, userStates) => {
   }
 
   async function completeRequest(chatId, state, commentMessageId, commentText) {
-    let { row, executor, amount, photoUrl, originalMessageId } = state;
+    const { row, executor, amount, photoUrl, originalMessageId } = state;
     const comment = commentText || '';
 
-    if (!row) {
-      console.warn('⚠️ Row (номер строки) не найден в state. Пробуем восстановить...');
-      const recovery = await axios.post(GAS_WEB_APP_URL, {
-        action: 'recoverRowByMessageId',
-        message_id: originalMessageId
-      });
-      if (recovery.data?.row) {
-        row = recovery.data.row;
-        state.row = row;
-      } else {
-        console.error('❌ Ошибка: не удалось восстановить номер строки.');
-        return;
-      }
-    }
-
-    const [idRes, textRes, delayRes] = await Promise.all([
-      axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
-      axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row }),
-      axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row })
-    ]);
-
-    const resolvedMessageId = idRes.data?.message_id;
+    const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
     const originalText = textRes.data?.text || '';
-    const delayDays = delayRes.data?.delay || '0';
 
-    if (resolvedMessageId) {
-      const updatedText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${photoUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
-      await editMessageText(chatId, resolvedMessageId, updatedText);
-      state.originalMessageId = resolvedMessageId;
-    } else {
-      console.warn(`⚠️ Нет originalMessageId для строки ${row}, пропускаем редактирование сообщения.`);
-    }
+    const updatedText = `${originalText}
+
+✅ Заявка закрыта.
+👷 Исполнитель: ${executor}
+💰 Сумма: ${amount || '0'}
+📸 Фото: <a href=\"${photoUrl}\">ссылка</a>
+📝 Комментарий: ${comment}`;
 
     await axios.post(GAS_WEB_APP_URL, {
       action: 'complete',
@@ -133,24 +117,84 @@ module.exports = (app, userStates) => {
       photoUrl,
       amount,
       comment,
-      message_id: resolvedMessageId || null
+      message_id: originalMessageId
     });
 
+    await editMessageText(chatId, originalMessageId, updatedText);
     await deleteMessageWithDelay(chatId, commentMessageId);
     await cleanupMessages(chatId, state);
     delete userStates[chatId];
-
-    setTimeout(async () => {
-      const finalRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
-      const finalText = finalRes.data?.text || originalText;
-      const driveUrlRes = await axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row });
-      const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
-      if (resolvedMessageId) {
-        const editedFinalText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${driveUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${finalText}`;
-        await editMessageText(chatId, resolvedMessageId, editedFinalText);
-      }
-    }, 180000);
   }
 
-  // остальная логика webhook продолжится ниже, если понадобится
+  app.post('/webhook', async (req, res) => {
+    try {
+      const body = req.body;
+
+      if (body.callback_query) {
+        const { data: raw, message, id: callbackId, from } = body.callback_query;
+        const chatId = message.chat.id;
+        const messageId = message.message_id;
+        const [action, row, executor] = raw.split(':');
+
+        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+          callback_query_id: callbackId
+        });
+
+        if (action === 'done') {
+          userStates[chatId] = {
+            ...userStates[chatId],
+            stage: 'awaiting_photo',
+            serviceMessages: [],
+            userResponses: []
+          };
+          const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
+          userStates[chatId].serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
+      }
+
+      if (body.message) {
+        const { message } = body;
+        const chatId = message.chat.id;
+        const state = userStates[chatId];
+
+        if (!state) return res.sendStatus(200);
+
+        if (state.stage === 'awaiting_photo' && message.photo) {
+          const photoUrl = await getFileLink(message.photo.at(-1).file_id);
+          state.photoUrl = photoUrl;
+          state.userResponses.push(message.message_id);
+
+          const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
+          state.stage = 'awaiting_amount';
+          state.serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
+
+        if (state.stage === 'awaiting_amount' && message.text) {
+          state.amount = message.text.trim();
+          state.userResponses.push(message.message_id);
+
+          const prompt = await sendMessage(chatId, '📝 Добавьте комментарий:');
+          state.stage = 'awaiting_comment';
+          state.serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
+
+        if (state.stage === 'awaiting_comment' && message.text) {
+          state.userResponses.push(message.message_id);
+          await completeRequest(chatId, state, message.message_id, message.text);
+          return res.sendStatus(200);
+        }
+      }
+
+      res.sendStatus(200);
+    } catch (err) {
+      console.error('❌ Webhook error:', err);
+      res.sendStatus(500);
+    }
+  });
 };
