@@ -232,6 +232,72 @@ module.exports = (app, userStates) => {
         }
       }
 
+      if (body.message) {
+        const { message } = body;
+        const chatId = message.chat.id;
+        const state = userStates[chatId];
+
+        if (!state) return res.sendStatus(200);
+
+        if (state.awaiting_manual_executor && message.text) {
+          state.executor = message.text;
+          state.awaiting_manual_executor = false;
+
+          const [idRes, textRes] = await Promise.all([
+            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row: state.row }),
+            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row: state.row })
+          ]);
+          const originalMessageId = idRes.data?.message_id;
+          const originalText = textRes.data?.text || '';
+
+          await axios.post(GAS_WEB_APP_URL, {
+            action: 'in_progress',
+            row: state.row,
+            executor: state.executor,
+            message_id: originalMessageId
+          });
+
+          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${state.executor}`;
+          const buttons = buildFinalButtons(state.row);
+
+          await editMessageText(chatId, originalMessageId, updatedText, buttons);
+          await deleteMessageWithDelay(chatId, message.message_id);
+          return res.sendStatus(200);
+        }
+
+        if (state.stage === 'awaiting_photo' && message.photo) {
+          const photoUrl = await getFileLink(message.photo.at(-1).file_id);
+          state.photoUrl = photoUrl;
+          state.userResponses.push(message.message_id);
+          console.log(`📸 Получено фото от пользователя: ${photoUrl}`);
+
+          const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
+          state.stage = 'awaiting_amount';
+          state.serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
+
+        if (state.stage === 'awaiting_amount' && message.text) {
+          state.amount = message.text.trim();
+          state.userResponses.push(message.message_id);
+          console.log(`💰 Получена сумма от пользователя: ${state.amount}`);
+
+          const prompt = await sendMessage(chatId, '📝 Добавьте комментарий:');
+          state.stage = 'awaiting_comment';
+          state.serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
+
+        if (state.stage === 'awaiting_comment' && message.text) {
+          state.userResponses.push(message.message_id);
+          console.log(`📝 Получен комментарий от пользователя: ${message.text}`);
+          await completeRequest(chatId, state, message.message_id, message.text);
+          return res.sendStatus(200);
+        }
+      }
+
       res.sendStatus(200);
     } catch (error) {
       console.error('Ошибка в webhook:', error.message);
