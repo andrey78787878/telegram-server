@@ -275,73 +275,89 @@ ${originalText}`;
           };
         }
         else if (action === 'select_executor') {
-          if (!userStates[chatId]) userStates[chatId] = {};
+  if (!userStates[chatId]) userStates[chatId] = {};
 
-          if (executor === 'Текстовой подрядчик') {
-            userStates[chatId].awaiting_manual_executor = true;
-            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
-            userStates[chatId].serviceMessages = [prompt];
-          } else {
-            try {
-              const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
-                action: 'getRequestText',
-                row: row
-              });
-              
-              const originalText = originalTextRes.data?.text || message.text || 'Заявка';
-              const updatedText = `${originalText.substring(0, 3000)}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-              
-              if (updatedText.length > 4096) {
-                throw new Error('Текст сообщения слишком длинный');
-              }
+  if (executor === 'Текстовой подрядчик') {
+    userStates[chatId].awaiting_manual_executor = true;
+    const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
+    userStates[chatId].serviceMessages = [prompt];
+  } else {
+    try {
+      // Получаем текущий текст сообщения
+      let currentText = message.text;
+      
+      // Если текст не получен из сообщения, запрашиваем из Google Sheets
+      if (!currentText) {
+        const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
+          action: 'getRequestText',
+          row: row
+        });
+        currentText = originalTextRes.data?.text || '📍 Заявка';
+      }
 
-              const buttons = {
-                inline_keyboard: [
-                  [
-                    { text: '✅ Выполнено', callback_data: `done:${row}` },
-                    { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-                    { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-                  ]
-                ]
-              };
+      // Формируем новый текст с информацией об исполнителе
+      const updatedText = `${currentText.split('\n\n')[0]}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
 
-              console.log('Пытаемся изменить сообщение:', {
-                chatId,
-                messageId,
-                textLength: updatedText.length,
-                hasButtons: !!buttons
-              });
+      // Создаем клавиатуру с кнопками управления
+      const buttons = {
+        inline_keyboard: [
+          [
+            { text: '✅ Выполнено', callback_data: `done:${row}` },
+            { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+            { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+          ]
+        ]
+      };
 
-              const editResult = await editMessageText(chatId, messageId, updatedText, buttons);
-              
-              if (!editResult.success) {
-                console.log('Не удалось изменить сообщение, пробуем отправить новое');
-                const newMsgId = await sendMessage(chatId, updatedText, { reply_markup: buttons });
-                if (newMsgId) messageId = newMsgId;
-              }
+      // Логируем данные перед отправкой
+      console.log('Обновление сообщения:', {
+        chatId,
+        messageId,
+        textPreview: updatedText.substring(0, 50) + '...',
+        textLength: updatedText.length
+      });
 
-              userStates[chatId] = {
-                executor,
-                row,
-                originalMessageId: messageId,
-                serviceMessages: [],
-                userResponses: [],
-                stage: 'awaiting_photo'
-              };
+      // Пытаемся изменить сообщение
+      const editResult = await editMessageText(chatId, messageId, updatedText, buttons);
+      
+      // Если не удалось изменить, отправляем новое сообщение
+      if (!editResult.success) {
+        console.log('Создаем новое сообщение вместо редактирования');
+        const newMsgId = await sendMessage(chatId, updatedText, { reply_markup: buttons });
+        if (newMsgId) messageId = newMsgId;
+      }
 
-              await axios.post(GAS_WEB_APP_URL, {
-                action: 'in_progress',
-                row: row,
-                executor: executor,
-                message_id: messageId
-              });
+      // Обновляем состояние
+      userStates[chatId] = {
+        executor,
+        row,
+        originalMessageId: messageId,
+        serviceMessages: [],
+        userResponses: [],
+        stage: 'awaiting_photo'
+      };
 
-            } catch (error) {
-              console.error('Ошибка при выборе исполнителя:', error);
-              await sendMessage(chatId, `⚠️ Произошла ошибка: ${error.message}`);
-            }
-          }
-        }
+      // Обновляем данные в Google Sheets
+      await axios.post(GAS_WEB_APP_URL, {
+        action: 'in_progress',
+        row: row,
+        executor: executor,
+        message_id: messageId
+      });
+
+      console.log('Исполнитель успешно выбран:', executor);
+
+    } catch (error) {
+      console.error('Ошибка при выборе исполнителя:', {
+        error: error.message,
+        stack: error.stack
+      });
+      await sendMessage(chatId, '⚠️ Ошибка при выборе исполнителя. Попробуйте еще раз.');
+    }
+  }
+}
+
+
         else if (action === 'done') {
           if (userStates[chatId]?.stage === 'awaiting_photo') return;
 
