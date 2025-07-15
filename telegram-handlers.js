@@ -277,28 +277,96 @@ ${originalText}`;
         else if (action === 'select_executor') {
   if (!userStates[chatId]) userStates[chatId] = {};
 
-  if (executor === 'Текстовой подрядчик') {
-    userStates[chatId].awaiting_manual_executor = true;
-    const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
-    userStates[chatId].serviceMessages = [prompt];
-  } else {
+  // Обработчик выбора исполнителя
+bot.action(/select_executor:(\d+):(.+)/, async (ctx) => {
+  const chatId = ctx.chat.id;
+  const messageId = ctx.update.callback_query.message.message_id;
+  const row = ctx.match[1];
+  const executor = ctx.match[2];
+  
+  try {
+    // 1. Обработка текстового подрядчика
+    if (executor === 'Текстовой подрядчик') {
+      userStates[chatId] = {
+        awaitingManualExecutor: true,
+        row,
+        originalMessageId: messageId
+      };
+      const prompt = await ctx.reply('Введите имя подрядчика:');
+      userStates[chatId].serviceMessages = [prompt.message_id];
+      return;
+    }
+
+    // 2. Обновление в Google Sheets
+    const response = await axios.post(GAS_WEB_APP_URL, {
+      action: 'select_executor',
+      row,
+      executor,
+      message_id: messageId
+    });
+
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Не удалось обновить данные');
+    }
+
+    // 3. Обновление сообщения
+    const buttons = {
+      inline_keyboard: [
+        [
+          { text: '✅ Выполнено', callback_data: `done:${row}` },
+          { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+          { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+        ]
+      ]
+    };
+
+    await ctx.telegram.editMessageText(
+      chatId,
+      messageId,
+      null,
+      response.data.updated_text,
+      { reply_markup: buttons }
+    );
+
+    // 4. Обновление состояния
+    userStates[chatId] = {
+      executor,
+      row,
+      originalMessageId: messageId,
+      stage: 'awaiting_photo'
+    };
+
+  } catch (error) {
+    console.error('Ошибка при выборе исполнителя:', error);
+    await ctx.answerCbQuery('⚠️ Ошибка при выборе исполнителя');
+    await ctx.reply('Произошла ошибка, попробуйте ещё раз');
+  }
+});
+
+// Обработчик ручного ввода подрядчика
+bot.on('text', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const state = userStates[chatId];
+  
+  if (state?.awaitingManualExecutor) {
     try {
-      // Получаем текущий текст сообщения
-      let currentText = message.text;
+      const executor = ctx.message.text;
+      const row = state.row;
+      const originalMessageId = state.originalMessageId;
       
-      // Если текст не получен из сообщения, запрашиваем из Google Sheets
-      if (!currentText) {
-        const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
-          action: 'getRequestText',
-          row: row
-        });
-        currentText = originalTextRes.data?.text || '📍 Заявка';
+      // Обновление в Google Sheets
+      const response = await axios.post(GAS_WEB_APP_URL, {
+        action: 'select_executor',
+        row,
+        executor,
+        message_id: originalMessageId
+      });
+
+      if (!response.data.success) {
+        throw new Error(response.data.error || 'Не удалось обновить данные');
       }
 
-      // Формируем новый текст с информацией об исполнителе
-      const updatedText = `${currentText.split('\n\n')[0]}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-
-      // Создаем клавиатуру с кнопками управления
+      // Обновление сообщения
       const buttons = {
         inline_keyboard: [
           [
@@ -308,6 +376,45 @@ ${originalText}`;
           ]
         ]
       };
+
+      await ctx.telegram.editMessageText(
+        chatId,
+        originalMessageId,
+        null,
+        response.data.updated_text,
+        { reply_markup: buttons }
+      );
+
+      // Очистка сервисных сообщений
+      if (state.serviceMessages) {
+        await deleteMessages(ctx, state.serviceMessages);
+      }
+
+      // Обновление состояния
+      userStates[chatId] = {
+        executor,
+        row,
+        originalMessageId,
+        stage: 'awaiting_photo'
+      };
+
+    } catch (error) {
+      console.error('Ошибка при обработке подрядчика:', error);
+      await ctx.reply('Произошла ошибка, попробуйте ещё раз');
+    }
+  }
+});
+
+// Вспомогательная функция для удаления сообщений
+async function deleteMessages(ctx, messageIds) {
+  for (const id of messageIds) {
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, id);
+    } catch (e) {
+      console.error('Ошибка при удалении сообщения:', e);
+    }
+  }
+}
 
       // Логируем данные перед отправкой
       console.log('Обновление сообщения:', {
