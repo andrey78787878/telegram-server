@@ -18,6 +18,17 @@ module.exports = (app, userStates) => {
     };
   }
 
+  function buildFinalButtons(row) {
+    return {
+      inline_keyboard: [
+        [
+          { text: '✅ Выполнено', callback_data: `done:${row}` },
+          { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+        ]
+      ]
+    };
+  }
+
   async function sendMessage(chatId, text, options = {}) {
     const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
       chat_id: chatId,
@@ -77,15 +88,42 @@ module.exports = (app, userStates) => {
     return `${TELEGRAM_FILE_API}/${filePath}`;
   }
 
-  async function uploadPhotoToDrive(fileUrl, fileName) {
-    return fileUrl;
-  }
-
   async function cleanupMessages(chatId, state) {
     const messages = [...(state.serviceMessages || []), ...(state.userResponses || [])];
     for (const msg of messages) {
       await deleteMessage(chatId, msg);
     }
+  }
+
+  async function completeRequest(chatId, state, commentMessageId, commentText) {
+    const { row, executor, amount, photoUrl, originalMessageId } = state;
+    const comment = commentText || '';
+
+    const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
+    const originalText = textRes.data?.text || '';
+
+    const updatedText = `${originalText}
+
+✅ Заявка закрыта.
+👷 Исполнитель: ${executor}
+💰 Сумма: ${amount || '0'}
+📸 Фото: <a href=\"${photoUrl}\">ссылка</a>
+📝 Комментарий: ${comment}`;
+
+    await axios.post(GAS_WEB_APP_URL, {
+      action: 'complete',
+      row,
+      status: 'Выполнено',
+      photoUrl,
+      amount,
+      comment,
+      message_id: originalMessageId
+    });
+
+    await editMessageText(chatId, originalMessageId, updatedText);
+    await deleteMessageWithDelay(chatId, commentMessageId);
+    await cleanupMessages(chatId, state);
+    delete userStates[chatId];
   }
 
   app.post('/webhook', async (req, res) => {
@@ -102,66 +140,6 @@ module.exports = (app, userStates) => {
           callback_query_id: callbackId
         });
 
-        if (action === 'in_progress') {
-          const getRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
-          const originalMessageId = getRes.data?.message_id;
-          if (!originalMessageId) return res.sendStatus(200);
-          const keyboard = buildExecutorButtons(row);
-          await editMessageText(chatId, originalMessageId, `${message.text}\n\nВыберите исполнителя:`, keyboard);
-          userStates[chatId] = { row, sourceMessageId: originalMessageId, serviceMessages: [] };
-          return res.sendStatus(200);
-        }
-
-        if (action === 'select_executor') {
-          if (!userStates[chatId]) userStates[chatId] = { row };
-
-          if (executor === 'Текстовой подрядчик') {
-            userStates[chatId].awaiting_manual_executor = true;
-            userStates[chatId].stage = 'awaiting_manual_executor';
-            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
-            userStates[chatId].serviceMessages = [prompt];
-            deleteMessageWithDelay(chatId, prompt);
-            return res.sendStatus(200);
-          }
-
-          const [idRes, textRes] = await Promise.all([
-            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
-            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
-          ]);
-          const originalMessageId = idRes.data?.message_id;
-          const originalText = textRes.data?.text || '';
-          if (!originalMessageId) return res.sendStatus(200);
-
-          await axios.post(GAS_WEB_APP_URL, {
-            action: 'in_progress',
-            row,
-            executor,
-            message_id: originalMessageId
-          });
-
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${row}` },
-                { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-              ]
-            ]
-          };
-
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
-
-          userStates[chatId] = {
-            ...userStates[chatId],
-            row,
-            executor,
-            originalMessageId,
-            serviceMessages: []
-          };
-          return res.sendStatus(200);
-        }
-
         if (action === 'done') {
           userStates[chatId] = {
             ...userStates[chatId],
@@ -174,18 +152,6 @@ module.exports = (app, userStates) => {
           deleteMessageWithDelay(chatId, prompt);
           return res.sendStatus(200);
         }
-
-        if (action === 'delayed') {
-          await axios.post(GAS_WEB_APP_URL, { action: 'delayed', row, status: 'Ожидает поставки' });
-          await editMessageText(chatId, messageId, message.text + '\n⏳ Ожидает поставки');
-          return res.sendStatus(200);
-        }
-
-        if (action === 'cancelled') {
-          await axios.post(GAS_WEB_APP_URL, { action: 'cancelled', row, status: 'Отменено' });
-          await editMessageText(chatId, messageId, message.text + '\n❌ Отменено');
-          return res.sendStatus(200);
-        }
       }
 
       if (body.message) {
@@ -193,45 +159,35 @@ module.exports = (app, userStates) => {
         const chatId = message.chat.id;
         const state = userStates[chatId];
 
-        if (state?.stage === 'awaiting_manual_executor' && message.text) {
-          const executor = message.text;
-          const row = state.row;
-          const originalMessageId = state.sourceMessageId || state.originalMessageId;
+        if (!state) return res.sendStatus(200);
 
-          const [textRes] = await Promise.all([
-            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
-          ]);
-          const originalText = textRes.data?.text || '';
+        if (state.stage === 'awaiting_photo' && message.photo) {
+          const photoUrl = await getFileLink(message.photo.at(-1).file_id);
+          state.photoUrl = photoUrl;
+          state.userResponses.push(message.message_id);
 
-          await axios.post(GAS_WEB_APP_URL, {
-            action: 'in_progress',
-            row,
-            executor,
-            message_id: originalMessageId
-          });
+          const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
+          state.stage = 'awaiting_amount';
+          state.serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
 
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${row}` },
-                { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-              ]
-            ]
-          };
+        if (state.stage === 'awaiting_amount' && message.text) {
+          state.amount = message.text.trim();
+          state.userResponses.push(message.message_id);
 
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
-          deleteMessageWithDelay(chatId, message.message_id);
+          const prompt = await sendMessage(chatId, '📝 Добавьте комментарий:');
+          state.stage = 'awaiting_comment';
+          state.serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
 
-          userStates[chatId] = {
-            ...userStates[chatId],
-            row,
-            executor,
-            originalMessageId,
-            stage: null,
-            serviceMessages: []
-          };
+        if (state.stage === 'awaiting_comment' && message.text) {
+          state.userResponses.push(message.message_id);
+          await completeRequest(chatId, state, message.message_id, message.text);
+          return res.sendStatus(200);
         }
       }
 
