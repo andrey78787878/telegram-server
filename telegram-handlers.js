@@ -104,7 +104,7 @@ module.exports = (app, userStates) => {
 
     if (!originalMessageId) return;
 
-    const updatedText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href=\\"${photoUrl}\\">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
+    const updatedText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${photoUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
 
     await axios.post(GAS_WEB_APP_URL, {
       action: 'complete',
@@ -127,7 +127,7 @@ module.exports = (app, userStates) => {
       const finalText = finalRes.data?.text || originalText;
       const driveUrlRes = await axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row });
       const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
-      const editedFinalText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href=\\"${driveUrl}\\">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${finalText}`;
+      const editedFinalText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${driveUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${finalText}`;
       await editMessageText(chatId, originalMessageId, editedFinalText);
     }, 180000);
   }
@@ -156,7 +156,46 @@ module.exports = (app, userStates) => {
           return res.sendStatus(200);
         }
 
-        // остальная логика (select_executor, done, delayed, cancelled...) без изменений ↓
+        if (action === 'select_executor') {
+          if (!userStates[chatId]) userStates[chatId] = { row };
+          if (executor === 'Текстовой подрядчик') {
+            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
+            userStates[chatId].awaiting_manual_executor = true;
+            userStates[chatId].serviceMessages = [prompt];
+            return res.sendStatus(200);
+          }
+
+          const [idRes, textRes] = await Promise.all([
+            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
+            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
+          ]);
+          const originalMessageId = idRes.data?.message_id;
+          const originalText = textRes.data?.text || '';
+          if (!originalMessageId) return res.sendStatus(200);
+
+          await axios.post(GAS_WEB_APP_URL, {
+            action: 'in_progress',
+            row,
+            executor,
+            message_id: originalMessageId
+          });
+
+          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+          const buttons = buildFinalButtons(row);
+
+          await editMessageText(chatId, originalMessageId, updatedText, buttons);
+
+          userStates[chatId] = {
+            ...userStates[chatId],
+            row,
+            executor,
+            originalMessageId,
+            serviceMessages: []
+          };
+          return res.sendStatus(200);
+        }
+
+        // остальная логика (done, delayed, cancelled...) без изменений ↓
 
     } catch (error) {
       console.error('Ошибка в webhook:', error.message);
