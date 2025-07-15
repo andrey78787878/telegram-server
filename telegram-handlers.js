@@ -108,18 +108,20 @@ module.exports = (app, userStates) => {
       }
     }
 
-    const [idRes, textRes, delayRes] = await Promise.all([
+    const [idRes, textRes, delayRes, driveUrlRes] = await Promise.all([
       axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
       axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row }),
-      axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row })
+      axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row }),
+      axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row })
     ]);
 
     const resolvedMessageId = idRes.data?.message_id;
     const originalText = textRes.data?.text || '';
     const delayDays = delayRes.data?.delay || '0';
+    const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
 
     if (resolvedMessageId) {
-      const updatedText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${photoUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
+      const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
       await editMessageText(chatId, resolvedMessageId, updatedText);
       state.originalMessageId = resolvedMessageId;
     } else {
@@ -139,17 +141,6 @@ module.exports = (app, userStates) => {
     await deleteMessageWithDelay(chatId, commentMessageId);
     await cleanupMessages(chatId, state);
     delete userStates[chatId];
-
-    setTimeout(async () => {
-      const finalRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
-      const finalText = finalRes.data?.text || originalText;
-      const driveUrlRes = await axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row });
-      const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
-      if (resolvedMessageId) {
-        const editedFinalText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${driveUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${finalText}`;
-        await editMessageText(chatId, resolvedMessageId, editedFinalText);
-      }
-    }, 180000);
   }
 
   app.post('/webhook', async (req, res) => {
@@ -206,6 +197,28 @@ module.exports = (app, userStates) => {
             serviceMessages: []
           };
 
+          return res.sendStatus(200);
+        }
+
+        if (action === 'done') {
+          if (!userStates[chatId]) userStates[chatId] = {};
+
+          const idRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
+          const originalMessageId = idRes.data?.message_id;
+          if (!originalMessageId) return res.sendStatus(200);
+
+          userStates[chatId] = {
+            ...userStates[chatId],
+            stage: 'awaiting_photo',
+            row,
+            originalMessageId,
+            serviceMessages: [],
+            userResponses: []
+          };
+
+          const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
+          userStates[chatId].serviceMessages.push(prompt);
+          deleteMessageWithDelay(chatId, prompt);
           return res.sendStatus(200);
         }
       }
