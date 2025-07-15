@@ -7,6 +7,70 @@ module.exports = (app, userStates) => {
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
+const app = express();
+app.use(bodyParser.json());
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+const PORT = process.env.PORT || 3000;
+
+// Хранилище состояний пользователей
+const userStates = {};
+
+// Импортируем обработчики Telegram
+require('./telegram-handlers')(app, userStates);
+
+// Тестовый endpoint для проверки работы сервера
+app.get('/', (req, res) => {
+  res.send('Telegram Bot is running!');
+});
+
+// Запуск сервера
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
+
+// Экспорт для тестов
+module.exports = app;
+module.exports = (app, userStates) => {
+  const axios = require('axios');
+  const BOT_TOKEN = process.env.BOT_TOKEN;
+  const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+  const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
+  const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+
+  const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
+
+  // ... (все остальные функции остаются без изменений, как в предыдущем исправленном коде)
+
+  // Главное изменение - убедитесь, что все обработчики правильно обернуты:
+  app.post('/webhook', async (req, res) => {
+    try {
+      const body = req.body;
+      console.log('Webhook received:', JSON.stringify(body, null, 2));
+
+      // Обработка callback_query
+      if (body.callback_query) {
+        const { data, message } = body.callback_query;
+        const chatId = message.chat.id;
+        
+        // Добавьте здесь обработку callback как в предыдущем коде
+        // Убедитесь, что все await находятся внутри async функций
+      }
+
+      // Обработка обычных сообщений
+      if (body.message) {
+        const { chat, text } = body.message;
+        // ... обработка сообщений
+      }
+
+      res.sendStatus(200);
+    } catch (error) {
+      console.error('Webhook error:', error);
+      res.sendStatus(500);
+    }
+  });
+};
   // Улучшенное логирование
   function logAction(chatId, action, data = {}) {
     console.log(`[ACTION] ${new Date().toISOString()} Chat ${chatId}: ${action}`, data);
