@@ -69,15 +69,7 @@ module.exports = (app, userStates) => {
   }
 
   async function uploadPhotoToDrive(fileUrl, fileName) {
-    const auth = new google.auth.GoogleAuth({ scopes: ['https://www.googleapis.com/auth/drive'] });
-    const drive = google.drive({ version: 'v3', auth });
-    const res = await axios.get(fileUrl, { responseType: 'stream' });
-    const fileMeta = { name: fileName, parents: [DRIVE_FOLDER_ID] };
-    const media = { mimeType: 'image/jpeg', body: res.data };
-    const uploaded = await drive.files.create({ requestBody: fileMeta, media, fields: 'id' });
-    const fileId = uploaded.data.id;
-    await drive.permissions.create({ fileId, requestBody: { role: 'reader', type: 'anyone' } });
-    return `https://drive.google.com/uc?id=${fileId}`;
+    return fileUrl;
   }
 
   async function cleanupMessages(chatId, state) {
@@ -92,7 +84,7 @@ module.exports = (app, userStates) => {
       const body = req.body;
 
       if (body.callback_query) {
-        const { data: raw, message, id: callbackId } = body.callback_query;
+        const { data: raw, message, id: callbackId, from } = body.callback_query;
         const chatId = message.chat.id;
         const messageId = message.message_id;
         const [action, row, executor] = raw.split(':');
@@ -101,13 +93,13 @@ module.exports = (app, userStates) => {
           callback_query_id: callbackId
         });
 
-        // 🔹 Обработка нажатия "Принято в работу"
         if (action === 'in_progress') {
-          await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
+          const getRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
+          const originalMessageId = getRes.data?.message_id;
+          if (!originalMessageId) return res.sendStatus(200);
           const keyboard = buildExecutorButtons(row);
-          const newText = `${message.text}\n\nВыберите исполнителя:`;
-          await editMessageText(chatId, messageId, newText, keyboard);
-          userStates[chatId] = { row, sourceMessageId: messageId, serviceMessages: [] };
+          await editMessageText(chatId, originalMessageId, `${message.text}\n\nВыберите исполнителя:`, keyboard);
+          userStates[chatId] = { row, sourceMessageId: originalMessageId, serviceMessages: [] };
           return res.sendStatus(200);
         }
 
@@ -119,29 +111,23 @@ module.exports = (app, userStates) => {
             userStates[chatId].serviceMessages = [prompt];
             return res.sendStatus(200);
           }
-          const rowDataRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestRow', row });
-          const rowData = rowDataRes.data?.row;
-          const originalMessageId = rowData?.[16];
-          if (!originalMessageId || !rowData) return res.sendStatus(200);
 
-          const formatDate = (val) => {
-            const d = new Date(val);
-            return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
-          };
+          const [idRes, textRes] = await Promise.all([
+            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
+            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
+          ]);
+          const originalMessageId = idRes.data?.message_id;
+          const originalText = textRes.data?.text || '';
+          if (!originalMessageId) return res.sendStatus(200);
 
-          const updatedText = `📍 Заявка #${row}
+          await axios.post(GAS_WEB_APP_URL, {
+            action: 'in_progress',
+            row,
+            executor,
+            message_id: originalMessageId
+          });
 
-🍕 Пиццерия: ${rowData[1] || '—'}
-🔧 Классификация: ${rowData[2] || '—'}
-📂 Категория: ${rowData[3] || '—'}
-📋 Проблема: ${rowData[4] || '—'}
-👤 Инициатор: ${rowData[5] || '—'}
-📞 Телефон: ${rowData[6] || '—'}
-🕓 Срок: ${rowData[8] ? formatDate(rowData[8]) : '—'}
-
-🟢 В работе
-👷 Исполнитель: ${executor}`;
-
+          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
           const buttons = {
             inline_keyboard: [
               [
@@ -173,7 +159,6 @@ module.exports = (app, userStates) => {
           };
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
           userStates[chatId].serviceMessages.push(prompt);
-          await editMessageText(chatId, userStates[chatId].originalMessageId, '📌 Ожидаем фото...');
           return res.sendStatus(200);
         }
 
@@ -191,7 +176,7 @@ module.exports = (app, userStates) => {
       }
 
       if (body.message) {
-        // ... (остальной код без изменений)
+        // ... другие события, если нужно
       }
 
       res.sendStatus(200);
