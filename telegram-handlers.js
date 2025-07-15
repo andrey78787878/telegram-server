@@ -7,7 +7,7 @@ module.exports = (app, userStates) => {
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
-
+console.log("Получен callback:", body.callback_query.data);
   // Функция для создания кнопок выбора исполнителя
   function buildExecutorButtons(row) {
     return {
