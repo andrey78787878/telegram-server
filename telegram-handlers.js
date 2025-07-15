@@ -169,55 +169,77 @@ ${originalText}`;
           return res.sendStatus(200);
         }
 
-        if (action === 'select_executor') {
-          if (!userStates[chatId]) userStates[chatId] = {};
+       if (action === 'select_executor') {
+  if (!userStates[chatId]) userStates[chatId] = {};
 
-          if (executor === 'Текстовой подрядчик') {
-            userStates[chatId].awaiting_manual_executor = true;
-            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
-            userStates[chatId].serviceMessages.push(prompt);
-            return res.sendStatus(200);
-          }
+  if (executor === 'Текстовой подрядчик') {
+    userStates[chatId].awaiting_manual_executor = true;
+    const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
+    userStates[chatId].serviceMessages.push(prompt);
+    return res.sendStatus(200);
+  }
 
-          const [originalIdRes, originalTextRes] = await Promise.all([
-            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
-            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
-          ]);
+  const [originalIdRes, rowDataRes] = await Promise.all([
+    axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
+    axios.post(GAS_WEB_APP_URL, { action: 'getRequestRow', row })
+  ]);
 
-          const originalMessageId = originalIdRes.data?.message_id;
-          const originalText = originalTextRes.data?.text || '';
+  const originalMessageId = originalIdRes.data?.message_id;
+  const rowData = rowDataRes.data?.row;
 
-          if (!originalMessageId) return res.sendStatus(200);
+  if (!originalMessageId || !rowData) return res.sendStatus(200);
 
-          await axios.post(GAS_WEB_APP_URL, { 
-            action: 'in_progress', 
-            row, 
-            executor, 
-            message_id: originalMessageId 
-          });
+  // Обновляем данные в таблице
+  await axios.post(GAS_WEB_APP_URL, {
+    action: 'in_progress',
+    row,
+    executor,
+    message_id: originalMessageId
+  });
 
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${row}` },
-                { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-              ]
-            ]
-          };
+  const formatDate = (val) => {
+    const d = new Date(val);
+    return Utilities.formatDate(d, "GMT+5", "dd.MM.yyyy");
+  };
 
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
-          if (originalMessageId !== messageId) {
-            await editMessageText(chatId, messageId, message.text);
-          }
+  const updatedText =
+    `📍 Заявка #${row}\n\n` +
+    `🍕 Пиццерия: ${rowData[1] || '—'}\n` +
+    `🔧 Классификация: ${rowData[2] || '—'}\n` +
+    `📂 Категория: ${rowData[3] || '—'}\n` +
+    `📋 Проблема: ${rowData[4] || '—'}\n` +
+    `👤 Инициатор: ${rowData[5] || '—'}\n` +
+    `📞 Телефон: ${rowData[6] || '—'}\n` +
+    `🕓 Срок: ${rowData[8] ? formatDate(rowData[8]) : '—'}\n\n` +
+    `🟢 В работе\n👷 Исполнитель: ${executor}`;
 
-          userStates[chatId] = {
-            ...userStates[chatId],
-            executor,
-            sourceMessageId: originalMessageId,
-            originalMessageId
-          };
+  const buttons = {
+    inline_keyboard: [
+      [
+        { text: '✅ Выполнено', callback_data: `done:${row}` },
+        { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+        { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+      ]
+    ]
+  };
+
+  await editMessageText(chatId, originalMessageId, updatedText, buttons);
+
+  // Если выбрали в другом сообщении — убираем кнопки от старого
+  if (originalMessageId !== messageId) {
+    await editMessageText(chatId, messageId, message.text);
+  }
+
+  userStates[chatId] = {
+    ...userStates[chatId],
+    executor,
+    sourceMessageId: originalMessageId,
+    originalMessageId
+  };
+
+  return res.sendStatus(200);
+}
+
 
           return res.sendStatus(200);
         }
