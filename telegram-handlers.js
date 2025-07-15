@@ -94,20 +94,17 @@ module.exports = (app, userStates) => {
   }
 
   async function completeRequest(chatId, state, commentMessageId, commentText) {
-    const { row, executor, amount, photoUrl, originalMessageId } = state;
+    const { row, executor, amount, photoUrl } = state;
     const comment = commentText || '';
+
+    const idRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
+    const originalMessageId = idRes.data?.message_id;
+    if (!originalMessageId) return;
 
     const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
     const originalText = textRes.data?.text || '';
 
-    const updatedText = `👷 Исполнитель: ${executor}
-💰 Сумма: ${amount || '0'}
-📸 Фото: <a href="${photoUrl}">ссылка</a>
-📝 Комментарий: ${comment}
-
-━━━━━━━━━━━━
-
-${originalText}`;
+    const updatedText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${photoUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n\n━━━━━━━━━━━━\n\n${originalText}`;
 
     await axios.post(GAS_WEB_APP_URL, {
       action: 'complete',
@@ -140,12 +137,19 @@ ${originalText}`;
         });
 
         if (action === 'done') {
+          const idRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
+          const originalMessageId = idRes.data?.message_id;
+          if (!originalMessageId) return res.sendStatus(200);
+
           userStates[chatId] = {
             ...userStates[chatId],
             stage: 'awaiting_photo',
+            row,
+            originalMessageId,
             serviceMessages: [],
             userResponses: []
           };
+
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
           userStates[chatId].serviceMessages.push(prompt);
           deleteMessageWithDelay(chatId, prompt);
@@ -162,9 +166,7 @@ ${originalText}`;
           const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
           const originalText = textRes.data?.text || '';
 
-          const updatedText = `${originalText}
-
-⏳ Статус: Ожидает поставки`;
+          const updatedText = `${originalText}\n\n⏳ Статус: Ожидает поставки`;
           const finalButtons = buildFinalButtons(row);
 
           await editMessageText(chatId, messageId, updatedText, finalButtons);
