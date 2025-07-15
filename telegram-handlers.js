@@ -1,12 +1,10 @@
 // telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
-  const { google } = require('googleapis');
   const BOT_TOKEN = process.env.BOT_TOKEN;
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-  const DRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
@@ -96,19 +94,17 @@ module.exports = (app, userStates) => {
   }
 
   async function completeRequest(chatId, state, commentMessageId, commentText) {
-    const { row, executor, amount, photoUrl, originalMessageId } = state;
+    const { row, executor, amount, photoUrl } = state;
     const comment = commentText || '';
+
+    const idRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
+    const originalMessageId = idRes.data?.message_id;
+    if (!originalMessageId) return;
 
     const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
     const originalText = textRes.data?.text || '';
 
-    const updatedText = `${originalText}
-
-✅ Заявка закрыта.
-👷 Исполнитель: ${executor}
-💰 Сумма: ${amount || '0'}
-📸 Фото: <a href=\"${photoUrl}\">ссылка</a>
-📝 Комментарий: ${comment}`;
+    const updatedText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${photoUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n\n━━━━━━━━━━━━\n\n${originalText}`;
 
     await axios.post(GAS_WEB_APP_URL, {
       action: 'complete',
@@ -141,15 +137,39 @@ module.exports = (app, userStates) => {
         });
 
         if (action === 'done') {
+          const idRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
+          const originalMessageId = idRes.data?.message_id;
+          if (!originalMessageId) return res.sendStatus(200);
+
           userStates[chatId] = {
             ...userStates[chatId],
             stage: 'awaiting_photo',
+            row,
+            originalMessageId,
             serviceMessages: [],
             userResponses: []
           };
+
           const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
           userStates[chatId].serviceMessages.push(prompt);
           deleteMessageWithDelay(chatId, prompt);
+          return res.sendStatus(200);
+        }
+
+        if (action === 'delayed') {
+          await axios.post(GAS_WEB_APP_URL, {
+            action: 'delayed',
+            row,
+            status: 'Ожидает поставки'
+          });
+
+          const textRes = await axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row });
+          const originalText = textRes.data?.text || '';
+
+          const updatedText = `${originalText}\n\n⏳ Статус: Ожидает поставки`;
+          const finalButtons = buildFinalButtons(row);
+
+          await editMessageText(chatId, messageId, updatedText, finalButtons);
           return res.sendStatus(200);
         }
       }
@@ -165,6 +185,7 @@ module.exports = (app, userStates) => {
           const photoUrl = await getFileLink(message.photo.at(-1).file_id);
           state.photoUrl = photoUrl;
           state.userResponses.push(message.message_id);
+          console.log(`📸 Получено фото от пользователя: ${photoUrl}`);
 
           const prompt = await sendMessage(chatId, '💰 Введите сумму выполненной работы:');
           state.stage = 'awaiting_amount';
@@ -176,6 +197,7 @@ module.exports = (app, userStates) => {
         if (state.stage === 'awaiting_amount' && message.text) {
           state.amount = message.text.trim();
           state.userResponses.push(message.message_id);
+          console.log(`💰 Получена сумма от пользователя: ${state.amount}`);
 
           const prompt = await sendMessage(chatId, '📝 Добавьте комментарий:');
           state.stage = 'awaiting_comment';
@@ -186,6 +208,7 @@ module.exports = (app, userStates) => {
 
         if (state.stage === 'awaiting_comment' && message.text) {
           state.userResponses.push(message.message_id);
+          console.log(`📝 Получен комментарий от пользователя: ${message.text}`);
           await completeRequest(chatId, state, message.message_id, message.text);
           return res.sendStatus(200);
         }
