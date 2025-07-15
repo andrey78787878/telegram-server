@@ -289,81 +289,69 @@ ${originalText}`;
         if (action === 'select_executor') {
           if (!userStates[chatId]) userStates[chatId] = {};
 
-          if (executor === 'Текстовой подрядчик') {
-            userStates[chatId].awaiting_manual_executor = true;
-            const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
-            userStates[chatId].serviceMessages = [prompt];
-            return;
-          }
+          if (action === 'select_executor') {
+  if (!userStates[chatId]) userStates[chatId] = {};
 
-          try {
-            // Получаем message_id из столбца Q
-            const originalMessageId = await getMessageIdFromColumnQ(row);
-            
-            if (!originalMessageId) {
-              throw new Error('Не удалось получить ID сообщения из таблицы');
-            }
+  if (executor === 'Текстовой подрядчик') {
+    userStates[chatId].awaiting_manual_executor = true;
+    const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
+    userStates[chatId].serviceMessages = [prompt];
+    return;
+  }
 
-            // Получаем оригинальный текст заявки
-            const originalTextRes = await axios.post(GAS_WEB_APP_URL, { 
-              action: 'getRequestText', 
-              row 
-            });
-            
-            const originalText = originalTextRes.data?.text || '';
-            const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+  try {
+    // Получаем оригинальный текст заявки
+    const originalTextRes = await axios.post(GAS_WEB_APP_URL, {
+      action: 'getRequestText',
+      row: row
+    });
+    
+    const originalText = originalTextRes.data?.text || '';
+    
+    // Формируем обновленный текст с исполнителем
+    const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+    
+    // Создаем клавиатуру с кнопками
+    const buttons = {
+      inline_keyboard: [
+        [
+          { text: '✅ Выполнено', callback_data: `done:${row}` },
+          { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+          { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+        ]
+      ]
+    };
 
-            // Обновляем данные в Google Sheets
-            await axios.post(GAS_WEB_APP_URL, { 
-              action: 'in_progress', 
-              row, 
-              executor, 
-              message_id: originalMessageId 
-            });
+    // Обновляем сообщение
+    const editResult = await editMessageText(chatId, messageId, updatedText, buttons);
+    
+    if (!editResult.success) {
+      // Если не удалось изменить, отправляем новое сообщение
+      await sendMessage(chatId, updatedText, { reply_markup: buttons });
+    }
 
-            // Создаем клавиатуру с кнопками
-            const buttons = {
-              inline_keyboard: [
-                [
-                  { text: '✅ Выполнено', callback_data: `done:${row}` },
-                  { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-                  { text: '❌ Отмена', callback_data: `cancelled:${row}` }
-                ]
-              ]
-            };
+    // Обновляем состояние
+    userStates[chatId] = {
+      executor,
+      row,
+      originalMessageId: messageId,
+      serviceMessages: [],
+      userResponses: [],
+      stage: 'awaiting_photo'
+    };
 
-            // Редактируем сообщение
-            const editResult = await editMessageText(
-              chatId, 
-              originalMessageId, 
-              updatedText, 
-              buttons
-            );
+    // Обновляем данные в Google Sheets
+    await axios.post(GAS_WEB_APP_URL, {
+      action: 'in_progress',
+      row: row,
+      executor: executor,
+      message_id: messageId
+    });
 
-            if (!editResult.success) {
-              console.error('Не удалось изменить сообщение, отправляем новое');
-              await sendMessage(chatId, updatedText, { reply_markup: buttons });
-            }
-
-            // Обновляем состояние
-            userStates[chatId] = {
-              executor,
-              row,
-              sourceMessageId: messageId,
-              originalMessageId,
-              serviceMessages: [],
-              userResponses: [],
-              stage: 'awaiting_photo'
-            };
-
-            // Если это не исходное сообщение с кнопками, редактируем его
-            if (originalMessageId !== messageId) {
-              await editMessageText(chatId, messageId, message.text);
-            }
-
-          } catch (error) {
-            console.error('Ошибка при выборе исполнителя:', error);
-            await sendMessage(chatId, '⚠️ Произошла ошибка при выборе исполнителя');
+  } catch (error) {
+    console.error('Ошибка при выборе исполнителя:', error);
+    await sendMessage(chatId, '⚠️ Произошла ошибка при выборе исполнителя');
+  }
           }
         }
         else if (action === 'done') {
