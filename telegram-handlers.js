@@ -146,6 +146,40 @@ module.exports = (app, userStates) => {
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
+
+      // Handle photo, amount, comment stages
+      if (body.message) {
+        const msg = body.message;
+        const chatId = msg.chat.id;
+        const state = userStates[chatId];
+
+        if (state?.stage === 'awaiting_photo' && msg.photo) {
+          const photo = msg.photo[msg.photo.length - 1];
+          const fileLink = await getFileLink(photo.file_id);
+          state.photoUrl = fileLink;
+          state.stage = 'awaiting_amount';
+          const prompt = await sendMessage(chatId, '💰 Введите сумму:');
+          state.serviceMessages.push(prompt);
+          state.userResponses.push(msg.message_id);
+          return res.sendStatus(200);
+        }
+
+        if (state?.stage === 'awaiting_amount' && msg.text) {
+          state.amount = msg.text.trim();
+          state.stage = 'awaiting_comment';
+          const prompt = await sendMessage(chatId, '✏️ Введите комментарий:');
+          state.serviceMessages.push(prompt);
+          state.userResponses.push(msg.message_id);
+          return res.sendStatus(200);
+        }
+
+        if (state?.stage === 'awaiting_comment' && msg.text) {
+          state.userResponses.push(msg.message_id);
+          await completeRequest(chatId, state, msg.message_id, msg.text);
+          return res.sendStatus(200);
+        }
+      }
+
       if (body.callback_query) {
         const { data: raw, message, id: callbackId } = body.callback_query;
         const chatId = message.chat.id;
@@ -219,6 +253,7 @@ module.exports = (app, userStates) => {
           return res.sendStatus(200);
         }
       }
+
       res.sendStatus(200);
     } catch (err) {
       console.error('❌ Webhook error:', err);
