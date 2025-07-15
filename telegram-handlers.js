@@ -19,22 +19,34 @@ module.exports = (app, userStates) => {
       });
       return res.data.result.message_id;
     } catch (error) {
-      console.error('Ошибка отправки сообщения:', error.message);
+      console.error('Ошибка отправки сообщения:', error.response?.data || error.message);
       return null;
     }
   }
 
   async function editMessageText(chatId, messageId, text, reply_markup) {
     try {
-      await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      const payload = {
         chat_id: chatId,
         message_id: messageId,
         text,
-        parse_mode: 'HTML',
-        ...(reply_markup && { reply_markup })
-      });
+        parse_mode: 'HTML'
+      };
+      
+      if (reply_markup) {
+        payload.reply_markup = reply_markup;
+      }
+      
+      const response = await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
+      return { success: true, data: response.data };
     } catch (error) {
-      console.error('Ошибка изменения сообщения:', error.message);
+      console.error('Ошибка изменения сообщения:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message,
+        payload: { chatId, messageId, textLength: text?.length }
+      });
+      return { success: false, error };
     }
   }
 
@@ -97,7 +109,6 @@ module.exports = (app, userStates) => {
       const filePath = fileRes.data.result.file_path;
       const photoUrl = `${TELEGRAM_FILE_API}/${filePath}`;
       
-      // Обновляем состояние
       userStates[chatId] = {
         ...userStates[chatId],
         photoUrl,
@@ -194,7 +205,12 @@ ${originalText}`;
       }
 
       // Обновляем сообщение
-      await editMessageText(chatId, state.originalMessageId, updatedText);
+      const editResult = await editMessageText(chatId, state.originalMessageId, updatedText);
+      
+      if (!editResult.success) {
+        // Если не удалось изменить, отправляем новое сообщение
+        await sendMessage(chatId, updatedText);
+      }
       
       // Удаляем временные сообщения
       await cleanupMessages(chatId, state);
@@ -205,6 +221,23 @@ ${originalText}`;
     } catch (error) {
       console.error('Ошибка при завершении заявки:', error);
       await sendMessage(chatId, `⚠️ Ошибка при завершении заявки: ${error.message}`);
+    }
+  }
+
+  async function getMessageIdFromColumnQ(row) {
+    try {
+      const response = await axios.post(GAS_WEB_APP_URL, {
+        action: 'getMessageId',
+        row: row
+      });
+      
+      if (response.data && response.data.message_id) {
+        return response.data.message_id;
+      }
+      throw new Error('Не удалось получить message_id из столбца Q');
+    } catch (error) {
+      console.error('Ошибка при получении message_id из столбца Q:', error);
+      throw error;
     }
   }
 
@@ -263,72 +296,101 @@ ${originalText}`;
             return;
           }
 
-          const [originalIdRes, originalTextRes] = await Promise.all([
-            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
-            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
-          ]);
+          try {
+            // Получаем message_id из столбца Q
+            const originalMessageId = await getMessageIdFromColumnQ(row);
+            
+            if (!originalMessageId) {
+              throw new Error('Не удалось получить ID сообщения из таблицы');
+            }
 
-          const originalMessageId = originalIdRes.data?.message_id;
-          const originalText = originalTextRes.data?.text || '';
+            // Получаем оригинальный текст заявки
+            const originalTextRes = await axios.post(GAS_WEB_APP_URL, { 
+              action: 'getRequestText', 
+              row 
+            });
+            
+            const originalText = originalTextRes.data?.text || '';
+            const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
 
-          if (!originalMessageId) return;
+            // Обновляем данные в Google Sheets
+            await axios.post(GAS_WEB_APP_URL, { 
+              action: 'in_progress', 
+              row, 
+              executor, 
+              message_id: originalMessageId 
+            });
 
-          await axios.post(GAS_WEB_APP_URL, { 
-            action: 'in_progress', 
-            row, 
-            executor, 
-            message_id: originalMessageId 
-          });
-
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${row}` },
-                { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+            // Создаем клавиатуру с кнопками
+            const buttons = {
+              inline_keyboard: [
+                [
+                  { text: '✅ Выполнено', callback_data: `done:${row}` },
+                  { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
+                  { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+                ]
               ]
-            ]
-          };
+            };
 
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
-          
-          if (originalMessageId !== messageId) {
-            await editMessageText(chatId, messageId, message.text);
+            // Редактируем сообщение
+            const editResult = await editMessageText(
+              chatId, 
+              originalMessageId, 
+              updatedText, 
+              buttons
+            );
+
+            if (!editResult.success) {
+              console.error('Не удалось изменить сообщение, отправляем новое');
+              await sendMessage(chatId, updatedText, { reply_markup: buttons });
+            }
+
+            // Обновляем состояние
+            userStates[chatId] = {
+              executor,
+              row,
+              sourceMessageId: messageId,
+              originalMessageId,
+              serviceMessages: [],
+              userResponses: [],
+              stage: 'awaiting_photo'
+            };
+
+            // Если это не исходное сообщение с кнопками, редактируем его
+            if (originalMessageId !== messageId) {
+              await editMessageText(chatId, messageId, message.text);
+            }
+
+          } catch (error) {
+            console.error('Ошибка при выборе исполнителя:', error);
+            await sendMessage(chatId, '⚠️ Произошла ошибка при выборе исполнителя');
           }
-
-          userStates[chatId] = {
-            executor,
-            row,
-            sourceMessageId: originalMessageId,
-            originalMessageId,
-            serviceMessages: [],
-            userResponses: [],
-            stage: 'awaiting_photo' // Добавляем этап ожидания фото
-          };
         }
         else if (action === 'done') {
           if (userStates[chatId]?.stage === 'awaiting_photo') return;
 
-          const originalIdRes = await axios.post(GAS_WEB_APP_URL, {
-            action: 'getMessageId',
-            row
-          });
-          const originalMessageId = originalIdRes.data?.message_id;
+          try {
+            const originalMessageId = await getMessageIdFromColumnQ(row);
+            
+            if (!originalMessageId) {
+              throw new Error('Не удалось получить ID сообщения из таблицы');
+            }
 
-          if (!originalMessageId) return;
+            userStates[chatId] = {
+              row,
+              stage: 'awaiting_photo',
+              originalMessageId,
+              serviceMessages: [],
+              userResponses: []
+            };
 
-          userStates[chatId] = {
-            row,
-            stage: 'awaiting_photo',
-            originalMessageId,
-            serviceMessages: [],
-            userResponses: []
-          };
-
-          const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
-          userStates[chatId].serviceMessages = [prompt];
-          await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
+            const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
+            userStates[chatId].serviceMessages = [prompt];
+            await editMessageText(chatId, originalMessageId, '📌 Ожидаем фото...');
+          } catch (error) {
+            console.error('Ошибка при обработке действия "done":', error);
+            await sendMessage(chatId, '⚠️ Произошла ошибка при обработке запроса');
+          }
         }
         else if (action === 'delayed') {
           await axios.post(GAS_WEB_APP_URL, { 
@@ -360,45 +422,68 @@ ${originalText}`;
         }
 
         if (state.awaiting_manual_executor) {
-          const [originalIdRes, originalTextRes] = await Promise.all([
-            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row: state.row }),
-            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row: state.row })
-          ]);
+          try {
+            const originalMessageId = await getMessageIdFromColumnQ(state.row);
+            
+            if (!originalMessageId) {
+              throw new Error('Не удалось получить ID сообщения из таблицы');
+            }
 
-          const originalMessageId = originalIdRes.data?.message_id;
-          const originalText = originalTextRes.data?.text || '';
+            // Получаем оригинальный текст заявки
+            const originalTextRes = await axios.post(GAS_WEB_APP_URL, { 
+              action: 'getRequestText', 
+              row: state.row 
+            });
+            
+            const originalText = originalTextRes.data?.text || '';
+            const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${text}`;
 
-          if (!originalMessageId) return;
+            // Обновляем данные в Google Sheets
+            await axios.post(GAS_WEB_APP_URL, { 
+              action: 'in_progress', 
+              row: state.row, 
+              executor: text, 
+              message_id: originalMessageId 
+            });
 
-          await axios.post(GAS_WEB_APP_URL, { 
-            action: 'in_progress', 
-            row: state.row, 
-            executor: text, 
-            message_id: originalMessageId 
-          });
-
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${text}`;
-          const buttons = {
-            inline_keyboard: [
-              [
-                { text: '✅ Выполнено', callback_data: `done:${state.row}` },
-                { text: '⏳ Ожидает поставки', callback_data: `delayed:${state.row}` },
-                { text: '❌ Отмена', callback_data: `cancelled:${state.row}` }
+            // Создаем клавиатуру с кнопками
+            const buttons = {
+              inline_keyboard: [
+                [
+                  { text: '✅ Выполнено', callback_data: `done:${state.row}` },
+                  { text: '⏳ Ожидает поставки', callback_data: `delayed:${state.row}` },
+                  { text: '❌ Отмена', callback_data: `cancelled:${state.row}` }
+                ]
               ]
-            ]
-          };
+            };
 
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
-          await cleanupMessages(chatId, state);
+            // Редактируем сообщение
+            const editResult = await editMessageText(
+              chatId, 
+              originalMessageId, 
+              updatedText, 
+              buttons
+            );
 
-          userStates[chatId] = {
-            ...state,
-            executor: text,
-            sourceMessageId: originalMessageId,
-            originalMessageId,
-            awaiting_manual_executor: false,
-            stage: 'awaiting_photo'
-          };
+            if (!editResult.success) {
+              console.error('Не удалось изменить сообщение, отправляем новое');
+              await sendMessage(chatId, updatedText, { reply_markup: buttons });
+            }
+
+            await cleanupMessages(chatId, state);
+
+            userStates[chatId] = {
+              ...state,
+              executor: text,
+              sourceMessageId: originalMessageId,
+              originalMessageId,
+              awaiting_manual_executor: false,
+              stage: 'awaiting_photo'
+            };
+          } catch (error) {
+            console.error('Ошибка при обработке ручного ввода исполнителя:', error);
+            await sendMessage(chatId, '⚠️ Произошла ошибка при обработке исполнителя');
+          }
         }
         else if (state.stage === 'awaiting_photo' && photo) {
           console.log('Обработка фото для чата:', chatId);
