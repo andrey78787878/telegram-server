@@ -102,7 +102,11 @@ module.exports = (app, userStates) => {
     const originalText = textRes.data?.text || '';
     const delayDays = delayRes.data?.delay || '0';
 
-    if (!originalMessageId) return;
+    if (!originalMessageId) {
+      console.warn(`⚠️ Нет originalMessageId для строки ${row}`);
+      await sendMessage(chatId, '⚠️ Ошибка: оригинальное сообщение не найдено. Возможно, оно было удалено.');
+      return;
+    }
 
     const updatedText = `✅ Выполнено\n👷 Исполнитель: ${executor}\n💰 Сумма: ${amount || '0'}\n📸 Фото: <a href="${photoUrl}">ссылка</a>\n📝 Комментарий: ${comment || 'не указан'}\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
 
@@ -148,10 +152,14 @@ module.exports = (app, userStates) => {
         if (action === 'in_progress') {
           const getRes = await axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row });
           const originalMessageId = getRes.data?.message_id;
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) {
+            console.warn(`⚠️ Нет originalMessageId для строки ${row}`);
+            await sendMessage(chatId, '⚠️ Ошибка: оригинальное сообщение не найдено. Возможно, оно было удалено.');
+            return res.sendStatus(200);
+          }
           const keyboard = buildExecutorButtons(row);
           await editMessageText(chatId, originalMessageId, `${message.text}\n\nВыберите исполнителя:`, keyboard);
-          userStates[chatId] = { row, sourceMessageId: originalMessageId, serviceMessages: [] };
+          userStates[chatId] = { row, sourceMessageId: originalMessageId, originalMessageId, serviceMessages: [] };
           return res.sendStatus(200);
         }
 
@@ -170,7 +178,11 @@ module.exports = (app, userStates) => {
           ]);
           const originalMessageId = idRes.data?.message_id;
           const originalText = textRes.data?.text || '';
-          if (!originalMessageId) return res.sendStatus(200);
+          if (!originalMessageId) {
+            console.warn(`⚠️ Нет originalMessageId при выборе исполнителя для строки ${row}`);
+            await sendMessage(chatId, '⚠️ Ошибка: сообщение заявки не найдено. Возможно, оно было удалено.');
+            return res.sendStatus(200);
+          }
 
           await axios.post(GAS_WEB_APP_URL, {
             action: 'in_progress',
