@@ -21,6 +21,7 @@ module.exports = (app, userStates) => {
       inline_keyboard: [
         [
           { text: '✅ Выполнено', callback_data: `done:${row}` },
+          { text: '⏳ Ожидает поставки', callback_data: `delayed:${row}` },
           { text: '❌ Отмена', callback_data: `cancelled:${row}` }
         ]
       ]
@@ -206,7 +207,29 @@ module.exports = (app, userStates) => {
           return res.sendStatus(200);
         }
 
-        // остальная логика (done, delayed, cancelled...) без изменений ↓
+        if (action === 'done') {
+          const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
+          userStates[chatId] = {
+            ...userStates[chatId],
+            stage: 'awaiting_photo',
+            serviceMessages: [prompt],
+            userResponses: []
+          };
+          return res.sendStatus(200);
+        }
+
+        if (action === 'delayed') {
+          await axios.post(GAS_WEB_APP_URL, { action: 'delayed', row, status: 'Ожидает поставки' });
+          const buttons = buildFinalButtons(row);
+          await editMessageText(chatId, messageId, `${message.text}\n⏳ Ожидает поставки`, buttons);
+          return res.sendStatus(200);
+        }
+
+        if (action === 'cancelled') {
+          await axios.post(GAS_WEB_APP_URL, { action: 'cancelled', row, status: 'Отменено' });
+          await editMessageText(chatId, messageId, `${message.text}\n❌ Отменено`);
+          return res.sendStatus(200);
+        }
       }
 
       res.sendStatus(200);
