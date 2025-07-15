@@ -29,7 +29,7 @@ module.exports = (app, userStates) => {
       const payload = {
         chat_id: chatId,
         message_id: messageId,
-        text,
+        text: text.substring(0, 4096), // Обрезаем текст до допустимого лимита
         parse_mode: 'HTML'
       };
       
@@ -242,10 +242,11 @@ ${originalText}`;
       if (body.callback_query) {
         const { data: raw, message, from, id: callbackId } = body.callback_query;
         const chatId = message.chat.id;
-        const messageId = message.message_id;
+        let messageId = message.message_id;
 
         console.log(`Обработка callback: ${raw} в чате ${chatId}`);
 
+        // Отвечаем на callback
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
           callback_query_id: callbackId,
           text: "Обрабатываю...",
@@ -257,7 +258,7 @@ ${originalText}`;
         const row = parts[1];
         const executor = parts[2];
 
-        console.log(`Действие: ${action}, Строка: ${row}, Исполнитель: ${executor}`);
+        console.log(`Действие: ${action}, Строка: ${row}, Исполнитель: ${executor || 'не указан'}`);
 
         if (action === 'in_progress') {
           await editMessageText(chatId, messageId, message.text, { inline_keyboard: [] });
@@ -287,9 +288,13 @@ ${originalText}`;
                 row: row
               });
               
-              const originalText = originalTextRes.data?.text || '';
-              const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+              const originalText = originalTextRes.data?.text || message.text || 'Заявка';
+              const updatedText = `${originalText.substring(0, 3000)}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
               
+              if (updatedText.length > 4096) {
+                throw new Error('Текст сообщения слишком длинный');
+              }
+
               const buttons = {
                 inline_keyboard: [
                   [
@@ -300,10 +305,19 @@ ${originalText}`;
                 ]
               };
 
+              console.log('Пытаемся изменить сообщение:', {
+                chatId,
+                messageId,
+                textLength: updatedText.length,
+                hasButtons: !!buttons
+              });
+
               const editResult = await editMessageText(chatId, messageId, updatedText, buttons);
               
               if (!editResult.success) {
-                await sendMessage(chatId, updatedText, { reply_markup: buttons });
+                console.log('Не удалось изменить сообщение, пробуем отправить новое');
+                const newMsgId = await sendMessage(chatId, updatedText, { reply_markup: buttons });
+                if (newMsgId) messageId = newMsgId;
               }
 
               userStates[chatId] = {
@@ -321,9 +335,10 @@ ${originalText}`;
                 executor: executor,
                 message_id: messageId
               });
+
             } catch (error) {
               console.error('Ошибка при выборе исполнителя:', error);
-              await sendMessage(chatId, '⚠️ Произошла ошибка при выборе исполнителя');
+              await sendMessage(chatId, `⚠️ Произошла ошибка: ${error.message}`);
             }
           }
         }
