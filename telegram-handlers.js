@@ -128,15 +128,16 @@ module.exports = (app, userStates) => {
       state.originalMessageId = resolvedMessageId;
     }
 
-    await axios.post(GAS_WEB_APP_URL, {
-      action: 'complete',
-      row,
-      status: 'Выполнено',
-      photoUrl,
-      amount,
-      comment,
-      message_id: resolvedMessageId || null
-    });
+await axios.post(GAS_WEB_APP_URL, {
+  action: 'complete',
+  row,
+  status: 'Выполнено',
+  photoUrl,
+  amount,
+  comment,
+  completed_at: new Date().toISOString(),
+  message_id: resolvedMessageId || null
+});
 
     setTimeout(async () => {
       try {
