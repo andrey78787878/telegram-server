@@ -116,27 +116,38 @@ module.exports = (app, userStates) => {
       axios.post(GAS_WEB_APP_URL, { action: 'getExecutorComment', row })
     ]);
 
-    const resolvedMessageId = idRes.data?.message_id;
-    const originalText = textRes.data?.text || '';
-    const delayDays = delayRes.data?.delay || '0';
-    const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
-    const commentR = commentRes.data?.comment || '';
-
-    if (resolvedMessageId) {
-      const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
-      await editMessageText(chatId, resolvedMessageId, updatedText);
-      state.originalMessageId = resolvedMessageId;
-    }
-
+// 1. Сначала записываем результат в таблицу
 await axios.post(GAS_WEB_APP_URL, {
   action: 'complete',
   row,
   photoUrl,
   amount,
-  comment, // ← обязательно!
+  comment,
   completed_at: new Date().toISOString(),
   message_id: resolvedMessageId
 });
+
+// 2. Затем получаем обновлённые данные для финального сообщения
+const [idRes, textRes, delayRes, driveUrlRes, commentRes] = await Promise.all([
+  axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
+  axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row }),
+  axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row }),
+  axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row }),
+  axios.post(GAS_WEB_APP_URL, { action: 'getExecutorComment', row })
+]);
+
+const resolvedMessageId = idRes.data?.message_id;
+const originalText = textRes.data?.text || '';
+const delayDays = delayRes.data?.delay || '0';
+const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
+const commentR = commentRes.data?.comment || '';
+const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
+
+if (resolvedMessageId) {
+  await editMessageText(chatId, resolvedMessageId, updatedText);
+  state.originalMessageId = resolvedMessageId;
+}
+
 
     setTimeout(async () => {
       try {
