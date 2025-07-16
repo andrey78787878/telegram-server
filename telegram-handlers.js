@@ -180,43 +180,47 @@ if (resolvedMessageId) {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 if (msg.text === '/сводка') {
-  try {
-    const summaryRes = await axios.post(GAS_WEB_APP_URL, { action: 'getGroupedSummary' });
-    const summary = summaryRes.data;
+  (async () => {
+    try {
+      const summaryRes = await axios.post(GAS_WEB_APP_URL, { action: 'getGroupedSummary' });
+      const summary = summaryRes.data;
 
-    let report = '<b>📊 Сводка по заявкам</b>\n\n';
-    const sections = {
-      notAccepted: '🆕 <b>Не приняты</b>',
-      inProgress: '🔧 <b>В работе</b>',
-      overdue: '⏰ <b>Просрочены</b>'
-    };
+      let report = '<b>📊 Сводка по заявкам</b>\n\n';
+      const sections = {
+        notAccepted: '🆕 <b>Не приняты</b>',
+        inProgress: '🔧 <b>В работе</b>',
+        overdue: '⏰ <b>Просрочены</b>'
+      };
 
-    for (const key of Object.keys(sections)) {
-      const block = summary[key];
-      if (block && Object.keys(block).length > 0) {
-        report += `${sections[key]}:\n`;
-        for (const pizzeria in block) {
-          const items = block[pizzeria].join(', ');
-          report += `🍕 ${pizzeria}: ${items}\n`;
+      for (const key of Object.keys(sections)) {
+        const block = summary[key];
+        if (block && Object.keys(block).length > 0) {
+          report += `${sections[key]}:\n`;
+          for (const pizzeria in block) {
+            const items = block[pizzeria].join(', ');
+            report += `🍕 ${pizzeria}: ${items}\n`;
+          }
+          report += '\n';
         }
-        report += '\n';
       }
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: report,
+        parse_mode: 'HTML'
+      });
+    } catch (err) {
+      console.error('❌ Ошибка получения сводки:', err.message);
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: '⚠️ Не удалось получить сводку.',
+      });
     }
 
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: report,
-      parse_mode: 'HTML'
-    });
-  } catch (err) {
-    console.error('❌ Ошибка получения сводки:', err.message);
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: '⚠️ Не удалось получить сводку.',
-    });
-  }
+    res.sendStatus(200);
+  })();
 
-  return res.sendStatus(200);
+  return;
 }
 
 
