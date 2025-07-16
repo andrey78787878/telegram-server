@@ -131,12 +131,11 @@ module.exports = (app, userStates) => {
 await axios.post(GAS_WEB_APP_URL, {
   action: 'complete',
   row,
-  status: 'Выполнено',
   photoUrl,
   amount,
-  comment,
+  comment, // ← обязательно!
   completed_at: new Date().toISOString(),
-  message_id: resolvedMessageId || null
+  message_id: resolvedMessageId
 });
 
     setTimeout(async () => {
