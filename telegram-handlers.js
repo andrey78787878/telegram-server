@@ -108,46 +108,35 @@ module.exports = (app, userStates) => {
       }
     }
 
-    const [idRes, textRes, delayRes, driveUrlRes, commentRes] = await Promise.all([
-      axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
+    const resolvedMessageId = originalMessageId;
+
+    await axios.post(GAS_WEB_APP_URL, {
+      action: 'complete',
+      row,
+      photoUrl,
+      amount,
+      comment,
+      completed_at: new Date().toISOString(),
+      message_id: resolvedMessageId
+    });
+
+    const [textRes, delayRes, driveUrlRes, commentRes] = await Promise.all([
       axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row }),
       axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row }),
       axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row }),
       axios.post(GAS_WEB_APP_URL, { action: 'getExecutorComment', row })
     ]);
 
-// 1. Сначала записываем результат в таблицу
-await axios.post(GAS_WEB_APP_URL, {
-  action: 'complete',
-  row,
-  photoUrl,
-  amount,
-  comment,
-  completed_at: new Date().toISOString(),
-  message_id: resolvedMessageId
-});
+    const originalText = textRes.data?.text || '';
+    const delayDays = delayRes.data?.delay || '0';
+    const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
+    const commentR = commentRes.data?.comment || '';
+    const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
 
-// 2. Затем получаем обновлённые данные для финального сообщения
-const [idRes, textRes, delayRes, driveUrlRes, commentRes] = await Promise.all([
-  axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
-  axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row }),
-  axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row }),
-  axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row }),
-  axios.post(GAS_WEB_APP_URL, { action: 'getExecutorComment', row })
-]);
-
-const resolvedMessageId = idRes.data?.message_id;
-const originalText = textRes.data?.text || '';
-const delayDays = delayRes.data?.delay || '0';
-const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
-const commentR = commentRes.data?.comment || '';
-const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
-
-if (resolvedMessageId) {
-  await editMessageText(chatId, resolvedMessageId, updatedText);
-  state.originalMessageId = resolvedMessageId;
-}
-
+    if (resolvedMessageId) {
+      await editMessageText(chatId, resolvedMessageId, updatedText);
+      state.originalMessageId = resolvedMessageId;
+    }
 
     setTimeout(async () => {
       try {
@@ -178,48 +167,75 @@ if (resolvedMessageId) {
       if (body.message) {
         const msg = body.message;
         const chatId = msg.chat.id;
+        const username = msg.from?.username ? `@${msg.from.username}` : '';
         const state = userStates[chatId];
-if (msg.text && msg.text.toLowerCase().includes('сводка')) {
-  try {
-    const summaryRes = await axios.post(GAS_WEB_APP_URL, { action: 'getGroupedSummary' });
-    const summary = summaryRes.data;
 
-    let report = '<b>📊 Сводка по заявкам</b>\n\n';
-    const sections = {
-      notAccepted: '🆕 <b>Не приняты</b>',
-      inProgress: '🔧 <b>В работе</b>',
-      overdue: '⏰ <b>Просрочены</b>'
-    };
+        if (state?.awaiting_manual_executor && msg.text) {
+          const executor = msg.text.trim();
+          const row = state.row;
 
-    for (const key of Object.keys(sections)) {
-      const block = summary[key];
-      if (block && Object.keys(block).length > 0) {
-        report += `${sections[key]}:\n`;
-        for (const pizzeria in block) {
-          const items = block[pizzeria].join(', ');
-          report += `🍕 ${pizzeria}: ${items}\n`;
+          const [idRes, textRes] = await Promise.all([
+            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
+            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
+          ]);
+
+          const originalMessageId = idRes.data?.message_id;
+          const originalText = textRes.data?.text || '';
+
+          await axios.post(GAS_WEB_APP_URL, {
+            action: 'in_progress',
+            row,
+            executor,
+            message_id: originalMessageId
+          });
+
+          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
+          const buttons = buildFinalButtons(row);
+          await editMessageText(chatId, originalMessageId, updatedText, buttons);
+
+          userStates[chatId] = {
+            row,
+            executor,
+            originalMessageId,
+            serviceMessages: [],
+            userResponses: []
+          };
+
+          return res.sendStatus(200);
         }
-        report += '\n';
-      }
-    }
 
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: report,
-      parse_mode: 'HTML'
-    });
-  } catch (err) {
-    console.error('❌ Ошибка получения сводки:', err.message);
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: '⚠️ Не удалось получить сводку.',
-    });
-  }
+        if (msg.text && msg.text.toLowerCase().includes('сводка')) {
+          try {
+            const summaryRes = await axios.post(GAS_WEB_APP_URL, { action: 'getGroupedSummary' });
+            const summary = summaryRes.data;
 
-  return res.sendStatus(200);
-}
+            let report = '<b>📊 Сводка по заявкам</b>\n\n';
+            const sections = {
+              notAccepted: '🆕 <b>Не приняты</b>',
+              inProgress: '🔧 <b>В работе</b>',
+              overdue: '⏰ <b>Просрочены</b>'
+            };
 
+            for (const key of Object.keys(sections)) {
+              const block = summary[key];
+              if (block && Object.keys(block).length > 0) {
+                report += `${sections[key]}:\n`;
+                for (const pizzeria in block) {
+                  const items = block[pizzeria].join(', ');
+                  report += `🍕 ${pizzeria}: ${items}\n`;
+                }
+                report += '\n';
+              }
+            }
 
+            await sendMessage(chatId, report);
+          } catch (err) {
+            console.error('❌ Ошибка получения сводки:', err.message);
+            await sendMessage(chatId, '⚠️ Не удалось получить сводку.');
+          }
+
+          return res.sendStatus(200);
+        }
 
         if (state?.stage === 'awaiting_photo' && msg.photo) {
           const photo = msg.photo[msg.photo.length - 1];
