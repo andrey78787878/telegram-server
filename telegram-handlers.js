@@ -7,6 +7,7 @@ module.exports = (app, userStates) => {
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
+  const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
 
   function buildExecutorButtons(row) {
     return {
@@ -121,9 +122,14 @@ module.exports = (app, userStates) => {
     const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
 
     if (resolvedMessageId) {
-      const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
+      const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${photoUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
       await editMessageText(chatId, resolvedMessageId, updatedText);
       state.originalMessageId = resolvedMessageId;
+
+      setTimeout(async () => {
+        const finalText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
+        await editMessageText(chatId, resolvedMessageId, finalText);
+      }, 180000);
     } else {
       console.warn(`⚠️ Нет originalMessageId для строки ${row}, пропускаем редактирование сообщения.`);
     }
@@ -147,10 +153,10 @@ module.exports = (app, userStates) => {
     try {
       const body = req.body;
 
-      // Handle photo, amount, comment stages
       if (body.message) {
         const msg = body.message;
         const chatId = msg.chat.id;
+        const username = msg.from?.username ? `@${msg.from.username}` : '';
         const state = userStates[chatId];
 
         if (state?.stage === 'awaiting_photo' && msg.photo) {
@@ -181,7 +187,17 @@ module.exports = (app, userStates) => {
       }
 
       if (body.callback_query) {
-        const { data: raw, message, id: callbackId } = body.callback_query;
+        const { data: raw, message, id: callbackId, from } = body.callback_query;
+        const username = from?.username ? `@${from.username}` : '';
+        if (!AUTHORIZED_USERS.includes(username)) {
+          await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+            callback_query_id: callbackId,
+            text: '⛔ Доступ запрещен.',
+            show_alert: true
+          });
+          return res.sendStatus(200);
+        }
+
         const chatId = message.chat.id;
         const messageId = message.message_id;
         const [action, row, executor] = raw.split(':');
@@ -197,8 +213,8 @@ module.exports = (app, userStates) => {
 
         if (action === 'select_executor') {
           if (!userStates[chatId]) userStates[chatId] = {};
-userStates[chatId].row = row;
-userStates[chatId].executor = executor;
+          userStates[chatId].row = row;
+          userStates[chatId].executor = executor;
 
           if (executor === 'Текстовой подрядчик') {
             const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
