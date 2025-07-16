@@ -179,7 +179,7 @@ if (resolvedMessageId) {
         const msg = body.message;
         const chatId = msg.chat.id;
         const state = userStates[chatId];
-if (msg.text && msg.text.toLowerCase().startsWith('/сводка')) {
+if (msg.text && msg.text.toLowerCase().includes('сводка')) {
   try {
     const summaryRes = await axios.post(GAS_WEB_APP_URL, { action: 'getGroupedSummary' });
     const summary = summaryRes.data;
