@@ -196,7 +196,10 @@ module.exports = (app, userStates) => {
         }
 
         if (action === 'select_executor') {
-          if (!userStates[chatId]) userStates[chatId] = { row };
+          if (!userStates[chatId]) userStates[chatId] = {};
+userStates[chatId].row = row;
+userStates[chatId].executor = executor;
+
           if (executor === 'Текстовой подрядчик') {
             const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
             userStates[chatId].awaiting_manual_executor = true;
