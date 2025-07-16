@@ -7,6 +7,7 @@ module.exports = (app, userStates) => {
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
+  const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
 
   function buildExecutorButtons(row) {
     return {
@@ -94,7 +95,6 @@ module.exports = (app, userStates) => {
     const comment = commentText || '';
 
     if (!row) {
-      console.warn('⚠️ Row (номер строки) не найден в state. Пробуем восстановить...');
       const recovery = await axios.post(GAS_WEB_APP_URL, {
         action: 'recoverRowByMessageId',
         message_id: originalMessageId
@@ -103,29 +103,29 @@ module.exports = (app, userStates) => {
         row = recovery.data.row;
         state.row = row;
       } else {
-        console.error('❌ Ошибка: не удалось восстановить номер строки.');
+        console.error('❌ Не удалось восстановить номер строки.');
         return;
       }
     }
 
-    const [idRes, textRes, delayRes, driveUrlRes] = await Promise.all([
+    const [idRes, textRes, delayRes, driveUrlRes, commentRes] = await Promise.all([
       axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
       axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row }),
       axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row }),
-      axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row })
+      axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row }),
+      axios.post(GAS_WEB_APP_URL, { action: 'getExecutorComment', row })
     ]);
 
     const resolvedMessageId = idRes.data?.message_id;
     const originalText = textRes.data?.text || '';
     const delayDays = delayRes.data?.delay || '0';
     const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
+    const commentR = commentRes.data?.comment || '';
 
     if (resolvedMessageId) {
-      const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n━━━━━━━━━━━━\n\n${originalText}`;
+      const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
       await editMessageText(chatId, resolvedMessageId, updatedText);
       state.originalMessageId = resolvedMessageId;
-    } else {
-      console.warn(`⚠️ Нет originalMessageId для строки ${row}, пропускаем редактирование сообщения.`);
     }
 
     await axios.post(GAS_WEB_APP_URL, {
@@ -138,6 +138,23 @@ module.exports = (app, userStates) => {
       message_id: resolvedMessageId || null
     });
 
+    setTimeout(async () => {
+      try {
+        const driveUpdateRes = await axios.post(GAS_WEB_APP_URL, {
+          action: 'getDriveLink',
+          row
+        });
+        const updatedDriveUrl = driveUpdateRes.data?.driveUrl;
+
+        if (updatedDriveUrl && updatedDriveUrl !== driveUrl) {
+          const refreshedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${updatedDriveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
+          await editMessageText(chatId, resolvedMessageId, refreshedText);
+        }
+      } catch (err) {
+        console.warn('⚠️ Ошибка обновления ссылки на Google Диск:', err.message);
+      }
+    }, 3 * 60 * 1000);
+
     await deleteMessageWithDelay(chatId, commentMessageId);
     await cleanupMessages(chatId, state);
     delete userStates[chatId];
@@ -147,7 +164,6 @@ module.exports = (app, userStates) => {
     try {
       const body = req.body;
 
-      // Handle photo, amount, comment stages
       if (body.message) {
         const msg = body.message;
         const chatId = msg.chat.id;
@@ -181,10 +197,20 @@ module.exports = (app, userStates) => {
       }
 
       if (body.callback_query) {
-        const { data: raw, message, id: callbackId } = body.callback_query;
+        const { data: raw, message, id: callbackId, from } = body.callback_query;
         const chatId = message.chat.id;
         const messageId = message.message_id;
         const [action, row, executor] = raw.split(':');
+        const username = from.username ? `@${from.username}` : '';
+
+        if (!AUTHORIZED_USERS.includes(username)) {
+          await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+            callback_query_id: callbackId,
+            text: '⛔️ У вас нет прав на выполнение этого действия.',
+            show_alert: true
+          });
+          return res.sendStatus(200);
+        }
 
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackId });
 
@@ -197,8 +223,8 @@ module.exports = (app, userStates) => {
 
         if (action === 'select_executor') {
           if (!userStates[chatId]) userStates[chatId] = {};
-userStates[chatId].row = row;
-userStates[chatId].executor = executor;
+          userStates[chatId].row = row;
+          userStates[chatId].executor = executor;
 
           if (executor === 'Текстовой подрядчик') {
             const prompt = await sendMessage(chatId, 'Введите имя подрядчика:');
@@ -239,7 +265,7 @@ userStates[chatId].executor = executor;
 
         if (action === 'done') {
           if (!userStates[chatId]) {
-            console.warn('⚠️ Нет состояния для пользователя. Кнопка "Выполнено" нажата без контекста.');
+            console.warn('⚠️ Нет состояния для пользователя.');
             return res.sendStatus(200);
           }
 
