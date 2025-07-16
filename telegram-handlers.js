@@ -315,6 +315,7 @@ module.exports = (app, userStates) => {
             executor,
             message_id: originalMessageId
           });
+await cleanupMessages(chatId, userStates[chatId]);
 
           const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
           const buttons = buildFinalButtons(row);
@@ -350,6 +351,37 @@ module.exports = (app, userStates) => {
           return res.sendStatus(200);
         }
       }
+if (action === 'delayed') {
+  if (!userStates[chatId]) return res.sendStatus(200);
+
+  const originalMessageId = userStates[chatId].originalMessageId;
+  const row = userStates[chatId].row;
+  const executor = userStates[chatId].executor;
+
+  const [textRes] = await Promise.all([
+    axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
+  ]);
+
+  const originalText = textRes.data?.text || '';
+  const updatedText = `${originalText}\n\n⏳ Ожидает поставки\n👷 Исполнитель: ${executor}`;
+
+  const buttons = {
+    inline_keyboard: [
+      [
+        { text: '✅ Выполнено', callback_data: `done:${row}` },
+        { text: '❌ Отмена', callback_data: `cancelled:${row}` }
+      ]
+    ]
+  };
+
+  await editMessageText(chatId, originalMessageId, updatedText, buttons);
+
+  // удалим старые кнопки и все вспомогательные сообщения
+  await cleanupMessages(chatId, userStates[chatId]);
+  userStates[chatId].serviceMessages = [];
+
+  return res.sendStatus(200);
+}
 
       res.sendStatus(200);
     } catch (err) {
