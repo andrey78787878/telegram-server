@@ -199,6 +199,20 @@ module.exports = (app, userStates) => {
         const username = msg.from?.username ? `@${msg.from.username}` : '';
         const state = userStates[chatId];
 
+if (text === '/мои') {
+      if (chat.type !== 'private') {
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chat.id,
+          text: '👋 Пожалуйста, напишите эту команду в личку боту, чтобы увидеть свои заявки.',
+        });
+        return;
+      }
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chat.id,
+        text: '🔍 Отправляю ваши заявки... (тут будет список)',
+      });
+
         if (state?.awaiting_manual_executor && msg.text) {
           const executor = msg.text.trim();
           const row = state.row;
