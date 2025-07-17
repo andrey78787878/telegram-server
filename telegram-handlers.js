@@ -6,7 +6,7 @@ module.exports = (app, userStates) => {
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
-  const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
+  const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Andrey_Tkach_MB', 'Текстовой подрядчик'];
   const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
 
   function buildExecutorButtons(row) {
@@ -159,6 +159,35 @@ module.exports = (app, userStates) => {
     await cleanupMessages(chatId, state);
     delete userStates[chatId];
   }
+  async function sendAssignedNotification(executorUsername, row) {
+    if (!executorUsername.startsWith('@')) return;
+
+    try {
+      const chatRes = await axios.post(GAS_WEB_APP_URL, {
+        action: 'getChatIdByUsername',
+        username: executorUsername
+      });
+      const chatId = chatRes.data?.chat_id;
+
+      if (!chatId) {
+        console.warn(`⚠️ Не найден chat_id для ${executorUsername}`);
+        return;
+      }
+
+      const textRes = await axios.post(GAS_WEB_APP_URL, {
+        action: 'getRequestText',
+        row
+      });
+
+      const text = textRes.data?.text || '';
+      const message = `🔔 Вы назначены исполнителем по заявке #${row}\n\n${text}\n\nНажмите "Выполнено" в заявке, когда завершите.`;
+      await sendMessage(chatId, message);
+    } catch (err) {
+      console.error('❌ Ошибка отправки пуша исполнителю:', err.message);
+    }
+  }
+
+
 
   app.post('/webhook', async (req, res) => {
     try {
@@ -203,6 +232,7 @@ module.exports = (app, userStates) => {
 
           return res.sendStatus(200);
         }
+          await sendAssignedNotification(executor, row);  // 🔔 отправка пуша исполнителю
 
         if (msg.text && msg.text.toLowerCase().includes('сводка')) {
           try {
@@ -215,6 +245,31 @@ module.exports = (app, userStates) => {
               inProgress: '🔧 <b>В работе</b>',
               overdue: '⏰ <b>Просрочены</b>'
             };
+        if (msg.text === '/мои' || msg.text === '/my') {
+          try {
+            const myTasksRes = await axios.post(GAS_WEB_APP_URL, {
+              action: 'getMyActiveRequests',
+              username
+            });
+            const tasks = myTasksRes.data?.tasks || [];
+
+            if (tasks.length === 0) {
+              await sendMessage(chatId, '✅ У вас нет активных заявок.');
+              return res.sendStatus(200);
+            }
+
+            let reply = `📋 <b>Ваши активные заявки</b>\n\n`;
+            tasks.forEach(t => {
+              reply += `📍 <b>Заявка #${t.row}</b>\n🏢 ${t.pizzeria}\n🛠 ${t.problem}\n📂 ${t.category}\n📆 ${t.date}\n\n`;
+            });
+
+            await sendMessage(chatId, reply);
+          } catch (err) {
+            console.error('❌ Ошибка запроса /мои:', err.message);
+            await sendMessage(chatId, '⚠️ Не удалось получить ваши заявки.');
+          }
+          return res.sendStatus(200);
+        }
 
             for (const key of Object.keys(sections)) {
               const block = summary[key];
