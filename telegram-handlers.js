@@ -37,9 +37,10 @@ module.exports = (app, userStates) => {
     // === Обработка кнопки "Принять в работу" ===
     if (data === 'accept') {
       await editMessage(chatId, messageId, msg.text + `\n\n🟢 Заявка в работе`);
-      await sendMessage(chatId, `👷 Выберите исполнителя:`, {
-        reply_to_message_id: messageId,
-      });
+    await sendMessage(chatId, '👷 Выберите исполнителя:', {
+  reply_to_message_id: messageId
+});
+
 
       const executors = AUTHORIZED_USERS;
       const buttons = executors.map(e => [{ text: e, callback_data: `executor:${e}` }]);
