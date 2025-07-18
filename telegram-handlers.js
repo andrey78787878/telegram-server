@@ -58,11 +58,16 @@ if (data.startsWith('executor:')) {
 
   // Обновляем сообщение — добавляем имя исполнителя
   await editMessage(chatId, messageId, message.text + `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`);
+const EXECUTOR_NOTIFICATION_CHAT_ID = process.env.EXECUTOR_CHAT_ID;
+await sendMessage(EXECUTOR_NOTIFICATION_CHAT_ID, `👷 ${executor} назначен на заявку #${row}`);
+await sendMessage(executor, `✅ Вам назначена новая заявка #${row}. Проверьте чат.`);
 
   // Уведомляем в чат о назначении
   await sendMessage(chatId, `👷 Назначен исполнитель: ${executor}`, {
     reply_to_message_id: messageId,
   });
+
+
 
   // Обновляем данные в Google Таблице
   await sendToGAS({
