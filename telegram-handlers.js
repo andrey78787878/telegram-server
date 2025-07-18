@@ -189,24 +189,66 @@ module.exports = (app, userStates) => {
 
 
 
-  app.post('/webhook', async (req, res) => {
-    try {
-      const body = req.body;
+app.post('/webhook', async (req, res) => {
+  try {
+    const body = req.body;
 
-      if (body.message) {
-        const msg = body.message;
-        const chatId = msg.chat.id;
-        const username = msg.from?.username ? `@${msg.from.username}` : '';
-        const state = userStates[chatId];
+    // 📍 Вариант 1: Сообщение из Telegram
+    if (body.message) {
+      const msg = body.message;
+      const chatId = msg.chat.id;
+      const username = msg.from?.username ? `@${msg.from.username}` : '';
+      const chatType = msg.chat.type;
+      const state = userStates[chatId];
 
-if (text === '/мои') {
-      if (chat.type !== 'private') {
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chat.id,
-          text: '👋 Пожалуйста, напишите эту команду в личку боту, чтобы увидеть свои заявки.',
-        });
-        return;
+      const text = msg.text;
+
+      if (text === '/мои') {
+        if (chatType !== 'private') {
+          await axios.post(`${TELEGRAM_API}/sendMessage`, {
+            chat_id: chatId,
+            text: '👋 Пожалуйста, напишите эту команду в личку боту, чтобы увидеть свои заявки.',
+          });
+          return res.sendStatus(200);
+        }
+
+        // логика по команде /мои
+        return res.sendStatus(200);
       }
+
+      // здесь остальная логика обработки обычных сообщений из Telegram
+      return res.sendStatus(200);
+    }
+
+    // 📍 Вариант 2: Это вызов из Google Apps Script с данными для финального сообщения
+    if (body.chat_id && body.message_id && body.row && body.executor) {
+      const { chat_id, message_id, row, photo_link, sum, status, overdue, executor, comment } = body;
+
+      let finalText = '';
+      finalText += `📌 Заявка #${row} закрыта.\n`;
+      if (photo_link) finalText += `📎 Фото: ${photo_link}\n`;
+      if (sum) finalText += `💰 Сумма: ${sum} сум\n`;
+      if (executor) finalText += `👤 Исполнитель: @${executor}\n`;
+      if (status) finalText += `✅ Статус: ${status}\n`;
+      if (comment) finalText += `💬 Комментарий: ${comment}\n`;
+      if (overdue) finalText += `🔴 Просрочка: ${overdue} дн.\n`;
+
+      await axios.post(`${TELEGRAM_API}/editMessageText`, {
+        chat_id: chat_id,
+        message_id: message_id,
+        text: finalText,
+        parse_mode: 'HTML',
+      });
+
+      return res.sendStatus(200);
+    }
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('Ошибка в /webhook:', error);
+    res.sendStatus(500);
+  }
+});
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chat.id,
