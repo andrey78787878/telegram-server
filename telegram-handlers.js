@@ -60,7 +60,12 @@ if (data.startsWith('executor:')) {
   await editMessage(chatId, messageId, message.text + `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`);
 const EXECUTOR_NOTIFICATION_CHAT_ID = process.env.EXECUTOR_CHAT_ID;
 await sendMessage(EXECUTOR_NOTIFICATION_CHAT_ID, `👷 ${executor} назначен на заявку #${row}`);
-await sendMessage(executor, `✅ Вам назначена новая заявка #${row}. Проверьте чат.`);
+
+try {
+  await sendMessage(executor, `✅ Вам назначена новая заявка #${row}. Проверьте чат.`);
+} catch (err) {
+  console.error(`❗ Не удалось отправить в личку ${executor}: ${err.message}`);
+}
 
   // Уведомляем в чат о назначении
   await sendMessage(chatId, `👷 Назначен исполнитель: ${executor}`, {
