@@ -6,7 +6,7 @@ module.exports = (app, userStates) => {
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
-  const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Andrey_Tkach_MB', 'Текстовой подрядчик'];
+  const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', 'Текстовой подрядчик'];
   const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
 
   function buildExecutorButtons(row) {
