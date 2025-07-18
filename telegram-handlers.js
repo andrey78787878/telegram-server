@@ -28,10 +28,15 @@ module.exports = (app, userStates) => {
         const username = callback_query.from.username ? `@${callback_query.from.username}` : null;
         const data = callback_query.data;
 
-        // 1. Ответ Telegram
-     await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-  callback_query_id: callback_query.id
-}).catch(e => console.error('Answer callback error:', e.response?.data));
+        // 1. Ответ Telegram с обработкой ошибок
+        try {
+          await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+            callback_query_id: callback_query.id
+          });
+        } catch (e) {
+          console.error('Answer callback error:', e.response?.data);
+          // Продолжаем обработку даже если ответ на callback не удался
+        }
 
         // 2. Логирование
         const messageContent = msg.text || msg.caption;
@@ -58,7 +63,7 @@ module.exports = (app, userStates) => {
 
         // === Обработка "Принять в работу" ===
         if (data === 'accept') {
-          await editMessage(chatId, messageId, `${messageContent}\n\n🟢 Заявка в работе`);
+          await editMessageSafe(chatId, messageId, `${messageContent}\n\n🟢 Заявка в работе`);
 
           const buttons = AUTHORIZED_USERS.map(e => [
             { text: e, callback_data: `executor:${e}:${row}` }
@@ -68,7 +73,7 @@ module.exports = (app, userStates) => {
             reply_to_message_id: messageId
           });
 
-          await sendButtons(chatId, messageId, buttons);
+          await sendButtonsSafe(chatId, messageId, buttons);
           return res.sendStatus(200);
         }
 
@@ -83,7 +88,7 @@ module.exports = (app, userStates) => {
             message_id: messageId,
           });
 
-          await sendButtons(chatId, messageId, [
+          await sendButtonsSafe(chatId, messageId, [
             [
               { text: '✅ Выполнено', callback_data: `done:${row}` },
               { text: '🕐 Ожидает поставки', callback_data: `wait:${row}` },
@@ -181,20 +186,22 @@ module.exports = (app, userStates) => {
               `💬 Комментарий: ${comment}`
             ].join('\n');
 
-            await editMessage(chatId, messageId, summary);
+            await editMessageSafe(chatId, messageId, summary);
 
             setTimeout(async () => {
               try {
                 const diskUrl = await getGoogleDiskLink(row);
-                const updatedSummary = [
-                  `📌 Заявка #${row} закрыта.`,
-                  `📎 Фото: ${diskUrl}`,
-                  `💰 Сумма: ${sum} сум`,
-                  `👤 Исполнитель: ${username}`,
-                  `✅ Статус: Выполнено`,
-                  `💬 Комментарий: ${comment}`
-                ].join('\n');
-                await editMessage(chatId, messageId, updatedSummary);
+                if (diskUrl) {
+                  const updatedSummary = [
+                    `📌 Заявка #${row} закрыта.`,
+                    `📎 Фото: ${diskUrl}`,
+                    `💰 Сумма: ${sum} сум`,
+                    `👤 Исполнитель: ${username}`,
+                    `✅ Статус: Выполнено`,
+                    `💬 Комментарий: ${comment}`
+                  ].join('\n');
+                  await editMessageSafe(chatId, messageId, updatedSummary);
+                }
               } catch (e) {
                 console.error('Error updating disk link:', e);
               }
@@ -203,7 +210,7 @@ module.exports = (app, userStates) => {
             setTimeout(async () => {
               try {
                 for (const msgId of state.serviceMessages) {
-                  await deleteMessage(chatId, msgId);
+                  await deleteMessageSafe(chatId, msgId);
                 }
               } catch (e) {
                 console.error('Error deleting service messages:', e);
@@ -226,55 +233,94 @@ module.exports = (app, userStates) => {
     }
   });
 
-  // Вспомогательные функции
+  // Безопасные версии функций с обработкой ошибок
   async function sendMessage(chatId, text, options = {}) {
-    return axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      ...options
-    });
+    try {
+      return await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        ...options
+      });
+    } catch (error) {
+      console.error('Send message error:', error.response?.data);
+      throw error;
+    }
   }
 
-  async function editMessage(chatId, messageId, text) {
-    return axios.post(`${TELEGRAM_API}/editMessageText`, {
-      chat_id: chatId,
-      message_id: messageId,
-      text,
-      parse_mode: 'HTML'
-    });
+  async function editMessageSafe(chatId, messageId, text) {
+    try {
+      return await axios.post(`${TELEGRAM_API}/editMessageText`, {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: 'HTML'
+      });
+    } catch (error) {
+      if (error.response?.data?.description?.includes('no text in the message') || 
+          error.response?.data?.description?.includes('message to edit not found')) {
+        console.log('Cannot edit message, sending new one');
+        return await sendMessage(chatId, text);
+      }
+      console.error('Edit message error:', error.response?.data);
+      throw error;
+    }
   }
 
-  async function deleteMessage(chatId, messageId) {
-    return axios.post(`${TELEGRAM_API}/deleteMessage`, {
-      chat_id: chatId,
-      message_id: messageId
-    }).catch(() => {});
+  async function deleteMessageSafe(chatId, messageId) {
+    try {
+      return await axios.post(`${TELEGRAM_API}/deleteMessage`, {
+        chat_id: chatId,
+        message_id: messageId
+      });
+    } catch (error) {
+      console.error('Delete message error:', error.response?.data);
+      return null;
+    }
   }
 
-  async function sendButtons(chatId, messageId, buttons) {
-    return axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-      chat_id: chatId,
-      message_id: messageId,
-      reply_markup: { inline_keyboard: buttons }
-    });
+  async function sendButtonsSafe(chatId, messageId, buttons) {
+    try {
+      return await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: buttons }
+      });
+    } catch (error) {
+      console.error('Send buttons error:', error.response?.data);
+      // Если не удалось изменить сообщение, отправляем новое с кнопками
+      return await sendMessage(chatId, 'Выберите действие:', {
+        reply_markup: { inline_keyboard: buttons }
+      });
+    }
   }
 
   async function getTelegramFileUrl(fileId) {
-    const { data } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-    return `${TELEGRAM_FILE_API}/${data.result.file_path}`;
+    try {
+      const { data } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+      return `${TELEGRAM_FILE_API}/${data.result.file_path}`;
+    } catch (error) {
+      console.error('Get file URL error:', error.response?.data);
+      return null;
+    }
   }
 
   async function sendToGAS(data) {
-    return axios.post(GAS_WEB_APP_URL, data);
+    try {
+      return await axios.post(GAS_WEB_APP_URL, data);
+    } catch (error) {
+      console.error('Send to GAS error:', error.response?.data);
+      throw error;
+    }
   }
 
   async function getGoogleDiskLink(row) {
     try {
       const res = await axios.post(`${GAS_WEB_APP_URL}?getDiskLink=true`, { row });
-      return res.data.diskLink || '🔗 [файл не найден]';
-    } catch {
-      return '🔗 [ошибка загрузки ссылки]';
+      return res.data.diskLink || null;
+    } catch (error) {
+      console.error('Get Google Disk link error:', error.response?.data);
+      return null;
     }
   }
 
