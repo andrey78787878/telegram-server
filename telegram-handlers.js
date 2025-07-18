@@ -19,6 +19,7 @@ module.exports = (app, userStates) => {
     const from = callback_query?.from;
 
     if (!callback_query || !msg || !data || !from) return res.sendStatus(200);
+ }
 
     const chatId = msg.chat.id;
     const messageId = msg.message_id;
