@@ -7,8 +7,9 @@ const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 const AUTHORIZED_USERS = [
-  '@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB, @Davr_85'
+  '@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85'
 ];
+
 
 module.exports = (app, userStates) => {
   app.post('/webhook', async (req, res) => {
