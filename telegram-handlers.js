@@ -1,12 +1,13 @@
 // telegram-handlers.js
 module.exports = (app, userStates) => {
   const axios = require('axios');
+
   const BOT_TOKEN = process.env.BOT_TOKEN;
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-  const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
   const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
+  const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
 
   const deleteMessageAfter = (chatId, messageId, delay = 15000) => {
     setTimeout(() => {
@@ -46,11 +47,25 @@ module.exports = (app, userStates) => {
           return res.sendStatus(200);
         }
 
-        const [action, row] = data.split(':');
-        const executor = fromUser;
+        const [action, row, overrideExecutor] = data.split(':');
+        const executor = overrideExecutor || fromUser;
 
         if (action === 'accept') {
-          // Обновление таблицы
+          // Выбор исполнителя
+          const buttons = EXECUTORS.map(name => ([{
+            text: name,
+            callback_data: `executor:${row}:${name}`
+          }]));
+
+          await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: buttons }
+          });
+        }
+
+        if (action === 'executor') {
+          // Установить исполнителя и статус "в работе"
           await axios.post(GAS_WEB_APP_URL, {
             action: 'accept',
             row,
@@ -58,13 +73,14 @@ module.exports = (app, userStates) => {
             message_id: messageId,
           });
 
-          // Получение данных заявки для повторного рендера
           const gasResponse = await axios.post(GAS_WEB_APP_URL, {
             action: 'getRowData',
             row,
           });
+
           const d = gasResponse.data;
-          const updatedText =
+
+          const updatedText = 
 `📍 Заявка #${d.row}
 🏢 Пиццерия: ${d.branch}
 📂 Категория: ${d.category}
@@ -75,16 +91,15 @@ module.exports = (app, userStates) => {
 🟢 В работе
 👷 Исполнитель: ${executor}`;
 
-          // Обновляем материнское сообщение
           await axios.post(`${TELEGRAM_API}/editMessageText`, {
             chat_id: chatId,
             message_id: messageId,
             text: updatedText,
             reply_markup: {
               inline_keyboard: [[
-                { text: '✅ Выполнено', callback_data: `done:${row}` },
-                { text: '🚚 Ожидает поставки', callback_data: `delayed:${row}` },
-                { text: '❌ Отмена', callback_data: `cancel:${row}` }
+                { text: '✅ Выполнено', callback_data: `done:${row}:${executor}` },
+                { text: '🚚 Ожидает поставки', callback_data: `delayed:${row}:${executor}` },
+                { text: '❌ Отмена', callback_data: `cancel:${row}:${executor}` }
               ]]
             }
           });
@@ -92,7 +107,6 @@ module.exports = (app, userStates) => {
 
         if (action === 'done') {
           userStates[chatId] = { step: 'photo', row, executor, messageId };
-
           const msg = await sendAndDelete(chatId, '📸 Пришлите фото выполненных работ:');
           userStates[chatId].messagesToDelete = [msg.data.result.message_id];
         }
@@ -156,7 +170,6 @@ module.exports = (app, userStates) => {
             message_id: messageId
           };
 
-          // Отправка данных в GAS
           const result = await axios.post(GAS_WEB_APP_URL, sendData);
           const d = result.data;
 
@@ -169,7 +182,7 @@ module.exports = (app, userStates) => {
 🕒 Просрочка: ${d.delay || '0'} дн.
 💬 Комментарий: ${comment}`;
 
-          const final = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          await axios.post(`${TELEGRAM_API}/sendMessage`, {
             chat_id: chatId,
             text: finalText,
             parse_mode: 'Markdown',
