@@ -11,14 +11,14 @@ const AUTHORIZED_USERS = [
 
 module.exports = (app, userStates) => {
   app.post('/webhook', async (req, res) => {
-  const body = req.body;
+    const body = req.body;
 
-  const { message, callback_query } = body;
-  const data = callback_query?.data;
-  const msg = callback_query?.message;
-  const from = callback_query?.from;
+    const { message, callback_query } = body;
+    const data = callback_query?.data;
+    const msg = callback_query?.message;
+    const from = callback_query?.from;
 
-  if (!callback_query || !msg || !data || !from) return res.sendStatus(200);
+    if (!callback_query || !msg || !data || !from) return res.sendStatus(200);
 
     const chatId = msg.chat.id;
     const messageId = msg.message_id;
@@ -30,87 +30,88 @@ module.exports = (app, userStates) => {
       return res.sendStatus(200);
     }
 
-    // Извлекаем номер строки
-    const row = await extractRowFromMessage(msg.text);
+    const row = extractRowFromMessage(msg.text);
     if (!row) return res.sendStatus(200);
 
     // === Обработка "Принять в работу" ===
-if (data === 'accept') {
-  await editMessage(chatId, messageId, msg.text + `\n\n🟢 Заявка в работе`);
+    if (data === 'accept') {
+      await editMessage(chatId, messageId, msg.text + `\n\n🟢 Заявка в работе`);
 
-  const buttons = AUTHORIZED_USERS.map(e => [
-    { text: e, callback_data: `executor:${e}` }
-  ]);
+      const buttons = AUTHORIZED_USERS.map(e => [
+        { text: e, callback_data: `executor:${e}` }
+      ]);
 
-  await sendMessage(chatId, '👷 Выберите исполнителя:', {
-    reply_to_message_id: messageId
-  });
+      await sendMessage(chatId, '👷 Выберите исполнителя:', {
+        reply_to_message_id: messageId
+      });
 
-  await sendButtons(chatId, messageId, buttons);
-
-  return res.sendStatus(200);
-}
-
-// === Обработка выбора исполнителя ===
-if (data.startsWith('executor:')) {
-  const executor = data.split(':')[1];
-  const row = await extractRowFromMessage(msg.text);
-  const username = from.username ? `@${from.username}` : null;
-
-  await sendToGAS({
-    row,
-    status: 'В работе',
-    executor,
-    message_id: messageId,
-  });
-
-  await sendButtons(chatId, messageId, [
-    [
-      { text: '✅ Выполнено', callback_data: 'done' },
-      { text: '🕐 Ожидает поставки', callback_data: 'wait' },
-      { text: '❌ Отмена', callback_data: 'cancel' },
-    ]
-  ]);
-
-  return res.sendStatus(200);
-}
-
-      if (data === 'done') {
-        userStates[chatId] = { stage: 'waiting_photo', row, username, messageId };
-        await sendMessage(chatId, '📸 Пришлите фото выполненных работ');
-        return res.sendStatus(200);
-      }
-
-      if (data === 'waiting') {
-        await sendMessage(chatId, '⏳ Заявка переведена в статус "Ожидает поставки"', { reply_to_message_id: messageId });
-        await sendToGAS({ row, status: 'Ожидает поставки' });
-        return res.sendStatus(200);
-      }
-
-      if (data === 'cancel') {
-        await sendMessage(chatId, '🚫 Заявка отменена', { reply_to_message_id: messageId });
-        await sendToGAS({ row, status: 'Отменено' });
-        return res.sendStatus(200);
-      }
+      await sendButtons(chatId, messageId, buttons);
 
       return res.sendStatus(200);
     }
 
-    // === USER MESSAGE ===
-    if (body.message) {
-      const msg = body.message;
-      const chatId = msg.chat.id;
-      const state = userStates[chatId];
+    // === Обработка выбора исполнителя ===
+    if (data.startsWith('executor:')) {
+      const executor = data.split(':')[1];
 
-      if (!state) return res.sendStatus(200);
+      await sendToGAS({
+        row,
+        status: 'В работе',
+        executor,
+        message_id: messageId,
+      });
 
+      await sendButtons(chatId, messageId, [
+        [
+          { text: '✅ Выполнено', callback_data: 'done' },
+          { text: '🕐 Ожидает поставки', callback_data: 'wait' },
+          { text: '❌ Отмена', callback_data: 'cancel' },
+        ]
+      ]);
+
+      return res.sendStatus(200);
+    }
+
+    if (data === 'done') {
+      userStates[chatId] = { stage: 'waiting_photo', row, username, messageId, serviceMessages: [] };
+      await sendMessage(chatId, '📸 Пришлите фото выполненных работ');
+      return res.sendStatus(200);
+    }
+
+    if (data === 'wait') {
+      await sendMessage(chatId, '⏳ Заявка переведена в статус "Ожидает поставки"', { reply_to_message_id: messageId });
+      await sendToGAS({ row, status: 'Ожидает поставки' });
+      return res.sendStatus(200);
+    }
+
+    if (data === 'cancel') {
+      await sendMessage(chatId, '🚫 Заявка отменена', { reply_to_message_id: messageId });
+      await sendToGAS({ row, status: 'Отменено' });
+      return res.sendStatus(200);
+    }
+
+    return res.sendStatus(200);
+  });
+
+  // === USER MESSAGE ===
+  app.post('/webhook', async (req, res) => {
+    const body = req.body;
+    if (!body.message) return res.sendStatus(200);
+
+    const msg = body.message;
+    const chatId = msg.chat.id;
+    const state = userStates[chatId];
+
+    if (!state) return res.sendStatus(200);
+
+    try {
       if (state.stage === 'waiting_photo' && msg.photo) {
         const fileId = msg.photo.at(-1).file_id;
         const fileLink = await getTelegramFileUrl(fileId);
 
         state.photoUrl = fileLink;
         state.stage = 'waiting_sum';
-        state.serviceMessages = [msg.message_id];
+        state.serviceMessages.push(msg.message_id);
 
         await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
         return res.sendStatus(200);
@@ -131,12 +132,10 @@ if (data.startsWith('executor:')) {
 
         const { row, sum, comment, photoUrl, username, messageId } = state;
 
-        // отправка данных в GAS
         await sendToGAS({
           row, sum, comment, photo: photoUrl, status: 'Выполнено', executor: username
         });
 
-        // финальное сообщение
         const summary = [
           `📌 Заявка #${row} закрыта.`,
           `📎 Фото: ${photoUrl}`,
@@ -149,34 +148,45 @@ if (data.startsWith('executor:')) {
 
         await editMessage(chatId, messageId, summary);
 
-        // обновление фото-ссылки из столбца S через 3 минуты
         setTimeout(async () => {
-          const diskUrl = await getGoogleDiskLink(row);
-          const updatedSummary = [
-            `📌 Заявка #${row} закрыта.`,
-            `📎 Фото: ${diskUrl}`,
-            `💰 Сумма: ${sum} сум`,
-            `👤 Исполнитель: ${username}`,
-            `✅ Статус: Выполнено`,
-            `💬 Комментарий: ${comment}`
-          ].join('\n');
-          await editMessage(chatId, messageId, updatedSummary);
+          try {
+            const diskUrl = await getGoogleDiskLink(row);
+            const updatedSummary = [
+              `📌 Заявка #${row} закрыта.`,
+              `📎 Фото: ${diskUrl}`,
+              `💰 Сумма: ${sum} сум`,
+              `👤 Исполнитель: ${username}`,
+              `✅ Статус: Выполнено`,
+              `💬 Комментарий: ${comment}`
+            ].join('\n');
+            await editMessage(chatId, messageId, updatedSummary);
+          } catch (e) {
+            console.error('Error updating disk link:', e);
+          }
         }, 3 * 60 * 1000);
 
-        // удаление всех сервисных сообщений через 1 минуту
         setTimeout(async () => {
-          for (const msgId of state.serviceMessages) {
-            await deleteMessage(chatId, msgId);
+          try {
+            for (const msgId of state.serviceMessages) {
+              await deleteMessage(chatId, msgId);
+            }
+          } catch (e) {
+            console.error('Error deleting service messages:', e);
           }
         }, 60 * 1000);
 
         delete userStates[chatId];
         return res.sendStatus(200);
       }
+    } catch (e) {
+      console.error('Error handling user message:', e);
+      return res.sendStatus(500);
     }
 
     res.sendStatus(200);
   });
+};
+
 };
 
 // === SUPPORT FUNCTIONS ===
