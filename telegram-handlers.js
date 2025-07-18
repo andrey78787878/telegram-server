@@ -248,5 +248,5 @@ function extractRowFromMessage(text) {
   const match = text.match(/#(\d+)/);
   return match ? parseInt(match[1], 10) : null;
 }
-}
+
 
