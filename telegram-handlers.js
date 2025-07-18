@@ -5,12 +5,11 @@ module.exports = (app, userStates) => {
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-const sendToGAS = require('./sendToGAS');
-
+  const GROUP_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+  const sendToGAS = require('./sendToGAS');
 
   const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', 'Текстовой подрядчик'];
-
 
   function buildExecutorButtons(row) {
     return {
@@ -93,191 +92,9 @@ const sendToGAS = require('./sendToGAS');
     }
   }
 
-  async function completeRequest(chatId, state, commentMessageId, commentText) {
-    let { row, executor, amount, photoUrl, originalMessageId } = state;
-    const comment = commentText || '';
-
-    if (!row) {
-      const recovery = await axios.post(GAS_WEB_APP_URL, {
-        action: 'recoverRowByMessageId',
-        message_id: originalMessageId
-      });
-      if (recovery.data?.row) {
-        row = recovery.data.row;
-        state.row = row;
-      } else {
-        console.error('❌ Не удалось восстановить номер строки.');
-        return;
-      }
-    }
-
-    const resolvedMessageId = originalMessageId;
-
-    await axios.post(GAS_WEB_APP_URL, {
-      action: 'complete',
-      row,
-      photoUrl,
-      amount,
-      comment,
-      completed_at: new Date().toISOString(),
-      message_id: resolvedMessageId
-    });
-
-    const [textRes, delayRes, driveUrlRes, commentRes] = await Promise.all([
-      axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row }),
-      axios.post(GAS_WEB_APP_URL, { action: 'getDelayInfo', row }),
-      axios.post(GAS_WEB_APP_URL, { action: 'getDriveLink', row }),
-      axios.post(GAS_WEB_APP_URL, { action: 'getExecutorComment', row })
-    ]);
-
-    const originalText = textRes.data?.text || '';
-    const delayDays = delayRes.data?.delay || '0';
-  const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
-const commentR = commentRes.data?.comment || '';
-const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
-
-if (resolvedMessageId) {
-  await editMessageText(chatId, resolvedMessageId, updatedText, { parse_mode: 'HTML' });
-  state.originalMessageId = resolvedMessageId;
-}
-
-// ⏱ Сначала отправим в GAS, чтобы через 3 минуты была обновлённая ссылка
-await sendToGAS({
-  photo: fileUrl,
-  sum: userStates[chatId].sum,
-  comment: userStates[chatId].comment,
-  message_id: userStates[chatId].messageId,
-  row: userStates[chatId].row,
-  username: msg.from.username,
-  executor: userStates[chatId].executor
-}, GAS_WEB_APP_URL);
-
-// ⏳ Через 3 минуты пытаемся обновить ссылку
-setTimeout(async () => {
-  try {
-    const driveUpdateRes = await axios.post(GAS_WEB_APP_URL, {
-      action: 'getDriveLink',
-      row
-    });
-    const updatedDriveUrl = driveUpdateRes.data?.driveUrl;
-
-    if (updatedDriveUrl && updatedDriveUrl !== driveUrl) {
-      const refreshedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${updatedDriveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
-      await editMessageText(chatId, resolvedMessageId, refreshedText, { parse_mode: 'HTML' });
-    }
-  } catch (err) {
-    console.warn('⚠️ Ошибка обновления ссылки на Google Диск:', err.message);
-  }
-}, 3 * 60 * 1000);
-
-// 🧹 Удаляем промежуточные сообщения
-await deleteMessageWithDelay(chatId, commentMessageId);
-await cleanupMessages(chatId, state);
-delete userStates[chatId];
-
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
-
-      if (body.message) {
-        const msg = body.message;
-        const chatId = msg.chat.id;
-        const username = msg.from?.username ? `@${msg.from.username}` : '';
-        const state = userStates[chatId];
-
-        if (state?.awaiting_manual_executor && msg.text) {
-          const executor = msg.text.trim();
-          const row = state.row;
-
-          const [idRes, textRes] = await Promise.all([
-            axios.post(GAS_WEB_APP_URL, { action: 'getMessageId', row }),
-            axios.post(GAS_WEB_APP_URL, { action: 'getRequestText', row })
-          ]);
-
-          const originalMessageId = idRes.data?.message_id;
-          const originalText = textRes.data?.text || '';
-
-          await axios.post(GAS_WEB_APP_URL, {
-            action: 'in_progress',
-            row,
-            executor,
-            message_id: originalMessageId
-          });
-
-          const updatedText = `${originalText}\n\n🟢 В работе\n👷 Исполнитель: ${executor}`;
-          const buttons = buildFinalButtons(row);
-          await editMessageText(chatId, originalMessageId, updatedText, buttons);
-
-          userStates[chatId] = {
-            row,
-            executor,
-            originalMessageId,
-            serviceMessages: [],
-            userResponses: []
-          };
-
-          return res.sendStatus(200);
-        }
-
-        if (msg.text && msg.text.toLowerCase().includes('сводка')) {
-          try {
-            const summaryRes = await axios.post(GAS_WEB_APP_URL, { action: 'getGroupedSummary' });
-            const summary = summaryRes.data;
-
-            let report = '<b>📊 Сводка по заявкам</b>\n\n';
-            const sections = {
-              notAccepted: '🆕 <b>Не приняты</b>',
-              inProgress: '🔧 <b>В работе</b>',
-              overdue: '⏰ <b>Просрочены</b>'
-            };
-
-            for (const key of Object.keys(sections)) {
-              const block = summary[key];
-              if (block && Object.keys(block).length > 0) {
-                report += `${sections[key]}:\n`;
-                for (const pizzeria in block) {
-                  const items = block[pizzeria].join(', ');
-                  report += `🍕 ${pizzeria}: ${items}\n`;
-                }
-                report += '\n';
-              }
-            }
-
-            await sendMessage(chatId, report);
-          } catch (err) {
-            console.error('❌ Ошибка получения сводки:', err.message);
-            await sendMessage(chatId, '⚠️ Не удалось получить сводку.');
-          }
-
-          return res.sendStatus(200);
-        }
-
-        if (state?.stage === 'awaiting_photo' && msg.photo) {
-          const photo = msg.photo[msg.photo.length - 1];
-          const fileLink = await getFileLink(photo.file_id);
-          state.photoUrl = fileLink;
-          state.stage = 'awaiting_amount';
-          const prompt = await sendMessage(chatId, '💰 Введите сумму:');
-          state.serviceMessages.push(prompt);
-          state.userResponses.push(msg.message_id);
-          return res.sendStatus(200);
-        }
-
-        if (state?.stage === 'awaiting_amount' && msg.text) {
-          state.amount = msg.text.trim();
-          state.stage = 'awaiting_comment';
-          const prompt = await sendMessage(chatId, '✏️ Введите комментарий:');
-          state.serviceMessages.push(prompt);
-          state.userResponses.push(msg.message_id);
-          return res.sendStatus(200);
-        }
-
-        if (state?.stage === 'awaiting_comment' && msg.text) {
-          state.userResponses.push(msg.message_id);
-          await completeRequest(chatId, state, msg.message_id, msg.text);
-          return res.sendStatus(200);
-        }
-      }
 
       if (body.callback_query) {
         const { data: raw, message, id: callbackId, from } = body.callback_query;
@@ -285,24 +102,6 @@ delete userStates[chatId];
         const messageId = message.message_id;
         const [action, row, executor] = raw.split(':');
         const username = from.username ? `@${from.username}` : '';
-
-        if (!AUTHORIZED_USERS.includes(username)) {
-          await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-            callback_query_id: callbackId,
-            text: '⛔️ У вас нет прав на выполнение этого действия.',
-            show_alert: true
-          });
-          return res.sendStatus(200);
-        }
-
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackId });
-
-        if (action === 'in_progress') {
-          const keyboard = buildExecutorButtons(row);
-          await editMessageText(chatId, messageId, `${message.text}\n\nВыберите исполнителя:`, keyboard);
-          userStates[chatId] = { row, originalMessageId: messageId, serviceMessages: [] };
-          return res.sendStatus(200);
-        }
 
         if (action === 'select_executor') {
           if (!userStates[chatId]) userStates[chatId] = {};
@@ -335,6 +134,15 @@ delete userStates[chatId];
           const buttons = buildFinalButtons(row);
           await editMessageText(chatId, originalMessageId, updatedText, buttons);
 
+          // ✅ Пуш в групповой чат:
+          await sendMessage(GROUP_CHAT_ID, `👷 Исполнитель назначен: ${executor}\n📌 Заявка #${row}\nСтатус: В работе 🟢`);
+
+          // ✅ Пуш лично исполнителю:
+          if (executor.startsWith('@')) {
+            await sendMessage(executor, `🛠 Вам назначена новая заявка!\n📌 Заявка #${row}\nПерейдите в чат, чтобы принять в работу.`)
+              .catch(err => console.warn('⚠️ Не удалось отправить ЛС исполнителю:', err.response?.data || err.message));
+          }
+
           userStates[chatId] = {
             ...userStates[chatId],
             row,
@@ -343,25 +151,6 @@ delete userStates[chatId];
             serviceMessages: []
           };
 
-          return res.sendStatus(200);
-        }
-
-        if (action === 'done') {
-          if (!userStates[chatId]) {
-            console.warn('⚠️ Нет состояния для пользователя.');
-            return res.sendStatus(200);
-          }
-
-          userStates[chatId] = {
-            ...userStates[chatId],
-            stage: 'awaiting_photo',
-            serviceMessages: [],
-            userResponses: []
-          };
-
-          const prompt = await sendMessage(chatId, '📸 Пришлите фото выполнения:');
-          userStates[chatId].serviceMessages.push(prompt);
-          deleteMessageWithDelay(chatId, prompt);
           return res.sendStatus(200);
         }
       }
