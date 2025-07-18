@@ -5,72 +5,50 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-
 const AUTHORIZED_USERS = [
   '@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85'
 ];
-
 
 module.exports = (app, userStates) => {
   app.post('/webhook', async (req, res) => {
     const body = req.body;
 
-    // === INLINE BUTTON PRESSED ===
-    if (body.callback_query) {
-      const { data, message, from } = body.callback_query;
-      const chatId = message.chat.id;
-      const messageId = message.message_id;
-      const username = from.username ? `@${from.username}` : null;
+    const { message, callback_query } = body;
+    const data = callback_query?.data;
+    const msg = callback_query?.message;
+    const from = callback_query?.from;
 
-  // Проверка доступа
-if (!AUTHORIZED_USERS.includes(username)) {
-  await sendMessage(chatId, '❌ У вас нет доступа.');
-  return res.sendStatus(200);
-}
+    if (!callback_query || !msg || !data || !from) return res.sendStatus(200);
 
-// Извлекаем строку из текста сообщения
-const row = await extractRowFromMessage(message.text);
-if (!row) return res.sendStatus(200);
+    const chatId = msg.chat.id;
+    const messageId = msg.message_id;
+    const username = from.username ? `@${from.username}` : null;
 
-// === Обработка кнопки "Принять в работу" ===
-if (data === 'accept') {
-  // Обновляем сообщение — добавляем метку "в работе"
-  await editMessage(chatId, messageId, message.text + `\n\n🟢 Заявка в работе`);
+    // Проверка доступа
+    if (!AUTHORIZED_USERS.includes(username)) {
+      await sendMessage(chatId, '❌ У вас нет доступа.');
+      return res.sendStatus(200);
+    }
 
-  // Сообщение о выборе исполнителя
-  await sendMessage(chatId, `👷 Выберите исполнителя:`, {
-    reply_to_message_id: messageId,
-  });
+    // Извлекаем номер строки
+    const row = await extractRowFromMessage(msg.text);
+    if (!row) return res.sendStatus(200);
 
-  // Список исполнителей
-  const executors = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85'];
-  const buttons = executors.map(e => [{ text: e, callback_data: `executor:${e}` }]);
+    // === Обработка кнопки "Принять в работу" ===
+    if (data === 'accept') {
+      await editMessage(chatId, messageId, msg.text + `\n\n🟢 Заявка в работе`);
+      await sendMessage(chatId, `👷 Выберите исполнителя:`, {
+        reply_to_message_id: messageId,
+      });
 
-  // Отправляем кнопки выбора исполнителя
-  await sendButtons(chatId, messageId, buttons);
+      const executors = AUTHORIZED_USERS;
+      const buttons = executors.map(e => [{ text: e, callback_data: `executor:${e}` }]);
+      await sendButtons(chatId, messageId, buttons);
+      return res.sendStatus(200);
+    }
 
-  return res.sendStatus(200);
-}
+    // ==
 
-// === Обработка выбора исполнителя ===
-if (data.startsWith('executor:')) {
-  const executor = data.split(':')[1];
-
-  // Обновляем сообщение — добавляем имя исполнителя
-  await editMessage(chatId, messageId, message.text + `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`);
-const EXECUTOR_NOTIFICATION_CHAT_ID = process.env.EXECUTOR_CHAT_ID;
-await sendMessage(EXECUTOR_NOTIFICATION_CHAT_ID, `👷 ${executor} назначен на заявку #${row}`);
-
-try {
-  await sendMessage(executor, `✅ Вам назначена новая заявка #${row}. Проверьте чат.`);
-} catch (err) {
-  console.error(`❗ Не удалось отправить в личку ${executor}: ${err.message}`);
-}
-
-  // Уведомляем в чат о назначении
-  await sendMessage(chatId, `👷 Назначен исполнитель: ${executor}`, {
-    reply_to_message_id: messageId,
-  });
 
 
 
