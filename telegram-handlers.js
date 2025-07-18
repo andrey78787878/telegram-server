@@ -91,7 +91,7 @@ module.exports = (app, userStates) => {
 🟢 В работе
 👷 Исполнитель: ${executor}`;
 
-          aawait axios.post(`${TELEGRAM_API}/editMessageText`, {
+          await axios.post(`${TELEGRAM_API}/editMessageText`, {
   chat_id: chatId,
   message_id: messageId,
   text: updatedText,
