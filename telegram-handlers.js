@@ -24,12 +24,21 @@ module.exports = (app, userStates) => {
     const messageId = msg.message_id;
     const username = from.username ? `@${from.username}` : null;
 
+console.log('Received callback:', {
+  data,
+  username,
+  chatId,
+  messageText: msg.text,
+  extractedRow: extractRowFromMessage(msg.text)
+});
     // Проверка доступа
     if (!AUTHORIZED_USERS.includes(username)) {
       await sendMessage(chatId, '❌ У вас нет доступа.');
       return res.sendStatus(200);
     }
-
+await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+  callback_query_id: callback_query.id
+}).catch(console.error);
     const row = extractRowFromMessage(msg.text);
     if (!row) return res.sendStatus(200);
 
