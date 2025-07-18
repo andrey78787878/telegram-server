@@ -39,7 +39,12 @@ console.log('Received callback:', {
 await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
   callback_query_id: callback_query.id
 }).catch(console.error);
-    const row = extractRowFromMessage(msg.text);
+    const messageContent = msg.text || msg.caption; // Ищем текст и в подписях к фото
+const row = extractRowFromMessage(messageContent);
+console.log('Extracted from:', { 
+  source: msg.text ? 'text' : 'caption',
+  content: messageContent,
+  row 
     if (!row) return res.sendStatus(200);
 
     // === Обработка "Принять в работу" ===
