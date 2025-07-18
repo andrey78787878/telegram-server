@@ -187,6 +187,7 @@ module.exports = (app) => {
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
+      console.log('Incoming webhook:', JSON.stringify(body, null, 2));
       
       // Обработка callback_query
       if (body.callback_query) {
@@ -196,6 +197,13 @@ module.exports = (app) => {
         const messageId = msg.message_id;
         const username = callback_query.from.username ? `@${callback_query.from.username}` : null;
         const data = callback_query.data;
+
+        console.log(`Callback received from ${username}:`, {
+          chatId,
+          messageId,
+          callbackData: data,
+          messageText: msg.text || msg.caption
+        });
 
         // Ответ на callback_query
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
@@ -211,13 +219,41 @@ module.exports = (app) => {
 
         // Проверка прав
         if (!AUTHORIZED_USERS.includes(username)) {
+          console.log(`Access denied for ${username}`);
           await sendMessage(chatId, '❌ У вас нет доступа.');
+          return res.sendStatus(200);
+        }
+
+        // Обработка кнопки "Принять в работу"
+        if (data === 'accept') {
+          console.log(`Processing 'accept' for row ${row} by ${username}`);
+          
+          if (!MANAGERS.includes(username)) {
+            console.log(`User ${username} is not a manager`);
+            await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
+            return res.sendStatus(200);
+          }
+
+          const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
+          await editMessageSafe(chatId, messageId, updatedText);
+
+          const buttons = EXECUTORS.map(e => [
+            { text: e, callback_data: `executor:${e}:${row}` }
+          ]);
+
+          console.log(`Sending executor selection for row ${row}`);
+          await sendMessage(chatId, `👷 Выберите исполнителя для заявки #${row}:`, {
+            reply_to_message_id: messageId
+          });
+
+          await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите исполнителя для заявки #${row}:`);
           return res.sendStatus(200);
         }
 
         // Обработка выбора исполнителя
         if (data.startsWith('executor:')) {
           const executorUsername = data.split(':')[1];
+          console.log(`Processing executor selection: ${executorUsername} for row ${row}`);
           
           // Удаляем сообщение "Выберите исполнителя"
           if (msg.reply_to_message) {
@@ -259,7 +295,10 @@ module.exports = (app) => {
 
         // Обработка завершения заявки
         if (data.startsWith('done:')) {
+          console.log(`Processing 'done' for row ${row} by ${username}`);
+          
           if (!EXECUTORS.includes(username)) {
+            console.log(`User ${username} is not an executor`);
             await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
             return res.sendStatus(200);
           }
@@ -285,7 +324,47 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
-        // Обработка других статусов (wait/cancel) ...
+        // Обработка ожидания поставки
+        if (data.startsWith('wait:')) {
+          console.log(`Processing 'wait' for row ${row} by ${username}`);
+          
+          if (!EXECUTORS.includes(username)) {
+            await sendMessage(chatId, '❌ Только исполнители могут менять статус заявки.');
+            return res.sendStatus(200);
+          }
+
+          await sendMessage(chatId, '⏳ Заявка переведена в статус "Ожидает поставки"', { 
+            reply_to_message_id: messageId 
+          });
+          
+          await sendToGAS({ 
+            row: parseInt(data.split(':')[1]), 
+            status: 'Ожидает поставки' 
+          });
+          
+          return res.sendStatus(200);
+        }
+
+        // Обработка отмены заявки
+        if (data.startsWith('cancel:')) {
+          console.log(`Processing 'cancel' for row ${row} by ${username}`);
+          
+          if (!EXECUTORS.includes(username)) {
+            await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
+            return res.sendStatus(200);
+          }
+
+          await sendMessage(chatId, '🚫 Заявка отменена', { 
+            reply_to_message_id: messageId 
+          });
+          
+          await sendToGAS({ 
+            row: parseInt(data.split(':')[1]), 
+            status: 'Отменено' 
+          });
+          
+          return res.sendStatus(200);
+        }
       }
 
       // Обработка обычных сообщений
@@ -293,9 +372,11 @@ module.exports = (app) => {
         const msg = body.message;
         const chatId = msg.chat.id;
         const state = userStates[chatId];
+        console.log(`Processing message in state ${state.stage} for row ${state.row}`);
 
         // Получение фото
         if (state.stage === 'waiting_photo' && msg.photo) {
+          console.log('Received photo for completion');
           const fileId = msg.photo.at(-1).file_id;
           state.photoUrl = await getTelegramFileUrl(fileId);
           state.stage = 'waiting_sum';
@@ -304,6 +385,7 @@ module.exports = (app) => {
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
+          console.log(`Received sum: ${msg.text}`);
           state.sum = msg.text;
           state.stage = 'waiting_comment';
           return res.sendStatus(200);
@@ -311,6 +393,7 @@ module.exports = (app) => {
 
         // Получение комментария и завершение
         if (state.stage === 'waiting_comment' && msg.text) {
+          console.log(`Received comment: ${msg.text}`);
           state.comment = msg.text;
 
           // Удаляем служебные запросы
@@ -340,6 +423,7 @@ module.exports = (app) => {
             try {
               const diskUrl = await getGoogleDiskLink(state.row);
               if (diskUrl) {
+                console.log(`Updating with disk URL: ${diskUrl}`);
                 const updatedMessage = formatCompletionMessage(completionData, diskUrl);
                 await editMessageSafe(chatId, state.messageId, updatedMessage);
               }
