@@ -187,8 +187,6 @@ module.exports = (app, userStates) => {
   });
 };
 
-};
-
 // === SUPPORT FUNCTIONS ===
 
 async function sendMessage(chatId, text, options = {}) {
