@@ -205,6 +205,11 @@ async function getGoogleDiskLink(row) {
 }
 
 async function extractRowFromMessage(text) {
-  const match = text.match(/#(\d+)/);
-  return match ? match[1] : null;
+  function extractRowFromMessage(text) {
+    if (!text) return null; // Добавлена защита от undefined
+    const match = text.match(/#(\d+)/);
+    return match ? parseInt(match[1], 10) : null;
+    return match ? match[1] : null;
+  }
 }
+
