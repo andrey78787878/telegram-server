@@ -10,7 +10,7 @@ const sendToGAS = require('./sendToGAS');
 
   const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', 'Текстовой подрядчик'];
-  const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
+
 
   function buildExecutorButtons(row) {
     return {
