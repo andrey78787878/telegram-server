@@ -11,15 +11,14 @@ const AUTHORIZED_USERS = [
 
 module.exports = (app, userStates) => {
   app.post('/webhook', async (req, res) => {
-    const body = req.body;
+  const body = req.body;
 
-    const { message, callback_query } = body;
-    const data = callback_query?.data;
-    const msg = callback_query?.message;
-    const from = callback_query?.from;
+  const { message, callback_query } = body;
+  const data = callback_query?.data;
+  const msg = callback_query?.message;
+  const from = callback_query?.from;
 
-    if (!callback_query || !msg || !data || !from) return res.sendStatus(200);
- }
+  if (!callback_query || !msg || !data || !from) return res.sendStatus(200);
 
     const chatId = msg.chat.id;
     const messageId = msg.message_id;
