@@ -91,19 +91,19 @@ module.exports = (app, userStates) => {
 🟢 В работе
 👷 Исполнитель: ${executor}`;
 
-          await axios.post(`${TELEGRAM_API}/editMessageText`, {
-            chat_id: chatId,
-            message_id: messageId,
-            text: updatedText,
-            reply_markup: {
-              inline_keyboard: [[
-                { text: '✅ Выполнено', callback_data: `done:${row}:${executor}` },
-                { text: '🚚 Ожидает поставки', callback_data: `delayed:${row}:${executor}` },
-                { text: '❌ Отмена', callback_data: `cancel:${row}:${executor}` }
-              ]]
-            }
-          });
-        }
+          aawait axios.post(`${TELEGRAM_API}/editMessageText`, {
+  chat_id: chatId,
+  message_id: messageId,
+  text: updatedText,
+  reply_markup: JSON.stringify({
+    inline_keyboard: [[
+      { text: '✅ Выполнено', callback_data: `done:${row}:${executor}` },
+      { text: '🚚 Ожидает поставки', callback_data: `delayed:${row}:${executor}` },
+      { text: '❌ Отмена', callback_data: `cancel:${row}:${executor}` }
+    ]]
+  })
+});
+
 
         if (action === 'done') {
           userStates[chatId] = { step: 'photo', row, executor, messageId };
