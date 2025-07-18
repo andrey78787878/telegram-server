@@ -29,9 +29,9 @@ module.exports = (app, userStates) => {
         const data = callback_query.data;
 
         // 1. Ответ Telegram
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-          callback_query_id: callback_query.id
-        }).catch(console.error);
+     await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+  callback_query_id: callback_query.id
+}).catch(e => console.error('Answer callback error:', e.response?.data));
 
         // 2. Логирование
         const messageContent = msg.text || msg.caption;
