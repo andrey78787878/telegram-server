@@ -7,7 +7,7 @@ const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 const AUTHORIZED_USERS = [
-  '@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'
+  '@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB, @Davr_85'
 ];
 
 module.exports = (app, userStates) => {
@@ -21,31 +21,31 @@ module.exports = (app, userStates) => {
       const messageId = message.message_id;
       const username = from.username ? `@${from.username}` : null;
 
-     // Проверка доступа
+  // Проверка доступа
 if (!AUTHORIZED_USERS.includes(username)) {
   await sendMessage(chatId, '❌ У вас нет доступа.');
   return res.sendStatus(200);
 }
 
-// Определяем строку по сообщению
+// Извлекаем строку из текста сообщения
 const row = await extractRowFromMessage(message.text);
 if (!row) return res.sendStatus(200);
 
 // === Обработка кнопки "Принять в работу" ===
 if (data === 'accept') {
-  // Обновляем исходное сообщение: добавляем статус
+  // Обновляем сообщение — добавляем метку "в работе"
   await editMessage(chatId, messageId, message.text + `\n\n🟢 Заявка в работе`);
 
-  // Отправляем сообщение с выбором исполнителя
+  // Сообщение о выборе исполнителя
   await sendMessage(chatId, `👷 Выберите исполнителя:`, {
     reply_to_message_id: messageId,
   });
 
-  // Кнопки исполнителей
+  // Список исполнителей
   const executors = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85'];
   const buttons = executors.map(e => [{ text: e, callback_data: `executor:${e}` }]);
 
-  // Показываем кнопки
+  // Отправляем кнопки выбора исполнителя
   await sendButtons(chatId, messageId, buttons);
 
   return res.sendStatus(200);
@@ -55,15 +55,15 @@ if (data === 'accept') {
 if (data.startsWith('executor:')) {
   const executor = data.split(':')[1];
 
-  // Обновляем исходное сообщение: добавляем исполнителя
+  // Обновляем сообщение — добавляем имя исполнителя
   await editMessage(chatId, messageId, message.text + `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`);
 
-  // Отвечаем в чат о назначении исполнителя
+  // Уведомляем в чат о назначении
   await sendMessage(chatId, `👷 Назначен исполнитель: ${executor}`, {
     reply_to_message_id: messageId,
   });
 
-  // Обновляем таблицу через GAS
+  // Обновляем данные в Google Таблице
   await sendToGAS({
     row,
     status: 'В работе',
@@ -71,7 +71,7 @@ if (data.startsWith('executor:')) {
     message_id: messageId,
   });
 
-  // Появляются кнопки статусов после назначения исполнителя
+  // Добавляем следующие кнопки
   await sendButtons(chatId, messageId, [
     [
       { text: '✅ Выполнено', callback_data: 'done' },
@@ -82,6 +82,7 @@ if (data.startsWith('executor:')) {
 
   return res.sendStatus(200);
 }
+
 
 
       if (data === 'done') {
