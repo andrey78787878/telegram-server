@@ -42,16 +42,10 @@ module.exports = (app, userStates) => {
 });
 
 
-      const executors = AUTHORIZED_USERS;
-      const buttons = executors.map(e => [{ text: e, callback_data: `executor:${e}` }]);
-      await sendButtons(chatId, messageId, buttons);
-      return res.sendStatus(200);
-    }
-
-    // ==
-
-
-
+      if (data.startsWith('executor:')) {
+  const executor = data.split(':')[1];
+  const row = messageIdToRow[messageId];
+  const username = from.username;
 
   // Обновляем данные в Google Таблице
   await sendToGAS({
@@ -72,8 +66,6 @@ module.exports = (app, userStates) => {
 
   return res.sendStatus(200);
 }
-
-
 
       if (data === 'done') {
         userStates[chatId] = { stage: 'waiting_photo', row, username, messageId };
