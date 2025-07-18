@@ -5,6 +5,8 @@ module.exports = (app, userStates) => {
   const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
   const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+const sendToGAS = require('./sendToGAS');
+
 
   const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', 'Текстовой подрядчик'];
   const AUTHORIZED_USERS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB'];
@@ -129,36 +131,48 @@ module.exports = (app, userStates) => {
 
     const originalText = textRes.data?.text || '';
     const delayDays = delayRes.data?.delay || '0';
-    const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
-    const commentR = commentRes.data?.comment || '';
-    const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
+  const driveUrl = driveUrlRes.data?.driveUrl || photoUrl;
+const commentR = commentRes.data?.comment || '';
+const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${driveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
 
-    if (resolvedMessageId) {
-      await editMessageText(chatId, resolvedMessageId, updatedText);
-      state.originalMessageId = resolvedMessageId;
+if (resolvedMessageId) {
+  await editMessageText(chatId, resolvedMessageId, updatedText, { parse_mode: 'HTML' });
+  state.originalMessageId = resolvedMessageId;
+}
+
+// ⏱ Сначала отправим в GAS, чтобы через 3 минуты была обновлённая ссылка
+await sendToGAS({
+  photo: fileUrl,
+  sum: userStates[chatId].sum,
+  comment: userStates[chatId].comment,
+  message_id: userStates[chatId].messageId,
+  row: userStates[chatId].row,
+  username: msg.from.username,
+  executor: userStates[chatId].executor
+}, GAS_WEB_APP_URL);
+
+// ⏳ Через 3 минуты пытаемся обновить ссылку
+setTimeout(async () => {
+  try {
+    const driveUpdateRes = await axios.post(GAS_WEB_APP_URL, {
+      action: 'getDriveLink',
+      row
+    });
+    const updatedDriveUrl = driveUpdateRes.data?.driveUrl;
+
+    if (updatedDriveUrl && updatedDriveUrl !== driveUrl) {
+      const refreshedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${updatedDriveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
+      await editMessageText(chatId, resolvedMessageId, refreshedText, { parse_mode: 'HTML' });
     }
-
-    setTimeout(async () => {
-      try {
-        const driveUpdateRes = await axios.post(GAS_WEB_APP_URL, {
-          action: 'getDriveLink',
-          row
-        });
-        const updatedDriveUrl = driveUpdateRes.data?.driveUrl;
-
-        if (updatedDriveUrl && updatedDriveUrl !== driveUrl) {
-          const refreshedText = `📌 Заявка #${row} закрыта.\n📎 Фото: <a href="${updatedDriveUrl}">ссылка</a>\n💰 Сумма: ${amount || '0'} сум\n👤 Исполнитель: ${executor}\n✅ Статус: Выполнено\n🔴 Просрочка: ${delayDays} дн.\n\n💬 Комментарий: ${commentR}\n\n━━━━━━━━━━━━\n\n${originalText}`;
-          await editMessageText(chatId, resolvedMessageId, refreshedText);
-        }
-      } catch (err) {
-        console.warn('⚠️ Ошибка обновления ссылки на Google Диск:', err.message);
-      }
-    }, 3 * 60 * 1000);
-
-    await deleteMessageWithDelay(chatId, commentMessageId);
-    await cleanupMessages(chatId, state);
-    delete userStates[chatId];
+  } catch (err) {
+    console.warn('⚠️ Ошибка обновления ссылки на Google Диск:', err.message);
   }
+}, 3 * 60 * 1000);
+
+// 🧹 Удаляем промежуточные сообщения
+await deleteMessageWithDelay(chatId, commentMessageId);
+await cleanupMessages(chatId, state);
+delete userStates[chatId];
 
   app.post('/webhook', async (req, res) => {
     try {
