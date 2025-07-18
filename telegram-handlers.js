@@ -34,20 +34,29 @@ module.exports = (app, userStates) => {
     const row = await extractRowFromMessage(msg.text);
     if (!row) return res.sendStatus(200);
 
-    // === Обработка кнопки "Принять в работу" ===
-    if (data === 'accept') {
-      await editMessage(chatId, messageId, msg.text + `\n\n🟢 Заявка в работе`);
-    await sendMessage(chatId, '👷 Выберите исполнителя:', {
-  reply_to_message_id: messageId
-});
+    // === Обработка "Принять в работу" ===
+if (data === 'accept') {
+  await editMessage(chatId, messageId, msg.text + `\n\n🟢 Заявка в работе`);
 
+  const buttons = AUTHORIZED_USERS.map(e => [
+    { text: e, callback_data: `executor:${e}` }
+  ]);
 
-      if (data.startsWith('executor:')) {
+  await sendMessage(chatId, '👷 Выберите исполнителя:', {
+    reply_to_message_id: messageId
+  });
+
+  await sendButtons(chatId, messageId, buttons);
+
+  return res.sendStatus(200);
+}
+
+// === Обработка выбора исполнителя ===
+if (data.startsWith('executor:')) {
   const executor = data.split(':')[1];
-  const row = messageIdToRow[messageId];
-  const username = from.username;
+  const row = await extractRowFromMessage(msg.text);
+  const username = from.username ? `@${from.username}` : null;
 
-  // Обновляем данные в Google Таблице
   await sendToGAS({
     row,
     status: 'В работе',
@@ -55,7 +64,6 @@ module.exports = (app, userStates) => {
     message_id: messageId,
   });
 
-  // Добавляем следующие кнопки
   await sendButtons(chatId, messageId, [
     [
       { text: '✅ Выполнено', callback_data: 'done' },
