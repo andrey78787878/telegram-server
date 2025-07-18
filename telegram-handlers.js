@@ -21,31 +21,68 @@ module.exports = (app, userStates) => {
       const messageId = message.message_id;
       const username = from.username ? `@${from.username}` : null;
 
-      // 🔒 Access check
-      if (!AUTHORIZED_USERS.includes(username)) {
-        await sendMessage(chatId, '❌ У вас нет доступа.');
-        return res.sendStatus(200);
-      }
+     // Проверка доступа
+if (!AUTHORIZED_USERS.includes(username)) {
+  await sendMessage(chatId, '❌ У вас нет доступа.');
+  return res.sendStatus(200);
+}
 
-      const row = await extractRowFromMessage(message.text);
-      if (!row) return res.sendStatus(200);
+// Определяем строку по сообщению
+const row = await extractRowFromMessage(message.text);
+if (!row) return res.sendStatus(200);
 
-      if (data === 'accept') {
-        await editMessage(chatId, messageId, message.text + `\n\n🟢 В работе\n👷 Исполнитель: ${username}`);
-        await sendMessage(chatId, `👷 Назначен исполнитель: ${username}`, { reply_to_message_id: messageId });
+// === Обработка кнопки "Принять в работу" ===
+if (data === 'accept') {
+  // Обновляем исходное сообщение: добавляем статус
+  await editMessage(chatId, messageId, message.text + `\n\n🟢 Заявка в работе`);
 
-        await sendToGAS({
-          row, status: 'В работе', executor: username, message_id: messageId
-        });
+  // Отправляем сообщение с выбором исполнителя
+  await sendMessage(chatId, `👷 Выберите исполнителя:`, {
+    reply_to_message_id: messageId,
+  });
 
-        await sendButtons(chatId, messageId, [
-          [{ text: '✅ Выполнено', callback_data: 'done' }],
-          [{ text: '⏳ Ожидает поставки', callback_data: 'waiting' }],
-          [{ text: '❌ Отмена', callback_data: 'cancel' }]
-        ]);
+  // Кнопки исполнителей
+  const executors = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85'];
+  const buttons = executors.map(e => [{ text: e, callback_data: `executor:${e}` }]);
 
-        return res.sendStatus(200);
-      }
+  // Показываем кнопки
+  await sendButtons(chatId, messageId, buttons);
+
+  return res.sendStatus(200);
+}
+
+// === Обработка выбора исполнителя ===
+if (data.startsWith('executor:')) {
+  const executor = data.split(':')[1];
+
+  // Обновляем исходное сообщение: добавляем исполнителя
+  await editMessage(chatId, messageId, message.text + `\n\n🟢 В работе\n👷 Исполнитель: ${executor}`);
+
+  // Отвечаем в чат о назначении исполнителя
+  await sendMessage(chatId, `👷 Назначен исполнитель: ${executor}`, {
+    reply_to_message_id: messageId,
+  });
+
+  // Обновляем таблицу через GAS
+  await sendToGAS({
+    row,
+    status: 'В работе',
+    executor,
+    message_id: messageId,
+  });
+
+  // Появляются кнопки статусов после назначения исполнителя
+  await sendButtons(chatId, messageId, [
+    [
+      { text: '✅ Выполнено', callback_data: 'done' },
+      { text: '🕐 Ожидает поставки', callback_data: 'wait' },
+      { text: '❌ Отмена', callback_data: 'cancel' },
+    ]
+  ]);
+
+  return res.sendStatus(200);
+}
+
 
       if (data === 'done') {
         userStates[chatId] = { stage: 'waiting_photo', row, username, messageId };
