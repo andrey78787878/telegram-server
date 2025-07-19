@@ -8,7 +8,7 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
-const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85', '@Andrey_tkach_y'];
+const EXECUTORS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id (username -> id)
@@ -18,7 +18,6 @@ const userStorage = new Map();
 function extractRowFromCallbackData(callbackData) {
   if (!callbackData) return null;
   const parts = callbackData.split(':');
-  // Поддерживаем форматы: action:row и action:param:row
   return parts.length > 1 ? parseInt(parts[parts.length - 1], 10) : null;
 }
 
@@ -204,14 +203,10 @@ module.exports = (app) => {
           callback_query_id: callback_query.id
         }).catch(e => console.error('Answer callback error:', e));
 
-        // Извлечение номера заявки (исправленная версия)
+        // Извлечение номера заявки
         const row = extractRowFromCallbackData(data) || extractRowFromMessage(msg.text || msg.caption);
         if (!row || isNaN(row)) {
-          console.error('Не удалось извлечь номер заявки:', {
-            callbackData: data,
-            messageText: msg.text,
-            messageCaption: msg.caption
-          });
+          console.error('Не удалось извлечь номер заявки');
           await sendMessage(chatId, '❌ Ошибка: не найден номер заявки');
           return res.sendStatus(200);
         }
@@ -233,15 +228,13 @@ module.exports = (app) => {
 
           const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
           
-          // Для аварийных заявок - сразу уведомляем всех менеджеров и исполнителей
+          // Для аварийных заявок
           if (isEmergency) {
             const requestData = parseRequestMessage(msg.text || msg.caption);
             
-            // Обновляем сообщение в чате
             const updatedText = `${msg.text || msg.caption}\n\n🚨 АВАРИЙНАЯ ЗАЯВКА - ТРЕБУЕТСЯ СРОЧНАЯ РЕАКЦИЯ!`;
             await editMessageSafe(chatId, messageId, updatedText);
             
-            // Уведомляем всех менеджеров и исполнителей
             const allRecipients = [...new Set([...MANAGERS, ...EXECUTORS])];
             
             for (const recipient of allRecipients) {
@@ -270,7 +263,6 @@ module.exports = (app) => {
               }
             }
             
-            // Отправляем данные в GAS
             await sendToGAS({
               row,
               status: 'Аварийная',
@@ -281,12 +273,46 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
           
-          // Для обычных заявок - стандартная логика с выбором исполнителя
+          // Обновляем сообщение в чате
           const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
           await editMessageSafe(chatId, messageId, updatedText);
 
-          // Добавляем кнопки для закрытия заявки в чате
-          const buttons = [
+          // Показываем кнопки выбора исполнителей
+          const buttons = EXECUTORS.map(e => [
+            { text: e, callback_data: `executor:${e}:${row}` }
+          ]);
+
+          const chooseExecutorMsg = await sendMessage(chatId, `👷 Выберите исполнителя для заявки #${row}:`, {
+            reply_to_message_id: messageId
+          });
+
+          setTimeout(async () => {
+            try {
+              await deleteMessageSafe(chatId, chooseExecutorMsg.data.result.message_id);
+            } catch (e) {
+              console.error('Error deleting choose executor message:', e);
+            }
+          }, 60000);
+
+          await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите исполнителя для заявки #${row}:`);
+          return res.sendStatus(200);
+        }
+
+        // Обработка выбора исполнителя
+        if (data.startsWith('executor:')) {
+          const executorUsername = data.split(':')[1];
+          
+          // Удаляем сообщение "Выберите исполнителя"
+          if (msg.reply_to_message) {
+            await deleteMessageSafe(chatId, msg.reply_to_message.message_id);
+          }
+
+          // Обновляем основное сообщение
+          const newText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе (исполнитель: ${executorUsername})`;
+          await editMessageSafe(chatId, messageId, newText);
+
+          // Меняем кнопки на действия
+          const actionButtons = [
             [
               { text: '✅ Выполнено', callback_data: `done:${row}` },
               { text: '⏳ Ожидает', callback_data: `wait:${row}` },
@@ -294,11 +320,55 @@ module.exports = (app) => {
             ]
           ];
 
-          await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите действие для заявки #${row}:`);
+          await sendButtonsWithRetry(chatId, messageId, actionButtons, `Выберите действие для заявки #${row}:`);
+
+          // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
+          await sendMessage(
+            chatId,
+            `📢 ${executorUsername}, вам назначена заявка #${row}!`,
+            { reply_to_message_id: messageId }
+          );
+
+          // Дублируем уведомление в ЛС исполнителю
+          try {
+            const executorId = userStorage.get(executorUsername);
+            if (executorId) {
+              const requestData = parseRequestMessage(msg.text || msg.caption);
+              
+              await sendMessage(
+                executorId,
+                `📌 Вам назначена заявка #${row}\n\n` +
+                `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+                `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+                `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+                `⚠️ Приступайте к выполнению`,
+                { 
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        { text: '✅ Выполнено', callback_data: `done:${row}` },
+                        { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+                        { text: '❌ Отмена', callback_data: `cancel:${row}` }
+                      ]
+                    ]
+                  },
+                  disable_notification: false 
+                }
+              );
+            }
+          } catch (e) {
+            console.error('Ошибка отправки уведомления в ЛС:', e);
+          }
+
+          await sendToGAS({
+            row,
+            status: 'В работе',
+            executor: executorUsername,
+            message_id: messageId
+          });
+
           return res.sendStatus(200);
         }
-
-        // Обработка выбора исполнителя (старая логика удалена, так как теперь сразу кнопки действий)
 
         // Обработка завершения заявки
         if (data.startsWith('done:')) {
@@ -433,7 +503,6 @@ module.exports = (app) => {
             isEmergency: state.isEmergency
           };
 
-          // Обновляем сообщение в чате
           await editMessageSafe(
             chatId, 
             state.messageId, 
@@ -441,25 +510,7 @@ module.exports = (app) => {
             { disable_web_page_preview: false }
           );
 
-          // Отправляем данные в GAS
           await sendToGAS(completionData);
-
-          // Если это дочерняя заявка, закрываем и материнскую
-          if (state.isChildRequest) {
-            try {
-              const parentMessageId = state.parentMessageId;
-              if (parentMessageId) {
-                await editMessageSafe(
-                  chatId,
-                  parentMessageId,
-                  formatCompletionMessage(completionData, state.photoUrl),
-                  { disable_web_page_preview: false }
-                );
-              }
-            } catch (e) {
-              console.error('Error closing parent request:', e);
-            }
-          }
 
           setTimeout(async () => {
             try {
@@ -471,16 +522,6 @@ module.exports = (app) => {
                   formatCompletionMessage(completionData, diskUrl),
                   { disable_web_page_preview: false }
                 );
-                
-                // Обновляем материнскую заявку, если есть
-                if (state.isChildRequest && state.parentMessageId) {
-                  await editMessageSafe(
-                    chatId,
-                    state.parentMessageId,
-                    formatCompletionMessage(completionData, diskUrl),
-                    { disable_web_page_preview: false }
-                  );
-                }
               }
             } catch (e) {
               console.error('Error updating disk link:', e);
