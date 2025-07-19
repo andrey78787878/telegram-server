@@ -642,68 +642,83 @@ if (body.message && userStates[body.message.chat.id]) {
   }
 
   // Обработка фото
+// Обработка фото
 if (state.stage === 'waiting_photo' && msg.photo) {
   await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-  
-  const fileId = msg.photo.at(-1).file_id;
-  state.photoUrl = await getTelegramFileUrl(fileId);
-  
-  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\nДля отмены /cancel');
+
+  const fileId = msg.photo[msg.photo.length - 1].file_id;
+  state.photoFileId = fileId;
   state.stage = 'waiting_sum';
-  state.serviceMessages = [sumMsg.data.result.message_id];
-  
-  setTimeout(() => {
-    if (userStates[chatId]?.stage === 'waiting_sum') {
-      delete userStates[chatId];
-      deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error);
-    }
-  }, 300000); // 5 минут
-  
-  return res.sendStatus(200);
+
+  const sumMessage = await sendMessageSafe(chatId, '💰 Введите сумму выполненных работ:');
+  state.serviceMessages = [sumMessage.message_id];
 }
 
-if (state.stage === 'waiting_sum' && msg.text) {
-  // Проверка что сумма - число
-  if (!/^\d+$/.test(msg.text)) {
-    await sendMessage(chatId, '❌ Сумма должна быть числом. Введите снова:');
-    return res.sendStatus(200);
+// Обработка суммы
+else if (state.stage === 'waiting_sum' && msg.text) {
+  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+
+  const sum = parseInt(msg.text.replace(/\D/g, ''), 10);
+  if (isNaN(sum)) {
+    const retryMsg = await sendMessageSafe(chatId, '⚠️ Введите корректную сумму (только цифры):');
+    state.serviceMessages = [retryMsg.message_id];
+    return;
   }
 
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-  
-  state.sum = msg.text;
-  
-  const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\nДля отмены /cancel');
+  state.sum = sum;
   state.stage = 'waiting_comment';
-  state.serviceMessages = [commentMsg.data.result.message_id];
-  
-  setTimeout(() => {
-    if (userStates[chatId]?.stage === 'waiting_comment') {
-      delete userStates[chatId];
-      deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(console.error);
-    }
-  }, 300000); // 5 минут
-  
-  return res.sendStatus(200);
+
+  const commentMessage = await sendMessageSafe(chatId, '💬 Введите комментарий (или "-" если без комментария):');
+  state.serviceMessages = [commentMessage.message_id];
 }
 
-if (state.stage === 'waiting_comment' && msg.text) {
+// Обработка комментария
+else if (state.stage === 'waiting_comment' && msg.text) {
   await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-  
-  state.comment = msg.text;
 
+  state.comment = msg.text === '-' ? '' : msg.text;
+  state.stage = 'done';
+
+  // Отправка фото на диск и формирование ссылки
+  const photoUrl = await uploadPhotoToDrive(state.photoFileId, `Заявка_${state.row}.jpg`);
   const completionData = {
-    row: state.row,
+    photoUrl,
     sum: state.sum,
     comment: state.comment,
-    photoUrl: state.photoUrl,
-    executor: state.username,
-    originalRequest: state.originalRequest,
-    delayDays: calculateDelayDays(state.originalRequest?.deadline),
-    status: 'Выполнено',
-    isEmergency: state.isEmergency,
-    isFromLS: state.isFromLS // ← КРИТИЧЕСКИ ВАЖНО сохранить это значение
+    row: state.row,
+    executor: msg.from.username || msg.from.first_name || 'Неизвестно'
   };
+
+  // Сохранение в таблицу через GAS
+  await axios.post(`${GAS_WEB_APP_URL}?type=close`, {
+    ...completionData,
+    message_id: state.messageId,
+    chat_id: state.chatId,
+  }).catch(console.error);
+
+  // Обновление материнской заявки в чате
+  await syncRequestStatus(state.chatId, state.messageId, completionData);
+
+  // Ответ в личке, если действие было оттуда
+  if (state.isFromLS) {
+    await editMessageSafe(
+      chatId,
+      msg.message_id,
+      `✅ Заявка #${state.row} закрыта\n` +
+      `📸 Фото отправлено\n` +
+      `💰 Сумма: ${state.sum || '0'} сум\n` +
+      `💬 Комментарий: ${state.comment || 'нет'}`,
+      { disable_web_page_preview: false }
+    );
+  }
+
+  // Очистка состояний и удаление сервисных сообщений
+  userStates[chatId] = null;
+  if (state.serviceMessages?.length) {
+    for (const msgId of state.serviceMessages) {
+      await deleteMessageSafe(chatId, msgId).catch(console.error);
+    }
+  }
 
   // Выносим синхронизацию в отдельную функцию
   await syncRequestStatus(state.chatId, state.messageId, completionData);
