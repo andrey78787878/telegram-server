@@ -707,10 +707,12 @@ if (state.stage === 'waiting_comment' && msg.text && userStates[chatId]) {
     
     return res.sendStatus(200);
 
-  } catch (error) {
-    console.error('Error completing request:', error);
-    await sendMessage(chatId, '⚠️ Ошибка при закрытии заявки. Попробуйте снова.').catch(console.error);
-    delete userStates[chatId];
-    return res.sendStatus(200);
-  }
-}
+  }   catch (error) {
+      console.error('Ошибка завершения заявки:', error);
+      await clearUserState(chatId);
+      await sendMessage(chatId, '⚠️ Ошибка при завершении заявки. Попробуйте снова.');
+      return res.sendStatus(200);
+    }
+  } // ← закрывает внешний if
+} // ← закрывает обработчик app.post
+}); // ← закрывает module.exports (если есть)
