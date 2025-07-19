@@ -401,11 +401,7 @@ module.exports = (app) => {
             
             return res.sendStatus(200);
           }
-          
-          // Обновляем сообщение в чате
-          const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
-          await editMessageSafe(chatId, messageId, updatedText);
-
+  
           // Показываем кнопки выбора исполнителей
           const buttons = EXECUTORS.map(e => [
             { text: e, callback_data: `executor:${e}:${row}:${chatId}:${messageId}` }
