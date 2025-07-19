@@ -8,10 +8,10 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
-const EXECUTORS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
+const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85', '@Andrey_tkach_y'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
-// Хранилища данных
+// Хранилища
 const userStorage = new Map(); // username → user_id
 const userStates = {}; // Текущие состояния пользователей
 const activeRequests = new Map(); // message_id → requestData
@@ -48,18 +48,6 @@ function calculateDelayDays(deadline) {
     console.error('Error calculating delay:', e);
     return 0;
   }
-}
-
-function formatRequestMessage(data) {
-  const emergencyMark = data.isEmergency ? '🚨 ' : '';
-  return `
-${emergencyMark}Заявка #${data.row}
-🏢 Пиццерия: ${data.pizzeria || 'не указано'}
-🔧 Проблема: ${data.problem || 'не указано'}
-🕓 Срок: ${data.deadline || 'не указан'}
-━━━━━━━━━━━━
-${data.status === 'В работе' ? `🟢 В работе (исполнитель: ${data.executor})` : '🟠 Новый запрос'}
-  `.trim();
 }
 
 function formatCompletionMessage(data) {
@@ -111,30 +99,15 @@ async function editMessageSafe(chatId, messageId, text, options = {}) {
   }
 }
 
-async function deleteMessageSafe(chatId, messageId) {
-  try {
-    await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-      chat_id: chatId,
-      message_id: messageId
-    }, { timeout: 3000 });
-  } catch (error) {
-    console.error('Delete message error:', error.response?.data);
-  }
-}
-
 async function answerCallbackQuery(callbackQueryId, text) {
   try {
-    const response = await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
       callback_query_id: callbackQueryId,
       text: text || '',
       show_alert: !!text
     }, { timeout: 2000 });
-    return response.data;
   } catch (error) {
-    if (!error.response?.data?.description?.includes('query is too old')) {
-      console.error('Callback answer error:', error.response?.data || error.message);
-    }
-    return null;
+    console.error('Callback answer error:', error.response?.data);
   }
 }
 
@@ -162,31 +135,18 @@ async function sendToGAS(data) {
   }
 }
 
-async function getGoogleDiskLink(row) {
-  try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getDiskLink=true`, { row });
-    return res.data.diskLink || null;
-  } catch (error) {
-    console.error('Get Google Disk link error:', error.response?.data);
-    return null;
-  }
-}
-
 // Основной обработчик
 module.exports = (app) => {
   app.post('/webhook', async (req, res) => {
     try {
       const { message, callback_query } = req.body;
 
-      // Сохраняем информацию о пользователях
-      if (message?.from) {
-        const user = message.from;
-        if (user.username) {
-          userStorage.set(`@${user.username}`, user.id);
-        }
+      // Сохраняем user_id
+      if (message?.from?.username) {
+        userStorage.set(`@${message.from.username}`, message.from.id);
       }
 
-      // Обработка callback-запросов
+      // Обработка callback_query
       if (callback_query) {
         const { id, from, message, data } = callback_query;
         const username = from.username ? `@${from.username}` : null;
@@ -195,27 +155,27 @@ module.exports = (app) => {
 
         // Проверка прав
         if (!AUTHORIZED_USERS.includes(username)) {
-          const msg = await sendMessage(chatId, '❌ У вас нет доступа к этой операции');
-          setTimeout(() => deleteMessageSafe(chatId, msg.message_id), 30000);
+          await answerCallbackQuery(id, '❌ Нет доступа');
           return res.sendStatus(200);
         }
 
         // Извлечение номера заявки
-        const row = extractRowFromCallbackData(data);
+        const row = extractRowFromCallbackData(data) || parseInt(message.text?.match(/#(\d+)/)?.[1]);
         if (!row) {
-          console.error('Не удалось извлечь номер заявки');
+          await answerCallbackQuery(id, '❌ Не удалось определить заявку');
           return res.sendStatus(200);
         }
 
         // Получаем данные заявки
-        let requestData = activeRequests.get(messageId) || parseRequestMessage(message.text || message.caption);
+        const requestData = parseRequestMessage(message.text) || {};
         requestData.row = row;
         requestData.message_id = messageId;
+        requestData.chatId = chatId;
 
         // Обработка действий
         if (data === 'accept') {
           if (!MANAGERS.includes(username)) {
-            await answerCallbackQuery(id, '❌ Только менеджеры могут принимать заявки');
+            await answerCallbackQuery(id, '❌ Только для менеджеров');
             return res.sendStatus(200);
           }
 
@@ -223,7 +183,12 @@ module.exports = (app) => {
           requestData.manager = username;
           activeRequests.set(messageId, requestData);
 
-          await editMessageSafe(chatId, messageId, formatRequestMessage(requestData), {
+          await editMessageSafe(chatId, messageId, `
+🟢 Заявка #${row} принята
+🏢 Пиццерия: ${requestData.pizzeria || 'не указано'}
+🔧 Проблема: ${requestData.problem || 'не указано'}
+━━━━━━━━━━━━
+Менеджер: ${username}`, {
             reply_markup: {
               inline_keyboard: [
                 [{ text: 'Назначить исполнителя', callback_data: `assign:${row}` }]
@@ -234,12 +199,6 @@ module.exports = (app) => {
           await answerCallbackQuery(id, '✅ Заявка принята');
         }
         else if (data.startsWith('assign:')) {
-          if (!MANAGERS.includes(username)) {
-            await answerCallbackQuery(id, '❌ Только менеджеры могут назначать');
-            return res.sendStatus(200);
-          }
-
-          // Показываем список исполнителей
           const buttons = EXECUTORS.map(executor => [{
             text: executor,
             callback_data: `set_executor:${executor}:${row}`
@@ -258,7 +217,12 @@ module.exports = (app) => {
           activeRequests.set(messageId, requestData);
 
           // Обновляем сообщение в чате
-          await editMessageSafe(chatId, messageId, formatRequestMessage(requestData), {
+          await editMessageSafe(chatId, messageId, `
+🟢 Заявка #${row} в работе
+🏢 Пиццерия: ${requestData.pizzeria || 'не указано'}
+🔧 Проблема: ${requestData.problem || 'не указано'}
+━━━━━━━━━━━━
+Исполнитель: ${executor}`, {
             reply_markup: {
               inline_keyboard: [
                 [
@@ -272,7 +236,11 @@ module.exports = (app) => {
           // Отправляем уведомление исполнителю
           const executorId = userStorage.get(executor);
           if (executorId) {
-            await sendMessage(executorId, `📌 Вам назначена заявка #${row}`, {
+            await sendMessage(executorId, `
+📌 Вам назначена заявка #${row}
+🏢 Пиццерия: ${requestData.pizzeria || 'не указано'}
+🔧 Проблема: ${requestData.problem || 'не указано'}
+🕓 Срок: ${requestData.deadline || 'не указан'}`, {
               reply_markup: {
                 inline_keyboard: [
                   [
@@ -285,14 +253,9 @@ module.exports = (app) => {
           }
 
           await sendToGAS(requestData);
-          await answerCallbackQuery(id, `✅ Исполнитель ${executor} назначен`);
+          await answerCallbackQuery(id, `✅ Назначен исполнитель: ${executor}`);
         }
         else if (data.startsWith('complete:')) {
-          if (!EXECUTORS.includes(username)) {
-            await answerCallbackQuery(id, '❌ Только исполнители могут завершать');
-            return res.sendStatus(200);
-          }
-
           userStates[chatId] = {
             stage: 'waiting_photo',
             row,
@@ -302,21 +265,26 @@ module.exports = (app) => {
           };
 
           await sendMessage(chatId, '📸 Пришлите фото выполненных работ');
-          await answerCallbackQuery(id);
+          await answerCallbackQuery(id, 'Отправьте фото, сумму и комментарий');
         }
         else if (data.startsWith('wait:')) {
           requestData.status = 'Ожидает поставки';
           await sendToGAS(requestData);
-          await editMessageSafe(chatId, messageId, formatRequestMessage(requestData));
-          await answerCallbackQuery(id, '⏳ Заявка ожидает поставки');
+          await editMessageSafe(chatId, messageId, `
+⏳ Заявка #${row} ожидает
+🏢 Пиццерия: ${requestData.pizzeria || 'не указано'}
+🔧 Проблема: ${requestData.problem || 'не указано'}
+━━━━━━━━━━━━
+Статус: Ожидает поставки`);
+          await answerCallbackQuery(id, 'Заявка переведена в ожидание');
         }
 
         return res.sendStatus(200);
       }
 
-      // Обработка сообщений (для завершения заявки)
+      // Обработка завершения заявки
       if (message && userStates[message.chat.id]) {
-        const chatId = message.chat.id;
+        const { chatId } = message;
         const state = userStates[chatId];
         const requestData = state.requestData;
 
@@ -326,7 +294,7 @@ module.exports = (app) => {
           state.stage = 'waiting_sum';
           await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
         }
-        else if (state.stage === 'waiting_sum' && message.text) {
+        else if (state.stage === 'waiting_sum' && message.text && !isNaN(message.text)) {
           state.sum = message.text;
           state.stage = 'waiting_comment';
           await sendMessage(chatId, '💬 Введите комментарий');
@@ -343,67 +311,14 @@ module.exports = (app) => {
           };
 
           // Обновляем сообщение в чате
-          await editMessageSafe(chatId, state.messageId, formatCompletionMessage(completionData), {
+          await editMessageSafe(state.requestData.chatId, state.messageId, formatCompletionMessage(completionData), {
             reply_markup: { inline_keyboard: [] }
           });
 
           // Отправляем данные в GAS
           await sendToGAS(completionData);
-
-          // Обновляем ссылку на Google Disk через 3 минуты
-          setTimeout(async () => {
-            try {
-              const diskUrl = await getGoogleDiskLink(state.row);
-              if (diskUrl) {
-                await editMessageSafe(chatId, state.messageId, formatCompletionMessage({
-                  ...completionData,
-                  photoUrl: diskUrl
-                }));
-              }
-            } catch (e) {
-              console.error('Error updating disk link:', e);
-            }
-          }, 180000);
-
           delete userStates[chatId];
-        }
-
-        return res.sendStatus(200);
-      }
-
-      // Обработка новых заявок
-      if (message?.text && message.text.startsWith('#')) {
-        const requestData = {
-          message_id: message.message_id,
-          row: parseInt(message.text.match(/#(\d+)/)?.[1]) || null,
-          ...parseRequestMessage(message.text),
-          isEmergency: message.text.includes('🚨'),
-          status: 'Новая'
-        };
-
-        activeRequests.set(message.message_id, requestData);
-
-        await sendMessage(message.chat.id, formatRequestMessage(requestData), {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: 'Принять заявку', callback_data: `accept:${requestData.row}` }]
-            ]
-          }
-        });
-
-        if (requestData.isEmergency) {
-          for (const manager of MANAGERS) {
-            const managerId = userStorage.get(manager);
-            if (managerId) {
-              await sendMessage(managerId, `🚨 Новая аварийная заявка #${requestData.row}`, {
-                reply_markup: {
-                  inline_keyboard: [
-                    [{ text: 'Принять заявку', callback_data: `accept:${requestData.row}` }]
-                  ]
-                }
-              });
-            }
-          }
+          activeRequests.delete(state.messageId);
         }
       }
 
