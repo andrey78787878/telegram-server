@@ -13,6 +13,19 @@ const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 const userStorage = new Map();
 const userStates = {};
 
+// Улучшенный ответ на callback query
+async function answerCallbackQuery(callbackQueryId) {
+  try {
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+      callback_query_id: callbackQueryId
+    }, { timeout: 2000 });
+  } catch (error) {
+    if (!error.response?.data?.description?.includes('query is too old')) {
+      console.error('Callback answer error:', error.response?.data || error.message);
+    }
+  }
+}
+
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
   if (!callbackData) return null;
@@ -41,9 +54,9 @@ function parseRequestMessage(text) {
   return result;
 }
 
-function formatInProgressMessage(row, requestData, executor) {
+function formatInProgressMessage(row, requestData, executor, isEmergency = false) {
   return `
-📌 Заявка #${row}
+📌 Заявка #${row} ${isEmergency ? '🚨 АВАРИЙНАЯ' : ''}
 🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}
 🔧 Проблема: ${requestData?.problem || 'не указано'}
 🕓 Срок: ${requestData?.deadline || 'не указан'}
@@ -140,6 +153,16 @@ async function notifyManagers(row, requestData) {
   }
 }
 
+function getActionButtons(row) {
+  return [
+    [
+      { text: '✅ Выполнено', callback_data: `done:${row}` },
+      { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+      { text: '❌ Отмена', callback_data: `cancel:${row}` }
+    ]
+  ];
+}
+
 module.exports = (app) => {
   app.post('/webhook', async (req, res) => {
     try {
@@ -163,9 +186,8 @@ module.exports = (app) => {
         const data = callback_query.data;
         const row = extractRowFromCallbackData(data) || extractRowFromMessage(callback_query.message.text);
 
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-          callback_query_id: callback_query.id
-        }).catch(console.error);
+        // Отвечаем на callback сразу
+        await answerCallbackQuery(callback_query.id);
 
         // Проверка прав доступа
         if (!AUTHORIZED_USERS.includes(username)) {
@@ -186,7 +208,7 @@ module.exports = (app) => {
           const requestData = parseRequestMessage(callback_query.message.text);
 
           // Обновляем сообщение в чате
-          const updatedText = callback_query.message.text.replace('🚨', '') + 
+          const updatedText = (callback_query.message.text || callback_query.message.caption || '') + 
             `\n\n🟢 Принята в работу (менеджер: ${username})`;
 
           await editMessageSafe(chatId, messageId, updatedText, {
@@ -233,29 +255,28 @@ module.exports = (app) => {
         // Установка исполнителя
         if (data.startsWith('set_executor:')) {
           const executor = data.split(':')[1];
-          const requestData = parseRequestMessage(callback_query.message.text);
-          const isEmergency = callback_query.message.text?.includes('🚨');
+          const requestData = parseRequestMessage(callback_query.message.text || callback_query.message.caption || '');
+          const isEmergency = (callback_query.message.text || callback_query.message.caption || '').includes('🚨');
 
           // Обновляем сообщение в чате
-          await editMessageSafe(chatId, messageId, formatInProgressMessage(row, requestData, executor), {
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '✅ Выполнено', callback_data: `done:${row}` },
-                  { text: '⏳ Ожидает', callback_data: `wait:${row}` },
-                  { text: '❌ Отмена', callback_data: `cancel:${row}` }
-                ]
-              ]
-            }
-          });
+          await editMessageSafe(
+            chatId, 
+            messageId, 
+            formatInProgressMessage(row, requestData, executor, isEmergency),
+            { reply_markup: { inline_keyboard: getActionButtons(row) } }
+          );
 
-          // Уведомляем исполнителя
+          // Уведомляем исполнителя с кнопками
           const executorId = userStorage.get(executor);
           if (executorId) {
-            await sendMessage(executorId, `📌 Вам назначена заявка #${row}\n\n` +
+            await sendMessage(
+              executorId,
+              `📌 Вам назначена заявка #${row}\n\n` +
               `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
               `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
-              `🕓 Срок: ${requestData?.deadline || 'не указан'}`);
+              `🕓 Срок: ${requestData?.deadline || 'не указан'}`,
+              { reply_markup: { inline_keyboard: getActionButtons(row) } }
+            );
           }
 
           await sendToGAS({
@@ -276,8 +297,8 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
-          const requestData = parseRequestMessage(callback_query.message.text);
-          const isEmergency = callback_query.message.text?.includes('🚨');
+          const requestData = parseRequestMessage(callback_query.message.text || callback_query.message.caption || '');
+          const isEmergency = (callback_query.message.text || callback_query.message.caption || '').includes('🚨');
 
           userStates[chatId] = {
             stage: 'waiting_photo',
@@ -302,7 +323,12 @@ module.exports = (app) => {
             status: 'Ожидает поставки'
           });
 
-          await editMessageSafe(chatId, messageId, callback_query.message.text + '\n\n⏳ Ожидает поставки');
+          await editMessageSafe(
+            chatId, 
+            messageId, 
+            (callback_query.message.text || callback_query.message.caption || '') + '\n\n⏳ Ожидает поставки',
+            { reply_markup: { inline_keyboard: getActionButtons(row) } }
+          );
           return res.sendStatus(200);
         }
 
@@ -313,7 +339,12 @@ module.exports = (app) => {
             status: 'Отменено'
           });
 
-          await editMessageSafe(chatId, messageId, callback_query.message.text + '\n\n❌ Отменена');
+          await editMessageSafe(
+            chatId, 
+            messageId, 
+            (callback_query.message.text || callback_query.message.caption || '') + '\n\n❌ Отменена',
+            { reply_markup: { inline_keyboard: getActionButtons(row) } }
+          );
           return res.sendStatus(200);
         }
       }
@@ -364,7 +395,10 @@ module.exports = (app) => {
             chatId,
             state.messageId,
             formatCompletionMessage(completionData),
-            { disable_web_page_preview: false }
+            { 
+              disable_web_page_preview: false,
+              reply_markup: { inline_keyboard: [] } // Убираем кнопки после завершения
+            }
           );
 
           // Отправляем данные в Google Sheets
