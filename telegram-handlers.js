@@ -708,11 +708,8 @@ if (state.stage === 'waiting_comment' && msg.text && userStates[chatId]) {
     return res.sendStatus(200);
 
     } catch (error) {
-      console.error('Ошибка завершения заявки:', error);
-      await clearUserState(chatId);
-      await sendMessage(chatId, '⚠️ Ошибка при завершении заявки. Попробуйте снова.');
-      return res.sendStatus(200);
+      console.error('Webhook error:', error);
+      return res.sendStatus(500);
     }
-  }); // ← закрывает app.post('/webhook'
-
-}); // ← закрывает module.exports
+  }); // закрывает app.post('/webhook'
+}); // закрывает module.exports
