@@ -15,6 +15,7 @@ const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 const userStorage = new Map();
 const userStates = {};
 const requestLinks = new Map();
+const activeOperations = new Set();
 
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
@@ -222,23 +223,54 @@ async function clearUserState(chatId) {
   await Promise.all(
     state.serviceMessages.map(id => 
       deleteMessageSafe(chatId, id).catch(console.error)
+    )
   );
   
   delete userStates[chatId];
 }
 
 async function syncRequestStatus(chatId, messageId, completionData) {
+  const operationKey = `sync-${chatId}-${messageId}`;
+  
+  if (activeOperations.has(operationKey)) {
+    console.log(`Операция ${operationKey} уже выполняется`);
+    return;
+  }
+  
+  activeOperations.add(operationKey);
+  
   try {
-    if (completionData._processed) return;
-    completionData._processed = true;
-
+    // 1. Обновляем основное сообщение
     const messageText = formatCompletionMessage(completionData, completionData.photoUrl);
-    await editMessageSafe(chatId, messageId, messageText, {
+    const editResult = await editMessageSafe(chatId, messageId, messageText, {
       disable_web_page_preview: false
     });
 
-    sendToGAS(completionData).catch(e => console.error("Ошибка GAS:", e));
+    // 2. Обновляем ЛС исполнителя
+    if (completionData.isFromLS) {
+      const lsEntries = Array.from(requestLinks.entries())
+        .filter(([key, val]) => key.startsWith('ls:') && 
+               val.chatId === chatId && 
+               val.messageId === messageId);
+      
+      for (const [lsKey, lsVal] of lsEntries) {
+        const [, lsChatId, lsMessageId] = lsKey.split(':');
+        await editMessageSafe(
+          lsChatId, 
+          lsMessageId,
+          `✅ Заявка #${completionData.row} закрыта\n` +
+          `📸 Фото отправлено\n` +
+          `💰 Сумма: ${completionData.sum || '0'} сум\n` +
+          `💬 Комментарий: ${completionData.comment || 'нет'}`,
+          { disable_web_page_preview: false }
+        ).catch(e => console.error('Ошибка обновления ЛС:', e));
+      }
+    }
 
+    // 3. Отправляем в GAS
+    await sendToGAS(completionData).catch(e => console.error("Ошибка GAS:", e));
+
+    // 4. Обновляем ссылку на диск через 3 минуты
     setTimeout(async () => {
       try {
         const diskUrl = await getGoogleDiskLink(completionData.row);
@@ -252,12 +284,15 @@ async function syncRequestStatus(chatId, messageId, completionData) {
         }
       } catch (e) {
         console.error('Error updating disk link:', e);
+      } finally {
+        activeOperations.delete(operationKey);
       }
     }, 180000);
 
     await sendButtonsWithRetry(chatId, messageId, []);
   } catch (e) {
     console.error('Error syncing request status:', e);
+    activeOperations.delete(operationKey);
   }
 }
 
@@ -266,6 +301,7 @@ module.exports = (app) => {
     try {
       const body = req.body;
       
+      // Сохраняем user_id при любом сообщении
       if (body.message?.from) {
         const user = body.message.from;
         if (user.username) {
@@ -273,6 +309,7 @@ module.exports = (app) => {
         }
       }
 
+      // Обработка callback_query
       if (body.callback_query) {
         const { callback_query } = body;
         const user = callback_query.from;
@@ -287,27 +324,30 @@ module.exports = (app) => {
         const username = user.username ? `@${user.username}` : null;
         const data = callback_query.data;
 
+        // Ответ на callback_query
         try {
           await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
             callback_query_id: callback_query.id
           });
         } catch (e) {
-          console.error('Answer callback error (non-critical):', e.message);
+          console.error('Answer callback error:', e.message);
         }
 
+        // Извлечение номера заявки
         const row = extractRowFromCallbackData(data) || extractRowFromMessage(msg.text || msg.caption);
         if (!row || isNaN(row)) {
           console.error('Не удалось извлечь номер заявки');
-          await sendMessage(chatId, '❌ Ошибка: не найден номер заявки');
           return res.sendStatus(200);
         }
 
+        // Проверка прав
         if (!AUTHORIZED_USERS.includes(username)) {
           const accessDeniedMsg = await sendMessage(chatId, '❌ У вас нет доступа.');
           setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg.data.result.message_id), 3000);
           return res.sendStatus(200);
         }
 
+        // Обработка кнопки "Принять в работу"
         if (data.startsWith('accept') || data === 'accept') {
           if (!MANAGERS.includes(username)) {
             const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
@@ -317,6 +357,7 @@ module.exports = (app) => {
 
           const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
           
+          // Для аварийных заявок
           if (isEmergency) {
             const requestData = parseRequestMessage(msg.text || msg.caption);
             
@@ -361,9 +402,11 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
           
+          // Обновляем сообщение в чате
           const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
           await editMessageSafe(chatId, messageId, updatedText);
 
+          // Показываем кнопки выбора исполнителей
           const buttons = EXECUTORS.map(e => [
             { text: e, callback_data: `executor:${e}:${row}:${chatId}:${messageId}` }
           ]);
@@ -384,6 +427,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Обработка выбора исполнителя
         if (data.startsWith('executor:')) {
           const parts = data.split(':');
           const executorUsername = parts[1];
@@ -391,13 +435,16 @@ module.exports = (app) => {
           const chatId = parts[3];
           const messageId = parts[4];
           
+          // Удаляем сообщение с выбором исполнителя
           if (msg.reply_to_message) {
-            await deleteMessageSafe(chatId, msg.reply_to_message.message_id);
+            await deleteMessageSafe(chatId, msg.reply_to_message.message_id).catch(console.error);
           }
 
+          // Обновляем основное сообщение
           const newText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе (исполнитель: ${executorUsername})`;
           await editMessageSafe(chatId, messageId, newText);
 
+          // Устанавливаем кнопки действий
           const actionButtons = [
             [
               { text: '✅ Выполнено', callback_data: `done:${row}:${chatId}:${messageId}` },
@@ -408,17 +455,25 @@ module.exports = (app) => {
 
           await sendButtonsWithRetry(chatId, messageId, actionButtons, `Выберите действие для заявки #${row}:`);
 
+          // Сохраняем связь между чатом и исполнителем
           const executorId = userStorage.get(executorUsername);
           if (executorId) {
             requestLinks.set(`chat:${chatId}:${messageId}`, { executorId, executorUsername });
           }
 
-          await sendMessage(
+          // Отправляем уведомление в чат
+          const notificationMsg = await sendMessage(
             chatId,
             `📢 ${executorUsername}, вам назначена заявка #${row}!`,
             { reply_to_message_id: messageId }
           );
 
+          // Удаляем уведомление через 20 секунд
+          setTimeout(() => {
+            deleteMessageSafe(chatId, notificationMsg.data.result.message_id).catch(console.error);
+          }, 20000);
+
+          // Отправляем уведомление в ЛС
           try {
             if (executorId) {
               const requestData = parseRequestMessage(msg.text || msg.caption);
@@ -444,6 +499,7 @@ module.exports = (app) => {
                 }
               );
 
+              // Сохраняем связь ЛС с чатом
               requestLinks.set(`ls:${executorId}:${lsMessage.data.result.message_id}`, { chatId, messageId });
             }
           } catch (e) {
@@ -460,6 +516,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Обработка завершения заявки
         if (data.startsWith('done:')) {
           const parts = data.split(':');
           const row = parseInt(parts[1]);
@@ -472,10 +529,12 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
+          // Определяем, откуда пришло действие (чат или ЛС)
           const isFromLS = msg.chat.id !== sourceChatId;
           let targetChatId = sourceChatId;
           let targetMessageId = sourceMessageId;
 
+          // Если действие из ЛС, находим соответствующее сообщение в чате
           if (isFromLS) {
             const link = requestLinks.get(`ls:${msg.chat.id}:${msg.message_id}`);
             if (link) {
@@ -484,17 +543,22 @@ module.exports = (app) => {
             }
           }
 
+          // Проверяем, не начали ли уже процесс завершения
           if (userStates[msg.chat.id]?.stage) {
             return res.sendStatus(200);
           }
 
+          // Создаем уникальный идентификатор операции
           const operationId = `done_${targetChatId}_${targetMessageId}_${Date.now()}`;
+          
+          // Запрашиваем фото
           const photoMsg = await sendMessage(
             msg.chat.id, 
             '📸 Пришлите фото выполненных работ\n\n' +
             '⚠️ Для отмены нажмите /cancel'
           );
           
+          // Сохраняем состояние
           userStates[msg.chat.id] = {
             operationId,
             stage: 'waiting_photo',
@@ -508,6 +572,7 @@ module.exports = (app) => {
             isFromLS
           };
 
+          // Устанавливаем таймер очистки
           setTimeout(() => {
             if (userStates[msg.chat.id]?.operationId === operationId) {
               delete userStates[msg.chat.id];
@@ -518,6 +583,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Обработка ожидания поставки
         if (data.startsWith('wait:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут менять статус заявки.');
@@ -541,6 +607,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Обработка отмены заявки
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
@@ -565,17 +632,20 @@ module.exports = (app) => {
         }
       }
 
+      // Обработка обычных сообщений (фото, сумма, комментарий)
       if (body.message && userStates[body.message.chat.id]) {
         const msg = body.message;
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
+        // Обработка команды отмены
         if (msg.text === '/cancel') {
           await clearUserState(chatId);
           await sendMessage(chatId, '❌ Процесс завершения заявки отменен');
           return res.sendStatus(200);
         }
 
+        // Обработка фото
         if (state.stage === 'waiting_photo' && msg.photo) {
           await clearUserState(chatId);
           
@@ -596,6 +666,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Обработка суммы
         if (state.stage === 'waiting_sum' && msg.text) {
           await clearUserState(chatId);
           
@@ -615,6 +686,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Обработка комментария и завершение заявки
         if (state.stage === 'waiting_comment' && msg.text) {
           await clearUserState(chatId);
           
@@ -630,22 +702,11 @@ module.exports = (app) => {
             delayDays: calculateDelayDays(state.originalRequest?.deadline),
             status: 'Выполнено',
             isEmergency: state.isEmergency,
-            _processed: false
+            isFromLS: state.isFromLS
           };
 
+          // Синхронизируем статус
           await syncRequestStatus(state.chatId, state.messageId, completionData);
-
-          if (state.isFromLS) {
-            await editMessageSafe(
-              chatId,
-              msg.message_id,
-              `✅ Заявка #${state.row} закрыта\n` +
-              `📸 Фото отправлено\n` +
-              `💰 Сумма: ${state.sum || '0'} сум\n` +
-              `💬 Комментарий: ${state.comment || 'нет'}`,
-              { disable_web_page_preview: false }
-            );
-          }
 
           delete userStates[chatId];
           return res.sendStatus(200);
