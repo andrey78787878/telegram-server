@@ -299,7 +299,7 @@ module.exports = (app) => {
         // Проверка прав
         if (!AUTHORIZED_USERS.includes(username)) {
           const accessDeniedMsg = await sendMessage(chatId, '❌ У вас нет доступа.');
-          setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg.data.result.message_id), 30000);
+          setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg.data.result.message_id), 3000);
           return res.sendStatus(200);
         }
 
@@ -307,7 +307,7 @@ module.exports = (app) => {
         if (data.startsWith('accept') || data === 'accept') {
           if (!MANAGERS.includes(username)) {
             const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg.data.result.message_id), 3000);
             return res.sendStatus(200);
           }
 
@@ -377,7 +377,7 @@ module.exports = (app) => {
             } catch (e) {
               console.error('Error deleting choose executor message:', e);
             }
-          }, 60000);
+          }, 20000); // Уменьшено с 60 до 20 секунд
 
           await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите исполнителя для заявки #${row}:`);
           return res.sendStatus(200);
@@ -491,6 +491,11 @@ module.exports = (app) => {
             }
           }
 
+          // Проверяем, не начали ли уже процесс завершения
+          if (userStates[msg.chat.id]?.stage === 'waiting_photo') {
+            return res.sendStatus(200);
+          }
+
           const photoMsg = await sendMessage(
             msg.chat.id, 
             '📸 Пришлите фото выполненных работ\n\n' +
@@ -510,7 +515,10 @@ module.exports = (app) => {
           };
 
           setTimeout(() => {
-            deleteMessageSafe(msg.chat.id, photoMsg.data.result.message_id).catch(console.error);
+            if (userStates[msg.chat.id]?.stage === 'waiting_photo') {
+              delete userStates[msg.chat.id];
+              deleteMessageSafe(msg.chat.id, photoMsg.data.result.message_id).catch(console.error);
+            }
           }, 120000);
 
           return res.sendStatus(200);
@@ -520,13 +528,17 @@ module.exports = (app) => {
         if (data.startsWith('wait:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут менять статус заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 3000);
             return res.sendStatus(200);
           }
 
-          await sendMessage(chatId, '⏳ Заявка переведена в статус "Ожидает поставки"', { 
+          const notificationMsg = await sendMessage(chatId, '⏳ Заявка переведена в статус "Ожидает поставки"', { 
             reply_to_message_id: messageId 
           });
+          
+          setTimeout(() => {
+            deleteMessageSafe(chatId, notificationMsg.data.result.message_id).catch(console.error);
+          }, 20000);
           
           await sendToGAS({ 
             row: parseInt(data.split(':')[1]), 
@@ -539,13 +551,17 @@ module.exports = (app) => {
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 3000);
             return res.sendStatus(200);
           }
 
-          await sendMessage(chatId, '🚫 Заявка отменена', { 
+          const notificationMsg = await sendMessage(chatId, '🚫 Заявка отменена', { 
             reply_to_message_id: messageId 
           });
+          
+          setTimeout(() => {
+            deleteMessageSafe(chatId, notificationMsg.data.result.message_id).catch(console.error);
+          }, 20000);
           
           await sendToGAS({ 
             row: parseInt(data.split(':')[1]), 
@@ -562,8 +578,20 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
+        // Обработка команды отмены
+        if (msg.text === '/cancel') {
+          delete userStates[chatId];
+          await Promise.all(state.serviceMessages.map(id => 
+            deleteMessageSafe(chatId, id).catch(console.error)
+          );
+          await sendMessage(chatId, '❌ Процесс завершения заявки отменен');
+          return res.sendStatus(200);
+        }
+
         if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await Promise.all(state.serviceMessages.map(id => 
+            deleteMessageSafe(chatId, id).catch(console.error)
+          ));
           
           const fileId = msg.photo.at(-1).file_id;
           state.photoUrl = await getTelegramFileUrl(fileId);
@@ -573,14 +601,19 @@ module.exports = (app) => {
           state.serviceMessages = [sumMsg.data.result.message_id];
           
           setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
+            if (userStates[chatId]?.stage === 'waiting_sum') {
+              delete userStates[chatId];
+              deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error);
+            }
           }, 120000);
           
           return res.sendStatus(200);
         }
 
         if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await Promise.all(state.serviceMessages.map(id => 
+            deleteMessageSafe(chatId, id).catch(console.error)
+          ));
           
           state.sum = msg.text;
           
@@ -589,14 +622,19 @@ module.exports = (app) => {
           state.serviceMessages = [commentMsg.data.result.message_id];
           
           setTimeout(() => {
-            deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
+            if (userStates[chatId]?.stage === 'waiting_comment') {
+              delete userStates[chatId];
+              deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(console.error);
+            }
           }, 120000);
           
           return res.sendStatus(200);
         }
 
         if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await Promise.all(state.serviceMessages.map(id => 
+            deleteMessageSafe(chatId, id).catch(console.error)
+          ));
           
           state.comment = msg.text;
 
