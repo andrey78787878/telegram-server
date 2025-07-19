@@ -644,95 +644,117 @@ if (body.message && userStates[body.message.chat.id]) {
   // Обработка фото
 // Обработка фото
 if (state.stage === 'waiting_photo' && msg.photo) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-
-  const fileId = msg.photo[msg.photo.length - 1].file_id;
-  state.photoFileId = fileId;
-  state.stage = 'waiting_sum';
-
-  const sumMessage = await sendMessageSafe(chatId, '💰 Введите сумму выполненных работ:');
-  state.serviceMessages = [sumMessage.message_id];
+  try {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+    
+    const fileId = msg.photo.at(-1).file_id;
+    state.photoUrl = await getTelegramFileUrl(fileId);
+    
+    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\nДля отмены /cancel');
+    state.stage = 'waiting_sum';
+    state.serviceMessages = [sumMsg.data.result.message_id];
+    
+    setTimeout(() => {
+      if (userStates[chatId]?.stage === 'waiting_sum') {
+        delete userStates[chatId];
+        deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error);
+      }
+    }, 300000);
+    
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error('Photo processing error:', error);
+    await sendMessage(chatId, '⚠️ Ошибка обработки фото. Попробуйте снова.');
+    return res.sendStatus(200);
+  }
 }
 
 // Обработка суммы
-else if (state.stage === 'waiting_sum' && msg.text) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-
-  const sum = parseInt(msg.text.replace(/\D/g, ''), 10);
-  if (isNaN(sum)) {
-    const retryMsg = await sendMessageSafe(chatId, '⚠️ Введите корректную сумму (только цифры):');
-    state.serviceMessages = [retryMsg.message_id];
-    return;
-  }
-
-  state.sum = sum;
-  state.stage = 'waiting_comment';
-
-  const commentMessage = await sendMessageSafe(chatId, '💬 Введите комментарий (или "-" если без комментария):');
-  state.serviceMessages = [commentMessage.message_id];
-}
-
-// Обработка комментария
-else if (state.stage === 'waiting_comment' && msg.text) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-
-  state.comment = msg.text === '-' ? '' : msg.text;
-  state.stage = 'done';
-
-  // Отправка фото на диск и формирование ссылки
-  const photoUrl = await uploadPhotoToDrive(state.photoFileId, `Заявка_${state.row}.jpg`);
-  const completionData = {
-    photoUrl,
-    sum: state.sum,
-    comment: state.comment,
-    row: state.row,
-    executor: msg.from.username || msg.from.first_name || 'Неизвестно'
-  };
-
-  // Сохранение в таблицу через GAS
-  await axios.post(`${GAS_WEB_APP_URL}?type=close`, {
-    ...completionData,
-    message_id: state.messageId,
-    chat_id: state.chatId,
-  }).catch(console.error);
-
-  // Обновление материнской заявки в чате
-  await syncRequestStatus(state.chatId, state.messageId, completionData);
-
-  // Ответ в личке, если действие было оттуда
-  if (state.isFromLS) {
-    await editMessageSafe(
-      chatId,
-      msg.message_id,
-      `✅ Заявка #${state.row} закрыта\n` +
-      `📸 Фото отправлено\n` +
-      `💰 Сумма: ${state.sum || '0'} сум\n` +
-      `💬 Комментарий: ${state.comment || 'нет'}`,
-      { disable_web_page_preview: false }
-    );
-  }
-
-  // Очистка состояний и удаление сервисных сообщений
-  userStates[chatId] = null;
-  if (state.serviceMessages?.length) {
-    for (const msgId of state.serviceMessages) {
-      await deleteMessageSafe(chatId, msgId).catch(console.error);
-    }
-  }
-
-  // Выносим синхронизацию в отдельную функцию
-  await syncRequestStatus(state.chatId, state.messageId, completionData);
-
-  delete userStates[chatId];
-  return res.sendStatus(200);
-}
-    } catch (error) {
-      console.error('Ошибка завершения заявки:', error);
-      await clearUserState(chatId);
-      await sendMessage(chatId, '⚠️ Ошибка при завершении заявки. Попробуйте снова.');
+if (state.stage === 'waiting_sum' && msg.text) {
+  try {
+    if (!/^\d+$/.test(msg.text)) {
+      await sendMessage(chatId, '❌ Сумма должна быть числом. Введите снова:');
       return res.sendStatus(200);
     }
+
+    await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+    
+    state.sum = msg.text;
+    
+    const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\nДля отмены /cancel');
+    state.stage = 'waiting_comment';
+    state.serviceMessages = [commentMsg.data.result.message_id];
+    
+    setTimeout(() => {
+if (state.stage === 'waiting_comment' && msg.text && userStates[chatId]) {
+  try {
+    // Проверка наличия originalRequest
+    if (!state.originalRequest) {
+      console.error('Missing originalRequest in state:', JSON.stringify(state, null, 2));
+      await sendMessage(chatId, '⚠️ Ошибка данных заявки. Начните заново.');
+      delete userStates[chatId];
+      return res.sendStatus(200);
+    }
+
+    // Удаляем сообщение с запросом комментария
+    await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+    
+    // Сохраняем комментарий
+    state.comment = msg.text;
+
+    // Формируем данные для закрытия
+    const completionData = {
+      row: state.row,
+      sum: state.sum,
+      comment: state.comment,
+      photoUrl: state.photoUrl,
+      executor: state.username,
+      originalRequest: state.originalRequest,
+      delayDays: calculateDelayDays(state.originalRequest?.deadline),
+      status: 'Выполнено',
+      isEmergency: state.isEmergency,
+      isFromLS: state.isFromLS
+    };
+
+    console.log('Closing request with:', completionData);
+
+    // 1. Обновляем основное сообщение
+    await editMessageSafe(
+      state.chatId,
+      state.messageId,
+      formatCompletionMessage(completionData, state.photoUrl),
+      { disable_web_page_preview: false }
+    );
+
+    // 2. Обновляем ЛС исполнителя (если нужно)
+    if (state.isFromLS) {
+      await editMessageSafe(
+        chatId,
+        msg.message_id,
+        `✅ Заявка #${state.row} закрыта\n` +
+        `📸 Фото: ${state.photoUrl ? 'есть' : 'нет'}\n` +
+        `💰 Сумма: ${state.sum || '0'} сум\n` +
+        `💬 Комментарий: ${state.comment || 'нет'}`,
+        { disable_web_page_preview: false }
+      );
+    }
+
+    // 3. Отправляем данные в Google Apps Script
+    await sendToGAS(completionData);
+
+    // 4. Удаляем кнопки управления
+    await sendButtonsWithRetry(state.chatId, state.messageId, []);
+
+    // 5. Очищаем состояние
+    delete userStates[chatId];
+    
+    return res.sendStatus(200);
+
+  } catch (error) {
+    console.error('Error completing request:', error);
+    await sendMessage(chatId, '⚠️ Ошибка при закрытии заявки. Попробуйте снова.');
+    delete userStates[chatId];
+    return res.sendStatus(200);
   }
-} // ← Эта закрывает внешний if
-} // ← Эта закрывает обработчик app.post
-} // ← 
+}
+Ключе
