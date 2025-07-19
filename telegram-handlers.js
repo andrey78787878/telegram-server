@@ -1,4 +1,24 @@
+const axios = require('axios');
+const FormData = require('form-data');
 
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+
+// Права пользователей
+const MANAGERS = ['@EvelinaB87', '@Andrey_Tkach_MB', '@Davr_85'];
+const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85', '@Andrey_tkach_y'];
+const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
+
+// Хранилище user_id (username -> id)
+const userStorage = new Map();
+
+// Вспомогательные функции
+function extractRowFromCallbackData(callbackData) {
+  if (!callbackData) return null;
+  const parts = callbackData.split(':');
+  return parts.length > 2 ? parseInt(parts[2], 10) : null;
 }
 
 function extractRowFromMessage(text) {
@@ -251,6 +271,10 @@ module.exports = (app) => {
             `📢 ${executorUsername}, вам назначена заявка #${row}!`,
             { reply_to_message_id: messageId }
           );
+
+if (data.startsWith('executor:')) {
+  const executorUsername = data.split(':')[1];
+  
   // Отправляем пуш в ЛС исполнителю
   try {
     const executorId = userStorage.get(executorUsername);
