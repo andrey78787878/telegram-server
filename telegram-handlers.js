@@ -7,16 +7,22 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
-// Права пользователей (актуальные юзернеймы)
-const MANAGERS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
-const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85', '@Andrey_tkach_y'];
+// Права пользователей
+const MANAGERS = ['@EvelinaB87', '@Andrey_Tkach_MB', '@Davr_85'];
+const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилища
-const userStorage = new Map(); // username -> user_id
-const userStates = {}; // chat_id -> state
+const userStorage = new Map();
+const userStates = {};
 
 // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+function extractRowFromCallbackData(callbackData) {
+  if (!callbackData) return null;
+  const parts = callbackData.split(':');
+  return parts.length > 2 ? parseInt(parts[2]) : null;
+}
+
 function extractRowFromMessage(text) {
   const match = text?.match(/#(\d+)/);
   return match ? parseInt(match[1]) : null;
@@ -26,7 +32,10 @@ function parseRequestMessage(text) {
   const result = {};
   text?.split('\n').forEach(line => {
     if (line.includes('Пиццерия:')) result.pizzeria = line.split(':')[1].trim();
+    if (line.includes('Категория:')) result.category = line.split(':')[1].trim();
     if (line.includes('Проблема:')) result.problem = line.split(':')[1].trim();
+    if (line.includes('Инициатор:')) result.initiator = line.split(':')[1].trim();
+    if (line.includes('Телефон:')) result.phone = line.split(':')[1].trim();
     if (line.includes('Срок:')) result.deadline = line.split(':')[1].trim();
   });
   return result;
@@ -58,6 +67,26 @@ async function deleteMessageSafe(chatId, messageId) {
   }
 }
 
+async function getTelegramFileUrl(fileId) {
+  try {
+    const { data } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+    return `${TELEGRAM_FILE_API}/${data.result.file_path}`;
+  } catch (error) {
+    console.error('Ошибка получения URL файла:', error.response?.data);
+    return null;
+  }
+}
+
+async function sendToGAS(data) {
+  try {
+    const response = await axios.post(GAS_WEB_APP_URL, data);
+    return response.data;
+  } catch (error) {
+    console.error('Ошибка отправки в GAS:', error.message);
+    throw error;
+  }
+}
+
 // --- ОБРАБОТКА УВЕДОМЛЕНИЙ ---
 async function handleExecutorNotification(executorUsername, row, requestText, chatId, messageId) {
   try {
@@ -67,7 +96,6 @@ async function handleExecutorNotification(executorUsername, row, requestText, ch
     const requestData = parseRequestMessage(requestText);
     const isEmergency = requestText.includes('🚨');
 
-    // 1. Уведомление исполнителю
     await sendMessage(
       executorId,
       `${isEmergency ? '🚨 ' : ''}📌 Вам назначена заявка #${row}\n\n` +
@@ -78,11 +106,9 @@ async function handleExecutorNotification(executorUsername, row, requestText, ch
       { disable_notification: false }
     );
 
-    // 2. Уведомление менеджеров для аварийных
     if (isEmergency) {
       for (const manager of MANAGERS) {
         if (manager === executorUsername) continue;
-        
         const managerId = userStorage.get(manager);
         if (managerId) {
           await sendMessage(
@@ -95,7 +121,6 @@ async function handleExecutorNotification(executorUsername, row, requestText, ch
       }
     }
 
-    // 3. Подтверждение в чате
     await sendMessage(
       chatId,
       `✅ ${executorUsername} уведомлен о назначении`,
@@ -108,38 +133,6 @@ async function handleExecutorNotification(executorUsername, row, requestText, ch
       `❌ Не удалось уведомить ${executorUsername}`,
       { reply_to_message_id: messageId }
     );
-  }
-}
-
-// --- ОБРАБОТКА ЗАКРЫТИЯ ЗАЯВКИ ---
-async function handleRequestCompletion(chatId, messageId, row, username, photoUrl) {
-  try {
-    // 1. Обновляем сообщение в чате
-    await axios.post(`${TELEGRAM_API}/editMessageText`, {
-      chat_id: chatId,
-      message_id: messageId,
-      text: `✅ Заявка #${row} закрыта\nИсполнитель: ${username}\n${photoUrl ? `📸 Фото: ${photoUrl}` : ''}`,
-      parse_mode: 'HTML'
-    });
-
-    // 2. Удаляем сервисные сообщения
-    if (userStates[chatId]?.serviceMessages) {
-      for (const msgId of userStates[chatId].serviceMessages) {
-        await deleteMessageSafe(chatId, msgId);
-      }
-    }
-
-    // 3. Отправка в GAS
-    await axios.post(GAS_WEB_APP_URL, {
-      row,
-      status: 'Выполнено',
-      executor: username,
-      photoUrl
-    });
-
-    delete userStates[chatId];
-  } catch (error) {
-    console.error('Ошибка закрытия заявки:', error);
   }
 }
 
@@ -161,7 +154,12 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const messageId = msg.message_id;
         const username = `@${from.username}`;
-        const row = extractRowFromCallbackData(data) || extractRowFromMessage(msg.text);
+        const row = extractRowFromCallbackData(data) || extractRowFromMessage(msg.text || msg.caption);
+
+        if (!row) {
+          console.error('Не удалось извлечь номер заявки');
+          return res.sendStatus(200);
+        }
 
         // Проверка прав
         if (!AUTHORIZED_USERS.includes(username)) {
@@ -172,27 +170,20 @@ module.exports = (app) => {
         // Назначение исполнителя
         if (data.startsWith('executor:')) {
           const executorUsername = data.split(':')[1];
-          await handleExecutorNotification(
-            executorUsername,
-            row,
-            msg.text || msg.caption,
-            chatId,
-            messageId
-          );
+          await handleExecutorNotification(executorUsername, row, msg.text || msg.caption, chatId, messageId);
           
-          // Обновление статуса в чате
           await axios.post(`${TELEGRAM_API}/editMessageText`, {
             chat_id: chatId,
             message_id: messageId,
-            text: `${msg.text}\n\n🟢 В работе (исполнитель: ${executorUsername})`,
+            text: `${msg.text || msg.caption}\n\n🟢 В работе (исполнитель: ${executorUsername})`,
             parse_mode: 'HTML'
           });
 
-          // Отправка в GAS
-          await axios.post(GAS_WEB_APP_URL, {
+          await sendToGAS({
             row,
             status: 'В работе',
-            executor: executorUsername
+            executor: executorUsername,
+            message_id: messageId
           });
         }
 
@@ -203,24 +194,22 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
-          // Начинаем процесс закрытия
           const photoMsg = await sendMessage(chatId, '📸 Отправьте фото выполненных работ');
           userStates[chatId] = {
             stage: 'waiting_photo',
             row,
             username,
             messageId,
-            originalRequest: parseRequestMessage(msg.text),
+            originalRequest: parseRequestMessage(msg.text || msg.caption),
             serviceMessages: [photoMsg.result.message_id]
           };
         }
       }
 
-      // Обработка сообщений (фото/комментарии)
+      // Обработка сообщений
       if (message && userStates[message.chat.id]) {
         const state = userStates[message.chat.id];
         
-        // Получение фото
         if (state.stage === 'waiting_photo' && message.photo) {
           await deleteMessageSafe(message.chat.id, state.serviceMessages[0]);
           const fileId = message.photo[message.photo.length - 1].file_id;
@@ -231,7 +220,6 @@ module.exports = (app) => {
           state.serviceMessages = [sumMsg.result.message_id];
         }
 
-        // Получение суммы
         if (state.stage === 'waiting_sum' && message.text) {
           await deleteMessageSafe(message.chat.id, state.serviceMessages[0]);
           state.sum = message.text;
@@ -241,19 +229,36 @@ module.exports = (app) => {
           state.serviceMessages = [commentMsg.result.message_id];
         }
 
-        // Получение комментария
         if (state.stage === 'waiting_comment' && message.text) {
           await deleteMessageSafe(message.chat.id, state.serviceMessages[0]);
           state.comment = message.text;
           
-          // Финализация заявки
-          await handleRequestCompletion(
-            message.chat.id,
-            state.messageId,
-            state.row,
-            state.username,
-            state.photoUrl
-          );
+          const completionData = {
+            row: state.row,
+            sum: state.sum,
+            comment: state.comment,
+            photoUrl: state.photoUrl,
+            executor: state.username,
+            originalRequest: state.originalRequest,
+            status: 'Выполнено'
+          };
+
+          await axios.post(`${TELEGRAM_API}/editMessageText`, {
+            chat_id: message.chat.id,
+            message_id: state.messageId,
+            text: `✅ Заявка #${state.row} закрыта\n` +
+                  `👤 Исполнитель: ${state.username}\n` +
+                  `💰 Сумма: ${state.sum || '0'} сум\n` +
+                  `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
+                  `${state.photoUrl ? '📸 Фото: ' + state.photoUrl + '\n' : ''}` +
+                  `━━━━━━━━━━━━\n` +
+                  `🏢 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
+                  `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}`,
+            parse_mode: 'HTML'
+          });
+
+          await sendToGAS(completionData);
+          delete userStates[message.chat.id];
         }
       }
 
