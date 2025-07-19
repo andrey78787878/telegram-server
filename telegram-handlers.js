@@ -745,4 +745,6 @@ if (body.message && userStates[body.message.chat.id]) {
       return res.sendStatus(200);
     }
   }
-}
+} // ← Эта закрывает внешний if
+} // ← Эта закрывает обработчик app.post
+} // ← 
