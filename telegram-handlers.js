@@ -225,6 +225,56 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
+          const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
+          
+          // Для аварийных заявок - сразу уведомляем всех менеджеров и исполнителей
+          if (isEmergency) {
+            const requestData = parseRequestMessage(msg.text || msg.caption);
+            
+            // Обновляем сообщение в чате
+            const updatedText = `${msg.text || msg.caption}\n\n🚨 АВАРИЙНАЯ ЗАЯВКА - ТРЕБУЕТСЯ СРОЧНАЯ РЕАКЦИЯ!`;
+            await editMessageSafe(chatId, messageId, updatedText);
+            
+            // Уведомляем всех менеджеров и исполнителей
+            const allRecipients = [...new Set([...MANAGERS, ...EXECUTORS])];
+            
+            for (const recipient of allRecipients) {
+              const recipientId = userStorage.get(recipient);
+              if (recipientId) {
+                await sendMessage(
+                  recipientId,
+                  `🚨 АВАРИЙНАЯ ЗАЯВКА #${row}\n\n` +
+                  `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+                  `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+                  `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+                  `‼️ ТРЕБУЕТСЯ НЕМЕДЛЕННАЯ РЕАКЦИЯ!`,
+                  {
+                    reply_markup: {
+                      inline_keyboard: [
+                        [
+                          { text: '✅ Выполнено', callback_data: `done:${row}` },
+                          { text: '⏳ Ожидает', callback_data: `wait:${row}` }
+                        ]
+                      ]
+                    },
+                    disable_notification: false
+                  }
+                ).catch(e => console.error(`Error sending to ${recipient}:`, e));
+              }
+            }
+            
+            // Отправляем данные в GAS
+            await sendToGAS({
+              row,
+              status: 'Аварийная',
+              message_id: messageId,
+              isEmergency: true
+            });
+            
+            return res.sendStatus(200);
+          }
+          
+          // Для обычных заявок - стандартная логика с выбором исполнителя
           const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
           await editMessageSafe(chatId, messageId, updatedText);
 
@@ -268,7 +318,7 @@ module.exports = (app) => {
             { reply_to_message_id: messageId }
           );
 
-          // Улучшенная отправка уведомлений в ЛС
+          // Улучшенная отправка уведомлений в ЛС с кнопками
           try {
             const executorId = userStorage.get(executorUsername);
             if (executorId) {
@@ -282,29 +332,27 @@ module.exports = (app) => {
                 `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
                 `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
                 `${isEmergency ? '‼️ СРОЧНО ТРЕБУЕТСЯ РЕАКЦИЯ!' : '⚠️ Приступайте к выполнению'}`,
-                { disable_notification: false }
-              );
-
-              // Уведомление менеджеров для аварийных заявок
-              if (isEmergency) {
-                for (const manager of MANAGERS) {
-                  if (manager !== executorUsername && manager !== username) {
-                    const managerId = userStorage.get(manager);
-                    if (managerId) {
-                      await sendMessage(
-                        managerId,
-                        `🚨 АВАРИЙНАЯ ЗАЯВКА #${row}\n` +
-                        `Исполнитель: ${executorUsername}\n` +
-                        `Пиццерия: ${requestData?.pizzeria || 'не указано'}`,
-                        { disable_notification: false }
-                      );
-                    }
-                  }
+                { 
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        { text: '✅ Выполнено', callback_data: `done:${row}` },
+                        { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+                        { text: '❌ Отмена', callback_data: `cancel:${row}` }
+                      ]
+                    ]
+                  },
+                  disable_notification: false 
                 }
-              }
+              );
             }
           } catch (e) {
-            console.error('Ошибка отправки уведомлений:', e);
+            console.error('Ошибка отправки уведомления:', e);
+            await sendMessage(
+              chatId,
+              `❌ Не удалось уведомить ${executorUsername} в ЛС`,
+              { reply_to_message_id: messageId }
+            );
           }
 
           // Отправляем данные в GAS
