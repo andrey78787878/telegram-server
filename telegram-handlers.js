@@ -643,55 +643,12 @@ if (body.message && userStates[body.message.chat.id]) {
 
   // Обработка фото
 // Обработка фото
-if (state.stage === 'waiting_photo' && msg.photo) {
-  try {
-    await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-    
-    const fileId = msg.photo.at(-1).file_id;
-    state.photoUrl = await getTelegramFileUrl(fileId);
-    
-    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\nДля отмены /cancel');
-    state.stage = 'waiting_sum';
-    state.serviceMessages = [sumMsg.data.result.message_id];
-    
-    setTimeout(() => {
-      if (userStates[chatId]?.stage === 'waiting_sum') {
-        delete userStates[chatId];
-        deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error);
-      }
-    }, 300000);
-    
-    return res.sendStatus(200);
-  } catch (error) {
-    console.error('Photo processing error:', error);
-    await sendMessage(chatId, '⚠️ Ошибка обработки фото. Попробуйте снова.');
-    return res.sendStatus(200);
-  }
-}
-
-// Обработка суммы
-if (state.stage === 'waiting_sum' && msg.text) {
-  try {
-    if (!/^\d+$/.test(msg.text)) {
-      await sendMessage(chatId, '❌ Сумма должна быть числом. Введите снова:');
-      return res.sendStatus(200);
-    }
-
-    await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-    
-    state.sum = msg.text;
-    
-    const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\nДля отмены /cancel');
-    state.stage = 'waiting_comment';
-    state.serviceMessages = [commentMsg.data.result.message_id];
-    
-    setTimeout(() => {
 if (state.stage === 'waiting_comment' && msg.text && userStates[chatId]) {
   try {
     // Проверка наличия originalRequest
     if (!state.originalRequest) {
       console.error('Missing originalRequest in state:', JSON.stringify(state, null, 2));
-      await sendMessage(chatId, '⚠️ Ошибка данных заявки. Начните заново.');
+      await sendMessage(chatId, '⚠️ Ошибка данных заявки. Начните заново.').catch(console.error);
       delete userStates[chatId];
       return res.sendStatus(200);
     }
@@ -718,15 +675,15 @@ if (state.stage === 'waiting_comment' && msg.text && userStates[chatId]) {
 
     console.log('Closing request with:', completionData);
 
-    // 1. Обновляем основное сообщение
+    // Обновляем основное сообщение
     await editMessageSafe(
       state.chatId,
       state.messageId,
       formatCompletionMessage(completionData, state.photoUrl),
       { disable_web_page_preview: false }
-    );
+    ).catch(console.error);
 
-    // 2. Обновляем ЛС исполнителя (если нужно)
+    // Обновляем ЛС исполнителя (если нужно)
     if (state.isFromLS) {
       await editMessageSafe(
         chatId,
@@ -736,25 +693,24 @@ if (state.stage === 'waiting_comment' && msg.text && userStates[chatId]) {
         `💰 Сумма: ${state.sum || '0'} сум\n` +
         `💬 Комментарий: ${state.comment || 'нет'}`,
         { disable_web_page_preview: false }
-      );
+      ).catch(console.error);
     }
 
-    // 3. Отправляем данные в Google Apps Script
-    await sendToGAS(completionData);
+    // Отправляем данные в Google Apps Script
+    await sendToGAS(completionData).catch(console.error);
 
-    // 4. Удаляем кнопки управления
-    await sendButtonsWithRetry(state.chatId, state.messageId, []);
+    // Удаляем кнопки управления
+    await sendButtonsWithRetry(state.chatId, state.messageId, []).catch(console.error);
 
-    // 5. Очищаем состояние
+    // Очищаем состояние
     delete userStates[chatId];
     
     return res.sendStatus(200);
 
   } catch (error) {
     console.error('Error completing request:', error);
-    await sendMessage(chatId, '⚠️ Ошибка при закрытии заявки. Попробуйте снова.');
+    await sendMessage(chatId, '⚠️ Ошибка при закрытии заявки. Попробуйте снова.').catch(console.error);
     delete userStates[chatId];
     return res.sendStatus(200);
   }
 }
-Ключе
