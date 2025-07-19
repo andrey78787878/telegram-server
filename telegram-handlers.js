@@ -642,102 +642,75 @@ if (body.message && userStates[body.message.chat.id]) {
   }
 
   // Обработка фото
-  if (state.stage === 'waiting_photo' && msg.photo) {
-    try {
-      // Удаляем предыдущее служебное сообщение (если есть)
-      if (state.serviceMessages.length > 0) {
-        await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-      }
-
-      const fileId = msg.photo.at(-1).file_id;
-      state.photoUrl = await getTelegramFileUrl(fileId);
-      
-      const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\nДля отмены нажмите /cancel');
-      state.stage = 'waiting_sum';
-      state.serviceMessages = [sumMsg.data.result.message_id];
-      
-      setTimeout(() => {
-        if (userStates[chatId]?.stage === 'waiting_sum') {
-          delete userStates[chatId];
-          deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error);
-        }
-      }, 300000); // 5 минут таймаут
-      
-      return res.sendStatus(200);
-    } catch (error) {
-      console.error('Ошибка обработки фото:', error);
-      await clearUserState(chatId);
-      await sendMessage(chatId, '⚠️ Ошибка обработки фото. Попробуйте снова.');
-      return res.sendStatus(200);
-    }
-  }
-
-  // Обработка суммы
-  if (state.stage === 'waiting_sum' && msg.text) {
-    try {
-      // Проверяем, что сумма - число
-      if (!/^\d+$/.test(msg.text)) {
-        await sendMessage(chatId, '❌ Сумма должна быть числом. Введите снова:');
-        return res.sendStatus(200);
-      }
-
-      // Удаляем предыдущее служебное сообщение
-      if (state.serviceMessages.length > 0) {
-        await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-      }
-
-      state.sum = msg.text;
-      
-      const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\nДля отмены нажмите /cancel');
-      state.stage = 'waiting_comment';
-      state.serviceMessages = [commentMsg.data.result.message_id];
-      
-      setTimeout(() => {
-        if (userStates[chatId]?.stage === 'waiting_comment') {
-          delete userStates[chatId];
-          deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(console.error);
-        }
-      }, 300000); // 5 минут таймаут
-      
-      return res.sendStatus(200);
-    } catch (error) {
-      console.error('Ошибка обработки суммы:', error);
-      await clearUserState(chatId);
-      await sendMessage(chatId, '⚠️ Ошибка обработки суммы. Попробуйте снова.');
-      return res.sendStatus(200);
-    }
-  }
-
-  // Обработка комментария и завершение заявки
-  if (state.stage === 'waiting_comment' && msg.text) {
-    try {
-      // Удаляем предыдущее служебное сообщение
-      if (state.serviceMessages.length > 0) {
-        await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-      }
-
-      state.comment = msg.text;
-
-      const completionData = {
-        row: state.row,
-        sum: state.sum,
-        comment: state.comment,
-        photoUrl: state.photoUrl,
-        executor: state.username,
-        originalRequest: state.originalRequest,
-        delayDays: calculateDelayDays(state.originalRequest?.deadline),
-        status: 'Выполнено',
-        isEmergency: state.isEmergency,
-        isFromLS: state.isFromLS
-      };
-
-      // Синхронизируем статус
-      await syncRequestStatus(state.chatId, state.messageId, completionData);
-
-      // Полная очистка состояния
+if (state.stage === 'waiting_photo' && msg.photo) {
+  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+  
+  const fileId = msg.photo.at(-1).file_id;
+  state.photoUrl = await getTelegramFileUrl(fileId);
+  
+  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\nДля отмены /cancel');
+  state.stage = 'waiting_sum';
+  state.serviceMessages = [sumMsg.data.result.message_id];
+  
+  setTimeout(() => {
+    if (userStates[chatId]?.stage === 'waiting_sum') {
       delete userStates[chatId];
-      
-      return res.sendStatus(200);
+      deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error);
+    }
+  }, 300000); // 5 минут
+  
+  return res.sendStatus(200);
+}
+
+if (state.stage === 'waiting_sum' && msg.text) {
+  // Проверка что сумма - число
+  if (!/^\d+$/.test(msg.text)) {
+    await sendMessage(chatId, '❌ Сумма должна быть числом. Введите снова:');
+    return res.sendStatus(200);
+  }
+
+  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+  
+  state.sum = msg.text;
+  
+  const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\nДля отмены /cancel');
+  state.stage = 'waiting_comment';
+  state.serviceMessages = [commentMsg.data.result.message_id];
+  
+  setTimeout(() => {
+    if (userStates[chatId]?.stage === 'waiting_comment') {
+      delete userStates[chatId];
+      deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(console.error);
+    }
+  }, 300000); // 5 минут
+  
+  return res.sendStatus(200);
+}
+
+if (state.stage === 'waiting_comment' && msg.text) {
+  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+  
+  state.comment = msg.text;
+
+  const completionData = {
+    row: state.row,
+    sum: state.sum,
+    comment: state.comment,
+    photoUrl: state.photoUrl,
+    executor: state.username,
+    originalRequest: state.originalRequest,
+    delayDays: calculateDelayDays(state.originalRequest?.deadline),
+    status: 'Выполнено',
+    isEmergency: state.isEmergency,
+    isFromLS: state.isFromLS // ← КРИТИЧЕСКИ ВАЖНО сохранить это значение
+  };
+
+  // Выносим синхронизацию в отдельную функцию
+  await syncRequestStatus(state.chatId, state.messageId, completionData);
+
+  delete userStates[chatId];
+  return res.sendStatus(200);
+}
     } catch (error) {
       console.error('Ошибка завершения заявки:', error);
       await clearUserState(chatId);
