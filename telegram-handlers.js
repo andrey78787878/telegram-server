@@ -14,15 +14,210 @@ const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 // Хранилища
 const userStorage = new Map();
 const userStates = {};
-const requestLinks = new Map(); // Для связи чат-ЛС: { chatId: { executorId, messageId } }
+const requestLinks = new Map();
 
-// Вспомогательные функции (без изменений)
-// ... (все вспомогательные функции остаются такими же)
+// Вспомогательные функции
+function extractRowFromCallbackData(callbackData) {
+  if (!callbackData) return null;
+  const parts = callbackData.split(':');
+  return parts.length > 1 ? parseInt(parts[parts.length - 1], 10) : null;
+}
 
-// Новая функция для синхронизации статусов
+function extractRowFromMessage(text) {
+  if (!text) return null;
+  const match = text.match(/#(\d+)/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+function parseRequestMessage(text) {
+  if (!text) return null;
+  
+  const result = {};
+  const lines = text.split('\n');
+  
+  lines.forEach(line => {
+    if (line.includes('Пиццерия:')) result.pizzeria = line.split(':')[1].trim();
+    if (line.includes('Категория:')) result.category = line.split(':')[1].trim();
+    if (line.includes('Проблема:')) result.problem = line.split(':')[1].trim();
+    if (line.includes('Инициатор:')) result.initiator = line.split(':')[1].trim();
+    if (line.includes('Телефон:')) result.phone = line.split(':')[1].trim();
+    if (line.includes('Срок:')) result.deadline = line.split(':')[1].trim();
+  });
+  
+  return result;
+}
+
+function calculateDelayDays(deadline) {
+  if (!deadline) return 0;
+  try {
+    const deadlineDate = new Date(deadline);
+    const today = new Date();
+    const diffTime = today - deadlineDate;
+    return Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+  } catch (e) {
+    console.error('Error calculating delay:', e);
+    return 0;
+  }
+}
+
+function formatCompletionMessage(data, diskUrl = null) {
+  const photoLink = diskUrl ? diskUrl : (data.photoUrl ? data.photoUrl : null);
+  return `
+✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта
+${photoLink ? `\n📸 ${photoLink}\n` : ''}
+💬 Комментарий: ${data.comment || 'нет комментария'}
+💰 Сумма: ${data.sum || '0'} сум
+👤 Исполнитель: ${data.executor}
+${data.delayDays > 0 ? `🔴 Просрочка: ${data.delayDays} дн.` : ''}
+━━━━━━━━━━━━
+🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
+🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
+  `.trim();
+}
+
+async function sendMessage(chatId, text, options = {}) {
+  try {
+    return await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text,
+      parse_mode: 'HTML',
+      ...options
+    });
+  } catch (error) {
+    console.error('Send message error:', error.response?.data);
+    throw error;
+  }
+}
+
+async function editMessageSafe(chatId, messageId, text, options = {}) {
+  try {
+    return await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: 'HTML',
+      ...options
+    });
+  } catch (error) {
+    if (error.response?.data?.description?.includes('no text in the message') || 
+        error.response?.data?.description?.includes('message to edit not found')) {
+      return await sendMessage(chatId, text, options);
+    }
+    console.error('Edit message error:', error.response?.data);
+    throw error;
+  }
+}
+
+async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
+  try {
+    const response = await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: buttons }
+    });
+    return response;
+  } catch (error) {
+    if (error.response?.data?.description?.includes('not modified')) {
+      return { ok: true };
+    }
+    return await sendMessage(chatId, fallbackText, {
+      reply_markup: { inline_keyboard: buttons }
+    });
+  }
+}
+
+async function deleteMessageSafe(chatId, messageId) {
+  try {
+    return await axios.post(`${TELEGRAM_API}/deleteMessage`, {
+      chat_id: chatId,
+      message_id: messageId
+    });
+  } catch (error) {
+    console.error('Delete message error:', error.response?.data);
+    return null;
+  }
+}
+
+async function getTelegramFileUrl(fileId) {
+  try {
+    const { data } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+    return `${TELEGRAM_FILE_API}/${data.result.file_path}`;
+  } catch (error) {
+    console.error('Get file URL error:', error.response?.data);
+    return null;
+  }
+}
+
+async function sendToGAS(data) {
+  try {
+    const response = await axios.post(GAS_WEB_APP_URL, data);
+    console.log('Data sent to GAS:', response.status);
+    return response.data;
+  } catch (error) {
+    console.error('Error sending to GAS:', error.message);
+    throw error;
+  }
+}
+
+async function getGoogleDiskLink(row) {
+  try {
+    const res = await axios.post(`${GAS_WEB_APP_URL}?getDiskLink=true`, { row });
+    return res.data.diskLink || null;
+  } catch (error) {
+    console.error('Get Google Disk link error:', error.response?.data);
+    return null;
+  }
+}
+
+async function notifyExecutor(executorUsername, row, chatId, messageId, requestData) {
+  try {
+    const executorId = userStorage.get(executorUsername);
+    if (!executorId) {
+      console.error(`Исполнитель ${executorUsername} не найден в хранилище`);
+      return false;
+    }
+
+    requestLinks.set(`chat:${chatId}:${messageId}`, {
+      executorId,
+      executorUsername
+    });
+
+    const message = await sendMessage(
+      executorId,
+      `📌 Вам назначена заявка #${row}\n\n` +
+      `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+      `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+      `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+      `⚠️ Приступайте к выполнению`,
+      { 
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Выполнено', callback_data: `done:${row}:${chatId}:${messageId}` },
+              { text: '⏳ Ожидает', callback_data: `wait:${row}:${chatId}:${messageId}` },
+              { text: '❌ Отмена', callback_data: `cancel:${row}:${chatId}:${messageId}` }
+            ]
+          ]
+        },
+        disable_notification: false 
+      }
+    );
+
+    requestLinks.set(`ls:${executorId}:${message.result.message_id}`, {
+      chatId,
+      messageId
+    });
+
+    return true;
+  } catch (e) {
+    console.error('Ошибка отправки уведомления в ЛС:', e);
+    return false;
+  }
+}
+
 async function syncRequestStatus(chatId, messageId, completionData) {
   try {
-    // Обновляем сообщение в чате
+    // 1. Сначала обновляем чат
     await editMessageSafe(
       chatId, 
       messageId, 
@@ -30,10 +225,10 @@ async function syncRequestStatus(chatId, messageId, completionData) {
       { disable_web_page_preview: false }
     );
 
-    // Отправляем данные в GAS
-    await sendToGAS(completionData);
+    // 2. Затем отправляем в GAS (не блокируем основную логику)
+    sendToGAS(completionData).catch(e => console.error("Ошибка GAS:", e));
 
-    // Обновляем ссылку на Google Disk
+    // 3. Обновляем ссылку на Google Disk
     setTimeout(async () => {
       try {
         const diskUrl = await getGoogleDiskLink(completionData.row);
@@ -84,10 +279,16 @@ module.exports = (app) => {
         const username = user.username ? `@${user.username}` : null;
         const data = callback_query.data;
 
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-          callback_query_id: callback_query.id
-        }).catch(e => console.error('Answer callback error:', e));
+        // Ответ на callback_query с обработкой ошибок
+        try {
+          await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+            callback_query_id: callback_query.id
+          });
+        } catch (e) {
+          console.error('Answer callback error (non-critical):', e.message);
+        }
 
+        // Извлечение номера заявки
         const row = extractRowFromCallbackData(data) || extractRowFromMessage(msg.text || msg.caption);
         if (!row || isNaN(row)) {
           console.error('Не удалось извлечь номер заявки');
@@ -95,6 +296,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Проверка прав
         if (!AUTHORIZED_USERS.includes(username)) {
           const accessDeniedMsg = await sendMessage(chatId, '❌ У вас нет доступа.');
           setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg.data.result.message_id), 30000);
@@ -111,6 +313,7 @@ module.exports = (app) => {
 
           const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
           
+          // Для аварийных заявок
           if (isEmergency) {
             const requestData = parseRequestMessage(msg.text || msg.caption);
             
@@ -155,9 +358,11 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
           
+          // Обновляем сообщение в чате
           const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
           await editMessageSafe(chatId, messageId, updatedText);
 
+          // Показываем кнопки выбора исполнителей
           const buttons = EXECUTORS.map(e => [
             { text: e, callback_data: `executor:${e}:${row}:${chatId}:${messageId}` }
           ]);
