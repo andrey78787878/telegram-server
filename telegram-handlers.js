@@ -45,16 +45,34 @@ function parseRequestMessage(text) {
   return result;
 }
 
-function formatRequestDetails(data) {
+function calculateDelayDays(deadline) {
+  if (!deadline) return 0;
+  try {
+    const deadlineDate = new Date(deadline);
+    const today = new Date();
+    const diffTime = today - deadlineDate;
+    return Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+  } catch (e) {
+    console.error('Error calculating delay:', e);
+    return 0;
+  }
+}
+
+function formatCompletionMessage(data, diskUrl = null) {
+  const photoLink = diskUrl ? diskUrl : (data.photoUrl ? data.photoUrl : null);
   return `
-📍 Заявка #${data.row}
-🍕 Пиццерия: ${data.pizzeria || 'не указано'}
-🔧 Классификация: ${data.category || 'не указано'}
-📂 Категория: ${data.category || 'не указано'}
-📋 Проблема: ${data.problem || 'не указано'}
-👤 Инициатор: ${data.initiator || 'не указано'}
-📞 Телефон: ${data.phone || 'не указано'}
-🕓 Срок: ${data.deadline || 'не указано'}
+📌 Заявка #${data.row} закрыта.
+${photoLink ? `\n📸 ${photoLink}\n` : ''}
+Суть проблемы: ${data.originalRequest?.problem || 'не указано'}
+💬 Комментарий: ${data.comment || 'нет комментария'}
+💰 Сумма: ${data.sum || '0'} сум
+👤 Исполнитель: ${data.executor}
+✅ Статус: Выполнено
+${data.delayDays > 0 ? `🔴 Просрочка: ${data.delayDays} дн.` : ''}
+━━━━━━━━━━━━
+🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
+🙋 Инициатор: ${data.originalRequest?.initiator || 'не указано'}
+${data.originalRequest?.phone ? `📞 Телефон: ${data.originalRequest.phone}` : ''}
   `.trim();
 }
 
@@ -72,18 +90,19 @@ async function sendMessage(chatId, text, options = {}) {
   }
 }
 
-async function editMessageSafe(chatId, messageId, text) {
+async function editMessageSafe(chatId, messageId, text, options = {}) {
   try {
     return await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: messageId,
       text,
-      parse_mode: 'HTML'
+      parse_mode: 'HTML',
+      ...options
     });
   } catch (error) {
     if (error.response?.data?.description?.includes('no text in the message') || 
         error.response?.data?.description?.includes('message to edit not found')) {
-      return await sendMessage(chatId, text);
+      return await sendMessage(chatId, text, options);
     }
     console.error('Edit message error:', error.response?.data);
     throw error;
@@ -117,16 +136,6 @@ async function deleteMessageSafe(chatId, messageId) {
   } catch (error) {
     console.error('Delete message error:', error.response?.data);
     return null;
-  }
-}
-
-async function deleteServiceMessages(chatId, messageIds) {
-  for (const msgId of messageIds) {
-    try {
-      await deleteMessageSafe(chatId, msgId);
-    } catch (e) {
-      console.error(`Не удалось удалить сообщение ${msgId}:`, e.response?.data);
-    }
   }
 }
 
@@ -168,7 +177,6 @@ module.exports = (app) => {
   app.post('/webhook', async (req, res) => {
     try {
       const body = req.body;
-      console.log('Incoming webhook:', JSON.stringify(body, null, 2));
       
       // Сохраняем user_id при любом сообщении
       if (body.message?.from) {
@@ -192,13 +200,6 @@ module.exports = (app) => {
         const messageId = msg.message_id;
         const username = user.username ? `@${user.username}` : null;
         const data = callback_query.data;
-
-        console.log(`Callback received from ${username}:`, {
-          chatId,
-          messageId,
-          callbackData: data,
-          messageText: msg.text || msg.caption
-        });
 
         // Ответ на callback_query
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
@@ -270,33 +271,38 @@ module.exports = (app) => {
             `📢 ${executorUsername}, вам назначена заявка #${row}!`,
             { reply_to_message_id: messageId }
           );
+  // Отправляем пуш в ЛС исполнителю
+  try {
+    const executorId = userStorage.get(executorUsername);
+    console.log('Debug: Attempting to send PM to:', {
+      executorUsername,
+      executorId,
+      userStorage: Array.from(userStorage.entries())
+    });
 
-          // Отправляем пуш в ЛС исполнителю
-          try {
-            const executorId = userStorage.get(executorUsername);
-            if (executorId) {
-              const requestData = parseRequestMessage(msg.text || msg.caption);
-              await sendMessage(
-                executorId,
-                `Вам назначена заявка #${row}\n\n` +
-                `${formatRequestDetails({...requestData, row})}\n\n` +
-                `⚠️ Пожалуйста, приступайте к выполнению!`
-              );
-            }
-          } catch (e) {
-            console.error('Error sending PM to executor:', e);
-          }
-
-          // Обновляем кнопки
-          const buttons = [
-            [
-              { text: '✅ Выполнено', callback_data: `done:${row}` },
-              { text: '🕐 Ожидает поставки', callback_data: `wait:${row}` },
-              { text: '❌ Отмена', callback_data: `cancel:${row}` }
-            ]
-          ];
-          await sendButtonsWithRetry(chatId, messageId, buttons);
-
+    if (executorId) {
+      const requestData = parseRequestMessage(msg.text || msg.caption);
+      await sendMessage(
+        executorId,
+        `📌 Вам назначена новая заявка #${row}\n\n` +
+        `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+        `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+        `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+        `⚠️ Пожалуйста, приступайте к выполнению!`
+      );
+      console.log('Debug: PM successfully sent to', executorUsername);
+    } else {
+      console.error('Debug: Executor ID not found for', executorUsername);
+    }
+  } catch (e) {
+    console.error('Ошибка отправки уведомления в ЛС:', {
+      error: e,
+      executorUsername,
+      executorId,
+      stack: e.stack
+    });
+  }
+}
           // Отправляем данные в GAS
           await sendToGAS({
             row,
@@ -327,6 +333,11 @@ module.exports = (app) => {
             originalRequest: parseRequestMessage(msg.text || msg.caption),
             serviceMessages: [photoMsg.data.result.message_id]
           };
+
+          // Удалим запрос через 2 минуты
+          setTimeout(() => {
+            deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e));
+          }, 120000);
 
           return res.sendStatus(200);
         }
@@ -380,8 +391,8 @@ module.exports = (app) => {
 
         // Получение фото
         if (state.stage === 'waiting_photo' && msg.photo) {
-          // Удаляем предыдущее сообщение
-          await deleteServiceMessages(chatId, state.serviceMessages);
+          // Удаляем предыдущий запрос
+          await deleteMessageSafe(chatId, state.serviceMessages[0]);
           
           const fileId = msg.photo.at(-1).file_id;
           state.photoUrl = await getTelegramFileUrl(fileId);
@@ -391,15 +402,18 @@ module.exports = (app) => {
           state.stage = 'waiting_sum';
           state.serviceMessages = [sumMsg.data.result.message_id];
           
-          // Удаляем через минуту
-          setTimeout(() => deleteMessageSafe(chatId, sumMsg.data.result.message_id), 60000);
+          // Удалим запрос через 2 минуты
+          setTimeout(() => {
+            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
+          }, 120000);
+          
           return res.sendStatus(200);
         }
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
-          // Удаляем предыдущее сообщение
-          await deleteServiceMessages(chatId, state.serviceMessages);
+          // Удаляем предыдущий запрос
+          await deleteMessageSafe(chatId, state.serviceMessages[0]);
           
           state.sum = msg.text;
           
@@ -408,19 +422,22 @@ module.exports = (app) => {
           state.stage = 'waiting_comment';
           state.serviceMessages = [commentMsg.data.result.message_id];
           
-          // Удаляем через минуту
-          setTimeout(() => deleteMessageSafe(chatId, commentMsg.data.result.message_id), 60000);
+          // Удалим запрос через 2 минуты
+          setTimeout(() => {
+            deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
+          }, 120000);
+          
           return res.sendStatus(200);
         }
 
         // Получение комментария
         if (state.stage === 'waiting_comment' && msg.text) {
-          // Удаляем предыдущее сообщение
-          await deleteServiceMessages(chatId, state.serviceMessages);
+          // Удаляем предыдущий запрос
+          await deleteMessageSafe(chatId, state.serviceMessages[0]);
           
           state.comment = msg.text;
 
-          // Формируем итоговое сообщение
+          // Формируем данные для отправки
           const completionData = {
             row: state.row,
             sum: state.sum,
@@ -428,21 +445,40 @@ module.exports = (app) => {
             photoUrl: state.photoUrl,
             executor: state.username,
             originalRequest: state.originalRequest,
-            delayDays: calculateDelayDays(state.originalRequest?.deadline)
+            delayDays: calculateDelayDays(state.originalRequest?.deadline),
+            status: 'Выполнено'
           };
 
+          // Сначала отправляем с телеграм-ссылкой (с предпросмотром)
+          await editMessageSafe(
+            chatId, 
+            state.messageId, 
+            formatCompletionMessage(completionData, state.photoUrl),
+            { disable_web_page_preview: false }
+          );
+
+          // Отправляем данные в GAS
           await sendToGAS(completionData);
 
-          // Обновляем основное сообщение
-          const completionMessage = `
-✅ Заявка #${state.row} завершена
-👤 Исполнитель: ${state.username}
-💰 Сумма: ${state.sum || '0'} сум
-📸 Фото: ${state.photoUrl ? 'приложено' : 'отсутствует'}
-💬 Комментарий: ${state.comment || 'нет'}
-          `.trim();
-          
-          await editMessageSafe(chatId, state.messageId, completionMessage);
+          // Через 3 минуты обновляем с Google Disk ссылкой
+          setTimeout(async () => {
+            try {
+              const diskUrl = await getGoogleDiskLink(state.row);
+              if (diskUrl) {
+                await editMessageSafe(
+                  chatId, 
+                  state.messageId, 
+                  formatCompletionMessage(completionData, diskUrl),
+                  { disable_web_page_preview: false }
+                );
+              }
+            } catch (e) {
+              console.error('Error updating disk link:', e);
+            }
+          }, 180000);
+
+          // Удаляем кнопки
+          await sendButtonsWithRetry(chatId, state.messageId, []);
 
           delete userStates[chatId];
           return res.sendStatus(200);
