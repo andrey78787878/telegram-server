@@ -6,9 +6,12 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
+// Время жизни сервисных сообщений (1 минута)
+const MESSAGE_LIFETIME = 60000;
+
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
-const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85', '@Andrey_tkach_y'];
+const EXECUTORS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id (username -> id)
@@ -307,9 +310,22 @@ module.exports = (app) => {
             await deleteMessageSafe(chatId, msg.reply_to_message.message_id);
           }
 
-          // Обновляем основное сообщение
-          const newText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе (исполнитель: ${executorUsername})`;
-          await editMessageSafe(chatId, messageId, newText);
+          // Обновляем основное сообщение (убираем кнопки)
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+          const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
+          
+          const updatedMessage = `
+📌 Заявка #${row} ${isEmergency ? '🚨 АВАРИЙНАЯ' : ''}
+🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}
+🔧 Проблема: ${requestData?.problem || 'не указано'}
+🕓 Срок: ${requestData?.deadline || 'не указан'}
+━━━━━━━━━━━━
+🟢 В работе (исполнитель: ${executorUsername})
+          `.trim();
+
+          await editMessageSafe(chatId, messageId, updatedMessage, {
+            reply_markup: { inline_keyboard: [] } // Убираем все кнопки
+          });
 
           // Отправляем уведомление в чат
           await sendMessage(
@@ -318,31 +334,27 @@ module.exports = (app) => {
             { reply_to_message_id: messageId }
           );
 
-          // Улучшенная отправка уведомлений в ЛС с кнопками
+          // Отправляем кнопки действий в ЛС исполнителю
           try {
             const executorId = userStorage.get(executorUsername);
             if (executorId) {
-              const requestData = parseRequestMessage(msg.text || msg.caption);
-              const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
-              
               await sendMessage(
                 executorId,
-                `${isEmergency ? '🚨 ' : ''}📌 Вам назначена заявка #${row}\n\n` +
-                `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+                `📌 Вам назначена заявка #${row}\n\n` +
+                `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
                 `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
                 `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
-                `${isEmergency ? '‼️ СРОЧНО ТРЕБУЕТСЯ РЕАКЦИЯ!' : '⚠️ Приступайте к выполнению'}`,
+                `Пожалуйста, подтвердите принятие заявки:`,
                 { 
                   reply_markup: {
                     inline_keyboard: [
                       [
-                        { text: '✅ Выполнено', callback_data: `done:${row}` },
-                        { text: '⏳ Ожидает', callback_data: `wait:${row}` },
-                        { text: '❌ Отмена', callback_data: `cancel:${row}` }
+                        { text: '✅ Принять', callback_data: `confirm:${row}` },
+                        { text: '❌ Отклонить', callback_data: `reject:${row}` }
                       ]
                     ]
                   },
-                  disable_notification: false 
+                  disable_notification: false
                 }
               );
             }
@@ -358,10 +370,86 @@ module.exports = (app) => {
           // Отправляем данные в GAS
           await sendToGAS({
             row,
-            status: 'В работе',
+            status: 'Ожидает подтверждения',
             executor: executorUsername,
             message_id: messageId,
-            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
+            isEmergency: isEmergency
+          });
+
+          return res.sendStatus(200);
+        }
+
+        // Обработка подтверждения исполнителя
+        if (data.startsWith('confirm:')) {
+          const row = parseInt(data.split(':')[1]);
+          
+          // Получаем данные из хранилища состояний
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+          const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
+          
+          // Обновляем сообщение в чате
+          const updatedText = `
+📌 Заявка #${row} ${isEmergency ? '🚨 АВАРИЙНАЯ' : ''}
+🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}
+🔧 Проблема: ${requestData?.problem || 'не указано'}
+🕓 Срок: ${requestData?.deadline || 'не указан'}
+━━━━━━━━━━━━
+🟢 В работе (исполнитель: @${user.username})
+          `.trim();
+
+          await editMessageSafe(chatId, messageId, updatedText);
+
+          // Отправляем кнопки управления в ЛС исполнителю
+          await sendMessage(
+            msg.chat.id,
+            'Вы приняли заявку. Выберите действие:',
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '✅ Выполнено', callback_data: `done:${row}` },
+                    { text: '⏳ Ожидает', callback_data: `wait:${row}` }
+                  ]
+                ]
+              }
+            }
+          );
+
+          // Обновляем статус в GAS
+          await sendToGAS({
+            row,
+            status: 'В работе',
+            executor: `@${user.username}`
+          });
+
+          return res.sendStatus(200);
+        }
+
+        // Обработка отклонения заявки
+        if (data.startsWith('reject:')) {
+          const row = parseInt(data.split(':')[1]);
+          
+          // Возвращаем заявку в чат
+          const mainChatId = msg.chat.id; // ID основного чата
+          const originalText = msg.text.replace('Вам назначена заявка', 'Заявка требует назначения');
+          
+          await sendMessage(
+            mainChatId,
+            originalText,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: 'Принять в работу', callback_data: `accept:${row}` }]
+                ]
+              }
+            }
+          );
+
+          // Обновляем статус
+          await sendToGAS({
+            row,
+            status: 'Требует назначения',
+            executor: null
           });
 
           return res.sendStatus(200);
@@ -375,7 +463,7 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
-          // Отправляем запрос на фото
+          // Отправляем запрос на фото (1 минута на ответ)
           const photoMsg = await sendMessage(
             chatId, 
             '📸 Пришлите фото выполненных работ\n\n' +
@@ -389,13 +477,12 @@ module.exports = (app) => {
             username,
             messageId,
             originalRequest: parseRequestMessage(msg.text || msg.caption),
-            serviceMessages: [photoMsg.data.result.message_id],
+            serviceMessages: [{
+              id: photoMsg.data.result.message_id,
+              deleteAt: Date.now() + MESSAGE_LIFETIME
+            }],
             isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
           };
-
-          setTimeout(() => {
-            deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
 
           return res.sendStatus(200);
         }
@@ -447,44 +534,51 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
+        // Удаляем просроченные сервисные сообщения
+        state.serviceMessages = state.serviceMessages.filter(m => {
+          if (Date.now() >= m.deleteAt) {
+            deleteMessageSafe(chatId, m.id).catch(console.error);
+            return false;
+          }
+          return true;
+        });
+
         // Получение фото
         if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await deleteMessageSafe(chatId, state.serviceMessages[0].id);
           
           const fileId = msg.photo.at(-1).file_id;
           state.photoUrl = await getTelegramFileUrl(fileId);
           
           const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
           state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
+          state.serviceMessages = [{
+            id: sumMsg.data.result.message_id,
+            deleteAt: Date.now() + MESSAGE_LIFETIME
+          }];
           
           return res.sendStatus(200);
         }
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await deleteMessageSafe(chatId, state.serviceMessages[0].id);
           
           state.sum = msg.text;
           
           const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
           state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
+          state.serviceMessages = [{
+            id: commentMsg.data.result.message_id,
+            deleteAt: Date.now() + MESSAGE_LIFETIME
+          }];
           
           return res.sendStatus(200);
         }
 
         // Получение комментария
         if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await deleteMessageSafe(chatId, state.serviceMessages[0].id);
           
           state.comment = msg.text;
 
@@ -500,6 +594,7 @@ module.exports = (app) => {
             isEmergency: state.isEmergency
           };
 
+          // Первоначальное обновление сообщения
           await editMessageSafe(
             chatId, 
             state.messageId, 
@@ -507,8 +602,10 @@ module.exports = (app) => {
             { disable_web_page_preview: false }
           );
 
+          // Отправка данных в GAS
           await sendToGAS(completionData);
 
+          // Обновление через 3 минуты с ссылкой из Google Drive
           setTimeout(async () => {
             try {
               const diskUrl = await getGoogleDiskLink(state.row);
@@ -523,8 +620,9 @@ module.exports = (app) => {
             } catch (e) {
               console.error('Error updating disk link:', e);
             }
-          }, 180000);
+          }, 180000); // 3 минуты
 
+          // Удаляем все кнопки
           await sendButtonsWithRetry(chatId, state.messageId, []);
 
           delete userStates[chatId];
