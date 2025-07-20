@@ -711,38 +711,53 @@ if (body.message && userStates[body.message.chat.id]) {
     }
   }
       // Обработка комментария
-      if (state.stage === 'waiting_comment' && msg.text) {
-        try {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          const completionData = {
-            row: state.row,
-            photoUrl: state.photoUrl,
-            sum: state.sum,
-            comment: msg.text,
-            executor: state.username,
-            originalRequest: state.originalRequest,
-            isEmergency: state.isEmergency,
-            isFromLS: state.isFromLS,
-            delayDays: calculateDelayDays(state.originalRequest?.deadline),
-            message_id: state.messageId
+                await axios.post(`${TELEGRAM_API}/sendMessage`, {
+            chat_id: chatId,
+            text: '📝 Добавьте комментарий (по необходимости):',
+            reply_to_message_id: message.message_id,
+          });
+
+        } else if (step === 'waitingComment' && message.text) {
+          const comment = message.text;
+          state.comment = comment;
+
+          const { photoUrl, sum } = state;
+
+          const payload = {
+            photo: photoUrl,
+            sum,
+            comment,
+            row,
+            username,
+            message_id: parentMsgId,
           };
-          
-          await syncRequestStatus(state.chatId, state.messageId, completionData);
-          await clearUserState(chatId);
-          return res.sendStatus(200);
-        } catch (e) {
-          console.error('Ошибка завершения:', e);
-          await clearUserState(chatId);
-          await sendMessage(chatId, '❌ Ошибка при завершении');
-          return res.sendStatus(200);
+
+          const gasResponse = await axios.post(GAS_WEB_APP_URL, payload);
+          console.log('📤 Data sent to GAS:', gasResponse.status);
+
+          await axios.post(`${TELEGRAM_API}/sendMessage`, {
+            chat_id: chatId,
+            text: `✅ Заявка #${row} закрыта. 💰 Сумма: ${sum} сум 👤 Исполнитель: ${username}`,
+            reply_to_message_id: parentMsgId,
+          });
+
+          setTimeout(() => {
+            const toDelete = [message.message_id];
+            toDelete.forEach(msgId => {
+              axios.post(`${TELEGRAM_API}/deleteMessage`, {
+                chat_id: chatId,
+                message_id: msgId,
+              }).catch(console.error);
+            });
+          }, 60000);
+
+          delete userStates[chatId];
         }
       }
+    } catch (err) {
+      console.error('❌ Ошибка:', err);
     }
-    
-    return res.sendStatus(200);
-  } catch (error) {
-    console.error('Глобальная ошибка:', error);
-    return res.sendStatus(500);
-  }
-}); // закрываем app.post('/webhook')
+
+    res.sendStatus(200);
+  });
+};
