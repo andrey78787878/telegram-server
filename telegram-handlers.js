@@ -717,14 +717,15 @@ if (state.stage === 'waiting_comment' && msg.text) {
     await deleteMessageSafe(chatId, state.serviceMessages[0]);
     
     // Сохраняем комментарий
-    state.comment = msg.text;
+    const comment = msg.text;
+    state.comment = comment;
 
     // Формируем данные для завершения заявки
     const completionData = {
       row: state.row,
       photoUrl: state.photoUrl,
       sum: state.sum,
-      comment: state.comment,
+      comment: comment,
       executor: state.username,
       originalRequest: state.originalRequest,
       isEmergency: state.isEmergency,
@@ -750,7 +751,7 @@ if (state.stage === 'waiting_comment' && msg.text) {
                      (state.photoUrl ? `📎 Фото: ${state.photoUrl}\n` : '') +
                      `💰 Сумма: ${state.sum || '0'} сум\n` +
                      `👤 Исполнитель: ${state.username}\n` +
-                     `📝 Комментарий: ${state.comment}`;
+                     `📝 Комментарий: ${comment}`;
 
     await sendMessage(chatId, finalText);
 
