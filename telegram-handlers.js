@@ -524,23 +524,32 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
-        // Получение фото
-        if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[20000]);
-          
-          const fileId = msg.photo.at(-1).file_id;
-          state.photoUrl = await getTelegramFileUrl(fileId);
-          
-          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
-          state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
-          
-          return res.sendStatus(200);
-        }
+       // Получение фото
+if (state.stage === 'waiting_photo' && msg.photo) {
+  // Удаляем предыдущее сервисное сообщение, если есть
+  if (state.serviceMessages.length) {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+  }
+
+  const fileId = msg.photo.at(-1).file_id;
+  state.photoUrl = await getTelegramFileUrl(fileId);
+
+  // Отправляем запрос на сумму
+  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+  state.stage = 'waiting_sum';
+
+  // Сохраняем ID нового сервисного сообщения
+  state.serviceMessages = [sumMsg.data.result.message_id];
+
+  // Удаляем и сервисное сообщение, и сообщение пользователя с фото через 2 минуты
+  setTimeout(() => {
+    deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error('Ошибка удаления sumMsg:', e));
+    deleteMessageSafe(chatId, msg.message_id).catch(e => console.error('Ошибка удаления фото пользователя:', e));
+  }, 120000);
+
+  return res.sendStatus(200);
+}
+
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
