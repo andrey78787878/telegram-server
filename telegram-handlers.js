@@ -273,10 +273,6 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
           
-          // Обновляем сообщение в чате
-          const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
-          await editMessageSafe(chatId, messageId, updatedText);
-
           // Показываем кнопки выбора исполнителей
           const buttons = EXECUTORS.map(e => [
             { text: e, callback_data: `executor:${e}:${row}` }
@@ -306,11 +302,7 @@ module.exports = (app) => {
           if (msg.reply_to_message) {
             await deleteMessageSafe(chatId, msg.reply_to_message.message_id);
           }
-
-          // Обновляем основное сообщение
-          const newText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе (исполнитель: ${executorUsername})`;
-          await editMessageSafe(chatId, messageId, newText);
-
+      
           // Меняем кнопки на действия
           const actionButtons = [
             [
@@ -374,7 +366,7 @@ module.exports = (app) => {
         if (data.startsWith('done:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
             return res.sendStatus(200);
           }
 
@@ -407,7 +399,7 @@ module.exports = (app) => {
         if (data.startsWith('wait:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут менять статус заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
             return res.sendStatus(200);
           }
 
