@@ -711,6 +711,7 @@ if (body.message && userStates[body.message.chat.id]) {
     }
   }
       // Обработка комментария
+            // Обработка комментария
       if (state.stage === 'waiting_comment' && msg.text) {
         try {
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
@@ -742,8 +743,7 @@ if (body.message && userStates[body.message.chat.id]) {
     }
     
     return res.sendStatus(200);
-    
-  } catch (error) {
+  } catch (error) {  // Главный обработчик ошибок webhook
     console.error('Ошибка в обработчике webhook:', error);
     return res.sendStatus(500);
   }
