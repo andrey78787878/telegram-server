@@ -713,7 +713,6 @@ if (body.message && userStates[body.message.chat.id]) {
 
       // Обработка комментария
     // ... (предыдущий код остается без изменений)
-
       // Обработка комментария
       if (state.stage === 'waiting_comment' && msg.text) {
         try {
@@ -747,8 +746,8 @@ if (body.message && userStates[body.message.chat.id]) {
     
     return res.sendStatus(200);
     
-  catch (error) {
+  } catch (error) {  // <-- Эта строка должна быть на одном уровне с открывающим try
     console.error('Webhook handler error:', error);
     return res.sendStatus(500);
   }
-});
+}); // закрываем app.post('/webhook')
