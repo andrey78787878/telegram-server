@@ -642,147 +642,80 @@ if (body.message && userStates[body.message.chat.id]) {
   }
 
   // Обработка фото
-// telegram-handlers.js
-module.exports = (app, userStates) => {
-  const axios = require('axios');
-  const FormData = require('form-data');
-  const fs = require('fs');
-  const path = require('path');
+   // Обработка фото
+      if (state.stage === 'waiting_photo' && message.photo) {
+        console.log('[ЭТАП] Фото получено');
+        const photo = message.photo[message.photo.length - 1];
+        const file = await downloadFile(photo.file_id);
 
-  const deleteMessageSafe = async (chatId, messageId) => {
-    if (!messageId) return;
-    try {
-      await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-        chat_id: chatId,
-        message_id: messageId
-      });
-    } catch (error) {
-      console.error('Ошибка при удалении сообщения:', error.message);
-    }
-  };
+        const form = new FormData();
+        form.append('photo', file.stream, file.filename);
+        form.append('row', state.row);
+        form.append('message_id', state.originalMessageId);
+        form.append('username', state.username);
 
-  const sendButtonsWithRetry = async (chatId, messageId, buttons) => {
-    try {
-      await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: {
-          inline_keyboard: buttons
+        const { data } = await axios.post(`${GAS_WEB_APP_URL}?stage=photo`, form, {
+          headers: form.getHeaders()
+        });
+
+        const reply = await sendMessage(chatId, '✅ Фото получено. Введите сумму работ в формате: 150000', {
+          reply_to_message_id: message.message_id
+        });
+
+        state.stage = 'waiting_sum';
+        state.serviceMessages.push(reply.message_id);
+        return res.sendStatus(200);
+      }
+
+      // Обработка суммы
+      if (state.stage === 'waiting_sum' && message.text) {
+        console.log('[ЭТАП] Сумма получена');
+        const sum = parseInt(message.text.replace(/\D/g, ''));
+        if (isNaN(sum)) {
+          const reply = await sendMessage(chatId, '🚫 Введите сумму числом, например: 150000', {
+            reply_to_message_id: message.message_id
+          });
+          state.serviceMessages.push(reply.message_id);
+          return res.sendStatus(200);
         }
-      });
-    } catch (error) {
-      console.error('Ошибка при обновлении кнопок:', error.message);
+
+        const reply = await sendMessage(chatId, '💬 Теперь введите комментарий по заявке', {
+          reply_to_message_id: message.message_id
+        });
+
+        state.sum = sum;
+        state.stage = 'waiting_comment';
+        state.serviceMessages.push(reply.message_id);
+        return res.sendStatus(200);
+      }
+
+      // Обработка комментария
+      if (state.stage === 'waiting_comment' && message.text) {
+        console.log('[ЭТАП] Комментарий получен');
+        state.comment = message.text;
+
+        const form = new FormData();
+        form.append('row', state.row);
+        form.append('message_id', state.originalMessageId);
+        form.append('sum', state.sum);
+        form.append('comment', state.comment);
+        form.append('username', state.username);
+        form.append('executor', state.executor);
+
+        const { data } = await axios.post(`${GAS_WEB_APP_URL}?stage=final`, form, {
+          headers: form.getHeaders()
+        });
+
+        const reply = await sendMessage(chatId, `✅ Заявка #${state.row} закрыта. 💰 Сумма: ${state.sum} сум`, {
+          reply_to_message_id: message.message_id
+        });
+
+        state.serviceMessages.push(reply.message_id);
+        delete userStates[chatId];
+        return res.sendStatus(200);
+      }
     }
-  };
 
-  const sendToGAS = async (data) => {
-    try {
-      await axios.post(GAS_WEB_APP_URL, data);
-    } catch (error) {
-      console.error('Ошибка при отправке в GAS:', error.message);
-    }
-  };
-
-  const downloadTelegramFile = async (fileId, downloadPath) => {
-    const fileInfo = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-    const filePath = fileInfo.data.result.file_path;
-    const url = `${TELEGRAM_FILE_API}/${filePath}`;
-    const response = await axios.get(url, { responseType: 'stream' });
-    const writer = fs.createWriteStream(downloadPath);
-    response.data.pipe(writer);
-    return new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
-  };
-
-  app.post('/webhook', async (req, res) => {
-    const body = req.body;
-
-    const { message, callback_query } = body;
-    const msg = message || callback_query?.message;
-    const chatId = msg?.chat?.id;
-
-    if (!chatId) return res.sendStatus(200);
-
-    const state = userStates[chatId];
-
-    // Обработка фото
-// Обработка фото
-if (state.stage === 'waiting_photo' && msg.photo) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-
-  const photo = msg.photo[msg.photo.length - 1];
-  const fileId = photo.file_id;
-
-  const fileUrl = await getTelegramFileUrl(fileId);
-  const photoLink = await uploadToGoogleDrive(fileUrl, `photo_${chatId}_${Date.now()}.jpg`);
-
-  state.completionData = {
-    ...state.completionData,
-    photoLink: photoLink,
-  };
-
-  const sumMessage = await sendMessage(chatId, 'Введите сумму выполненных работ:');
-  state.stage = 'waiting_sum';
-  state.serviceMessages = [sumMessage.message_id];
-  return res.sendStatus(200);
-}
-
-// Обработка суммы
-if (state.stage === 'waiting_sum' && msg.text) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-
-  const sum = msg.text.replace(/[^\d]/g, '');
-  if (!sum) {
-    const errorMessage = await sendMessage(chatId, 'Пожалуйста, введите корректную сумму (только цифры):');
-    state.serviceMessages = [errorMessage.message_id];
-    return res.sendStatus(200);
-  }
-
-  state.completionData = {
-    ...state.completionData,
-    sum: sum,
-  };
-
-  const commentMessage = await sendMessage(chatId, 'Введите комментарий к заявке:');
-  state.stage = 'waiting_comment';
-  state.serviceMessages = [commentMessage.message_id];
-  return res.sendStatus(200);
-}
-
-// Обработка комментария
-if (state.stage === 'waiting_comment' && msg.text) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-
-  const comment = msg.text.trim();
-  state.completionData = {
-    ...state.completionData,
-    comment: comment,
-  };
-
-  const completionData = {
-    ...state.completionData,
-    executor: `@${msg.from.username || msg.from.first_name}`,
-    row: state.row,
-    message_id: state.messageId,
-  };
-
-  // Удаляем все сообщения пользователя и бота
-  setTimeout(() => {
-    const toDelete = [msg.message_id, ...state.serviceMessages];
-    toDelete.forEach(messageId => deleteMessageSafe(chatId, messageId).catch(console.error));
-  }, 60000);
-
-  // Отправляем данные в Google Apps Script
-  await sendToGAS(completionData).catch(console.error);
-
-  // Удаляем кнопки управления
-  await sendButtonsWithRetry(state.chatId, state.messageId, []).catch(console.error);
-
-  // Очищаем состояние
-  delete userStates[chatId];
-
-  return res.sendStatus(200);
-}
-
+    res.sendStatus(200);
+  });
+};
