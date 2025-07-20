@@ -718,7 +718,6 @@ if (state.stage === 'waiting_comment' && msg.text) {
     
     // Сохраняем комментарий
     const comment = msg.text;
-    state.comment = comment;
 
     // Формируем данные для завершения заявки
     const completionData = {
