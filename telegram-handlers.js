@@ -124,18 +124,6 @@ async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
   }
 }
 
-async function deleteMessageSafe(chatId, messageId) {
-  try {
-    return await axios.post(`${TELEGRAM_API}/deleteMessage`, {
-      chat_id: chatId,
-      message_id: messageId
-    });
-  } catch (error) {
-    console.error('Delete message error:', error.response?.data);
-    return null;
-  }
-}
-
 async function getTelegramFileUrl(fileId) {
   try {
     const { data } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
@@ -163,6 +151,16 @@ async function getGoogleDiskLink(row) {
     return res.data.diskLink || null;
   } catch (error) {
     console.error('Get Google Disk link error:', error.response?.data);
+    return null;
+  }
+}
+
+async function getRequestData(row) {
+  try {
+    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequestData=true`, { row });
+    return res.data;
+  } catch (error) {
+    console.error('Get request data error:', error.response?.data);
     return null;
   }
 }
@@ -213,16 +211,14 @@ module.exports = (app) => {
 
         // Проверка прав
         if (!AUTHORIZED_USERS.includes(username)) {
-          const accessDeniedMsg = await sendMessage(chatId, '❌ У вас нет доступа.');
-          setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg.data.result.message_id), 30000);
+          await sendMessage(chatId, '❌ У вас нет доступа.');
           return res.sendStatus(200);
         }
 
         // Обработка кнопки "Принять в работу"
         if (data.startsWith('accept') || data === 'accept') {
           if (!MANAGERS.includes(username)) {
-            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg.data.result.message_id), 30000);
+            await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
             return res.sendStatus(200);
           }
 
@@ -278,17 +274,9 @@ module.exports = (app) => {
             { text: e, callback_data: `executor:${e}:${row}` }
           ]);
 
-          const chooseExecutorMsg = await sendMessage(chatId, `👷 Выберите исполнителя для заявки #${row}:`, {
+          await sendMessage(chatId, `👷 Выберите исполнителя для заявки #${row}:`, {
             reply_to_message_id: messageId
           });
-
-          setTimeout(async () => {
-            try {
-              await deleteMessageSafe(chatId, chooseExecutorMsg.data.result.message_id);
-            } catch (e) {
-              console.error('Error deleting choose executor message:', e);
-            }
-          }, 60000);
 
           await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите исполнителя для заявки #${row}:`);
           return res.sendStatus(200);
@@ -297,11 +285,6 @@ module.exports = (app) => {
         // Обработка выбора исполнителя
         if (data.startsWith('executor:')) {
           const executorUsername = data.split(':')[1];
-          
-          // Удаляем сообщение "Выберите исполнителя"
-          if (msg.reply_to_message) {
-            await deleteMessageSafe(chatId, msg.reply_to_message.message_id);
-          }
       
           // Меняем кнопки на действия
           const actionButtons = [
@@ -314,7 +297,7 @@ module.exports = (app) => {
 
           await sendButtonsWithRetry(chatId, messageId, actionButtons, `Выберите действие для заявки #${row}:`);
 
-          // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
+          // Отправляем уведомление в чат (ответом на материнскую заявку)
           await sendMessage(
             chatId,
             `📢 ${executorUsername}, вам назначена заявка #${row}!`,
@@ -356,7 +339,8 @@ module.exports = (app) => {
             row,
             status: 'В работе',
             executor: executorUsername,
-            message_id: messageId
+            message_id: messageId,
+            chat_id: chatId
           });
 
           return res.sendStatus(200);
@@ -365,32 +349,42 @@ module.exports = (app) => {
         // Обработка завершения заявки
         if (data.startsWith('done:')) {
           if (!EXECUTORS.includes(username)) {
-            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
+            await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
             return res.sendStatus(200);
           }
+
+          const isPrivateChat = chatId === user.id;
+          
+          // Получаем данные о заявке
+          const requestData = await getRequestData(row);
+          if (!requestData) {
+            await sendMessage(chatId, '❌ Не удалось получить данные заявки');
+            return res.sendStatus(200);
+          }
+
+          const chatMessageId = requestData.message_id;
+          const groupChatId = requestData.chat_id;
 
           // Отправляем запрос на фото
           const photoMsg = await sendMessage(
             chatId, 
             '📸 Пришлите фото выполненных работ\n\n' +
             '⚠️ Для отмены нажмите /cancel',
-            { reply_to_message_id: messageId }
+            { reply_to_message_id: isPrivateChat ? null : messageId }
           );
           
           userStates[chatId] = {
             stage: 'waiting_photo',
-            row: parseInt(data.split(':')[1]),
+            row: row,
             username,
-            messageId,
+            messageId: chatMessageId,
+            groupChatId: groupChatId,
             originalRequest: parseRequestMessage(msg.text || msg.caption),
             serviceMessages: [photoMsg.data.result.message_id],
-            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
+            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨'),
+            isPrivateChat: isPrivateChat,
+            privateChatId: chatId
           };
-
-          setTimeout(() => {
-            deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
 
           return res.sendStatus(200);
         }
@@ -398,8 +392,7 @@ module.exports = (app) => {
         // Обработка ожидания поставки
         if (data.startsWith('wait:')) {
           if (!EXECUTORS.includes(username)) {
-            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут менять статус заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
+            await sendMessage(chatId, '❌ Только исполнители могут менять статус заявки.');
             return res.sendStatus(200);
           }
 
@@ -418,8 +411,7 @@ module.exports = (app) => {
         // Обработка отмены заявки
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
-            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
             return res.sendStatus(200);
           }
 
@@ -444,43 +436,29 @@ module.exports = (app) => {
 
         // Получение фото
         if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
           const fileId = msg.photo.at(-1).file_id;
           state.photoUrl = await getTelegramFileUrl(fileId);
           
           const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
           state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
+          state.serviceMessages.push(sumMsg.data.result.message_id);
           
           return res.sendStatus(200);
         }
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
           state.sum = msg.text;
           
           const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
           state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
+          state.serviceMessages.push(commentMsg.data.result.message_id);
           
           return res.sendStatus(200);
         }
 
         // Получение комментария
         if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
           state.comment = msg.text;
 
           const completionData = {
@@ -492,26 +470,46 @@ module.exports = (app) => {
             originalRequest: state.originalRequest,
             delayDays: calculateDelayDays(state.originalRequest?.deadline),
             status: 'Выполнено',
-            isEmergency: state.isEmergency
+            isEmergency: state.isEmergency,
+            message_id: state.messageId,
+            chat_id: state.groupChatId
           };
 
-          await editMessageSafe(
-            chatId, 
-            state.messageId, 
-            formatCompletionMessage(completionData, state.photoUrl),
-            { disable_web_page_preview: false }
-          );
+          // Обновляем сообщение в групповом чате
+          try {
+            await editMessageSafe(
+              state.groupChatId, 
+              state.messageId, 
+              formatCompletionMessage(completionData, state.photoUrl),
+              { disable_web_page_preview: false }
+            );
+            
+            // Отправляем сообщение о закрытии как ответ на исходное сообщение
+            await sendMessage(
+              state.groupChatId,
+              `✅ Заявка #${state.row} закрыта исполнителем ${state.username}`,
+              { reply_to_message_id: state.messageId }
+            );
+            
+            // Удаляем кнопки из исходного сообщения
+            await sendButtonsWithRetry(state.groupChatId, state.messageId, []);
+          } catch (e) {
+            console.error('Error updating group chat:', e);
+            await sendMessage(state.privateChatId, '❌ Не удалось обновить заявку в чате');
+          }
 
+          // Отправляем данные в Google Sheets
           await sendToGAS(completionData);
 
+          // Обновляем ссылку на Google Disk (если есть)
           setTimeout(async () => {
             try {
               const diskUrl = await getGoogleDiskLink(state.row);
               if (diskUrl) {
                 await editMessageSafe(
-                  chatId, 
+                  state.groupChatId, 
                   state.messageId, 
-                  formatCompletionMessage(completionData, diskUrl),
+                  formatCompletionMessage({ ...completionData, photoUrl: diskUrl }, diskUrl),
                   { disable_web_page_preview: false }
                 );
               }
@@ -520,7 +518,15 @@ module.exports = (app) => {
             }
           }, 180000);
 
-          await sendButtonsWithRetry(chatId, state.messageId, []);
+          // Уведомление в ЛС (если закрытие было из ЛС)
+          if (state.isPrivateChat) {
+            await sendMessage(
+              state.privateChatId,
+              `✅ Вы успешно закрыли заявку #${state.row}\n\n` +
+              `💬 Комментарий: ${state.comment}\n` +
+              `💰 Сумма: ${state.sum || '0'} сум`
+            );
+          }
 
           delete userStates[chatId];
           return res.sendStatus(200);
