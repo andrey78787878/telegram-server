@@ -149,7 +149,7 @@ async function getTelegramFileUrl(fileId) {
 async function sendToGAS(data) {
   try {
     const response = await axios.post(GAS_WEB_APP_URL, data);
-    console.log('Data sent to GAS:', response.status);
+    console.log('Data sent to GAS:', response.status, data);
     return response.data;
   } catch (error) {
     console.error('Error sending to GAS:', error.message);
@@ -180,6 +180,33 @@ module.exports = (app) => {
         const user = body.message.from;
         if (user.username) {
           userStorage.set(`@${user.username}`, user.id);
+        }
+
+        // Обработка новых сообщений (для дублирования аварийных заявок при поступлении)
+        const msg = body.message;
+        const text = msg.text || msg.caption;
+        
+        if (text && (text.includes('🚨') || text.includes('АВАРИЙНАЯ'))) {
+          const requestData = parseRequestMessage(text);
+          const row = extractRowFromMessage(text);
+          
+          if (row) {
+            // Дублируем в ЛС всем менеджерам
+            for (const manager of MANAGERS) {
+              const managerId = userStorage.get(manager);
+              if (managerId) {
+                await sendMessage(
+                  managerId,
+                  `🚨 ПОСТУПИЛА АВАРИЙНАЯ ЗАЯВКА #${row}\n\n` +
+                  `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+                  `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+                  `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+                  `‼️ ТРЕБУЕТСЯ ВАШЕ ВНИМАНИЕ!`,
+                  { disable_notification: false }
+                ).catch(e => console.error(`Error sending to ${manager}:`, e));
+              }
+            }
+          }
         }
       }
 
@@ -227,53 +254,59 @@ module.exports = (app) => {
           }
 
           const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
+          const requestData = parseRequestMessage(msg.text || msg.caption);
           
           // Для аварийных заявок
           if (isEmergency) {
-            const requestData = parseRequestMessage(msg.text || msg.caption);
-            
-            const updatedText = `${msg.text || msg.caption}\n\n🚨 АВАРИЙНАЯ ЗАЯВКА - ТРЕБУЕТСЯ СРОЧНАЯ РЕАКЦИЯ!`;
-            await editMessageSafe(chatId, messageId, updatedText);
-            
-            const allRecipients = [...new Set([...MANAGERS, ...EXECUTORS])];
-            
-            for (const recipient of allRecipients) {
-              const recipientId = userStorage.get(recipient);
-              if (recipientId) {
+            // 1. Отправляем уведомление в ЛС всем менеджерам
+            for (const manager of MANAGERS) {
+              const managerId = userStorage.get(manager);
+              if (managerId && managerId !== user.id) { // Не дублируем текущему менеджеру
                 await sendMessage(
-                  recipientId,
-                  `🚨 АВАРИЙНАЯ ЗАЯВКА #${row}\n\n` +
+                  managerId,
+                  `🚨 МЕНЕДЖЕР ${username} ПРИНЯЛ АВАРИЙНУЮ ЗАЯВКУ #${row}\n\n` +
                   `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
                   `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
                   `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
-                  `‼️ ТРЕБУЕТСЯ НЕМЕДЛЕННАЯ РЕАКЦИЯ!`,
-                  {
-                    reply_markup: {
-                      inline_keyboard: [
-                        [
-                          { text: '✅ Выполнено', callback_data: `done:${row}` },
-                          { text: '⏳ Ожидает', callback_data: `wait:${row}` },
-                          { text: '❌ Отмена', callback_data: `cancel:${row}` }
-                        ]
-                      ]
-                    },
-                    disable_notification: false
-                  }
-                ).catch(e => console.error(`Error sending to ${recipient}:`, e));
+                  `‼️ ТРЕБУЕТСЯ КОНТРОЛЬ!`,
+                  { disable_notification: false }
+                ).catch(e => console.error(`Error sending to ${manager}:`, e));
               }
             }
+
+            // 2. Показываем кнопки выбора исполнителей
+            const buttons = EXECUTORS.map(e => [
+              { text: e, callback_data: `executor:${e}:${row}` }
+            ]);
+
+            const chooseExecutorMsg = await sendMessage(chatId, `🚨 АВАРИЙНАЯ ЗАЯВКА - выберите исполнителя #${row}:`, {
+              reply_to_message_id: messageId
+            });
+
+            setTimeout(async () => {
+              try {
+                await deleteMessageSafe(chatId, chooseExecutorMsg.data.result.message_id);
+              } catch (e) {
+                console.error('Error deleting choose executor message:', e);
+              }
+            }, 60000);
+
+            await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите исполнителя для аварийной заявки #${row}:`);
             
             await sendToGAS({
               row,
               status: 'Аварийная',
               message_id: messageId,
-              isEmergency: true
+              isEmergency: true,
+              pizzeria: requestData?.pizzeria,
+              problem: requestData?.problem,
+              deadline: requestData?.deadline
             });
             
             return res.sendStatus(200);
           }
           
-          // Показываем кнопки выбора исполнителей
+          // Показываем кнопки выбора исполнителей для обычных заявок
           const buttons = EXECUTORS.map(e => [
             { text: e, callback_data: `executor:${e}:${row}` }
           ]);
@@ -291,12 +324,23 @@ module.exports = (app) => {
           }, 60000);
 
           await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите исполнителя для заявки #${row}:`);
+          
+          await sendToGAS({
+            row,
+            status: 'Принята в работу',
+            message_id: messageId,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline
+          });
+          
           return res.sendStatus(200);
         }
 
         // Обработка выбора исполнителя
         if (data.startsWith('executor:')) {
           const executorUsername = data.split(':')[1];
+          const requestData = parseRequestMessage(msg.text || msg.caption);
           
           // Удаляем сообщение "Выберите исполнителя"
           if (msg.reply_to_message) {
@@ -325,8 +369,6 @@ module.exports = (app) => {
           try {
             const executorId = userStorage.get(executorUsername);
             if (executorId) {
-              const requestData = parseRequestMessage(msg.text || msg.caption);
-              
               await sendMessage(
                 executorId,
                 `📌 Вам назначена заявка #${row}\n\n` +
@@ -334,7 +376,21 @@ module.exports = (app) => {
                 `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
                 `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
                 `⚠️ Приступайте к выполнению`,
-                 catch (e) {
+                {
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        { text: '✅ Выполнено', callback_data: `done:${row}` },
+                        { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+                        { text: '❌ Отмена', callback_data: `cancel:${row}` }
+                      ]
+                    ]
+                  },
+                  disable_notification: false
+                }
+              );
+            }
+          } catch (e) {
             console.error('Ошибка отправки уведомления в ЛС:', e);
           }
 
@@ -342,7 +398,10 @@ module.exports = (app) => {
             row,
             status: 'В работе',
             executor: executorUsername,
-            message_id: messageId
+            message_id: messageId,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline
           });
 
           return res.sendStatus(200);
@@ -393,9 +452,15 @@ module.exports = (app) => {
             reply_to_message_id: messageId 
           });
           
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+          
           await sendToGAS({ 
             row: parseInt(data.split(':')[1]), 
-            status: 'Ожидает поставки' 
+            status: 'Ожидает поставки',
+            executor: username,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline
           });
           
           return res.sendStatus(200);
@@ -413,61 +478,93 @@ module.exports = (app) => {
             reply_to_message_id: messageId 
           });
           
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+          
           await sendToGAS({ 
             row: parseInt(data.split(':')[1]), 
-            status: 'Отменено' 
+            status: 'Отменено',
+            executor: username,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline
           });
           
           return res.sendStatus(200);
         }
       }
+// Обработка обычных сообщений (фото, сумма, комментарий)
+if (body.message && userStates[body.message.chat.id]) {
+  const msg = body.message;
+  const chatId = msg.chat.id;
+  const state = userStates[chatId];
 
-      // Обработка обычных сообщений
-      if (body.message && userStates[body.message.chat.id]) {
-        const msg = body.message;
-        const chatId = msg.chat.id;
-        const state = userStates[chatId];
+  // Инициализация массива, если ещё не был
+  if (!state.userMessages) state.userMessages = [];
 
-        // Получение фото
-        if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          const fileId = msg.photo.at(-1).file_id;
-          state.photoUrl = await getTelegramFileUrl(fileId);
-          
-          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
-          state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
-          
-          return res.sendStatus(200);
-        }
+  // Получение фото
+  if (state.stage === 'waiting_photo' && msg.photo) {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+    
+    const fileId = msg.photo.at(-1).file_id;
+    state.photoUrl = await getTelegramFileUrl(fileId);
 
-        // Получение суммы
-        if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          state.sum = msg.text;
-          
-          const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
-          state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
-          
-          return res.sendStatus(200);
-        }
+    // Сохраняем сообщение пользователя (фото)
+    state.userMessages.push(msg.message_id);
 
-        // Получение комментария
-        if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          state.comment = msg.text;
+    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+    state.stage = 'waiting_sum';
+    state.serviceMessages = [sumMsg.data.result.message_id];
+
+    // Удаление бота и пользователя через минуту
+    setTimeout(() => {
+      deleteMessageSafe(chatId, sumMsg.data.result.message_id);
+      deleteMessageSafe(chatId, msg.message_id);
+    }, 60000);
+
+    return res.sendStatus(200);
+  }
+
+  // Получение суммы
+  if (state.stage === 'waiting_sum' && msg.text) {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+
+    state.sum = msg.text;
+    state.userMessages.push(msg.message_id);
+
+    const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
+    state.stage = 'waiting_comment';
+    state.serviceMessages = [commentMsg.data.result.message_id];
+
+    setTimeout(() => {
+      deleteMessageSafe(chatId, commentMsg.data.result.message_id);
+      deleteMessageSafe(chatId, msg.message_id);
+    }, 60000);
+
+    return res.sendStatus(200);
+  }
+
+  // Получение комментария
+  if (state.stage === 'waiting_comment' && msg.text) {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+
+    state.comment = msg.text;
+    state.userMessages.push(msg.message_id);
+
+    // Здесь логика отправки в таблицу и финального сообщения (не показана)
+
+    // Удаление всех сообщений (бота и пользователя) через минуту
+    setTimeout(() => {
+      for (const msgId of [...state.serviceMessages, ...state.userMessages]) {
+        deleteMessageSafe(chatId, msgId);
+      }
+    }, 60000);
+
+    // Очистка состояния
+    delete userStates[chatId];
+
+    return res.sendStatus(200);
+  }
+}
 
           const completionData = {
             row: state.row,
@@ -478,7 +575,10 @@ module.exports = (app) => {
             originalRequest: state.originalRequest,
             delayDays: calculateDelayDays(state.originalRequest?.deadline),
             status: 'Выполнено',
-            isEmergency: state.isEmergency
+            isEmergency: state.isEmergency,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline
           };
 
           await editMessageSafe(
