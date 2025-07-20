@@ -711,102 +711,84 @@ if (body.message && userStates[body.message.chat.id]) {
     }
   }
 // Обработка комментария
-// Обработка комментария
-// Обработка комментария
-// Обработка комментария
-if (state.stage === 'waiting_comment' && msg.text) {
+
+} else if (step === 'waitingComment' && message.text) {
   try {
-    const comment = msg.text;
+    const comment = message.text;
+    state.comment = comment;
+    const { photoUrl, sum, row, username, executor } = state;
+    const now = new Date();
+    const actualDate = `${now.getFullYear()}-${(now.getMonth() + 1)
+      .toString()
+      .padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
 
-    // Удаляем сообщение с запросом комментария (если есть)
-    if (state.serviceMessages?.length) {
-      await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(e => 
-        console.warn('⚠️ Не удалось удалить сообщение запроса комментария:', e.message)
-      );
-    }
+    console.log(`✅ [Комментарий получен] от ${username}, строка: ${row}`);
+    console.log(`📷 Фото: ${photoUrl}`);
+    console.log(`💰 Сумма: ${sum}`);
+    console.log(`💬 Комментарий: ${comment}`);
 
-    // Проверка обязательных данных
-    if (!state.chatId || !state.messageId || !state.row) {
-      console.error('❌ Не хватает обязательных данных: chatId, messageId или row');
-      await sendMessage(chatId, '❌ Ошибка: не удалось завершить заявку. Попробуйте ещё раз.');
-      return res.sendStatus(200);
-    }
-
-    // Формируем данные для закрытия
-    const completionData = {
-      row: state.row,
-      photoUrl: state.photoUrl,
-      sum: state.sum,
+    // Отправка на Google Apps Script
+    const response = await axios.post(GAS_WEB_APP_URL, {
+      photo: photoUrl,
+      sum,
       comment,
-      executor: state.username,
-      originalRequest: state.originalRequest,
-      isEmergency: state.isEmergency,
-      isFromLS: state.isFromLS,
-      delayDays: calculateDelayDays(state.originalRequest?.deadline),
-      message_id: state.messageId,
-      status: 'Выполнено'
-    };
+      username,
+      row,
+      executor,
+      actualDate,
+      action: 'close',
+    });
 
-    const formattedMessage = formatCompletionMessage(completionData, state.photoUrl);
-    if (!formattedMessage) {
-      console.error('❌ formatCompletionMessage вернул пустую строку');
+    console.log(`📤 Данные успешно отправлены в Google Apps Script`);
+
+    // Получаем просрочку
+    const delay = response.data.delay || 0;
+
+    const originalMessageId = state.originalMessageId;
+    const chatId = message.chat.id;
+
+    const updatedText = `📌 Заявка #${row} закрыта.\n📎 Фото: [ссылка](${photoUrl})\n💰 Сумма: ${sum} сум\n👤 Исполнитель: @${executor}\n✅ Статус: Выполнено\n⏱ Просрочка: ${delay} дн.`;
+
+    // Обновляем материнское сообщение
+    if (originalMessageId) {
+      await axios.post(`${TELEGRAM_API}/editMessageText`, {
+        chat_id: chatId,
+        message_id: originalMessageId,
+        text: updatedText,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: false,
+      });
+      console.log(`✏️ Сообщение заявки #${row} обновлено`);
+    } else {
+      console.log(`⚠️ originalMessageId не найден`);
     }
 
-    // 1. Обновляем основное сообщение (с удалением кнопок)
-    await editMessageSafe(
-      state.chatId,
-      state.messageId,
-      formattedMessage,
-      {
-        disable_web_page_preview: false,
-        reply_markup: { inline_keyboard: [] }
-      }
-    )
-    .then(() => console.log('✅ Основное сообщение успешно отредактировано'))
-    .catch(e => console.error('❌ Ошибка при редактировании сообщения:', e));
+    // Удаляем кнопки
+    if (originalMessageId) {
+      await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+        chat_id: chatId,
+        message_id: originalMessageId,
+        reply_markup: { inline_keyboard: [] },
+      });
+      console.log(`🧹 Кнопки заявки #${row} удалены`);
+    }
 
-    // 2. Отправляем данные в Google Apps Script
-    await sendToGAS(completionData)
-      .then(() => console.log('📤 Данные успешно отправлены в GAS'))
-      .catch(e => console.error('❌ Ошибка при отправке в GAS:', e));
+    // Финальное сообщение
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text: `✅ Заявка #${row} успешно закрыта.`,
+    });
 
-    // 3. Отправляем исполнителю финальное сообщение
-    await sendMessage(
-      chatId,
-      `✅ Заявка #${state.row} успешно закрыта\n` +
-      `💰 Сумма: ${state.sum || '0'} сум\n` +
-      `👤 Исполнитель: ${state.username}\n` +
-      `📝 Комментарий: ${comment}`
-    ).catch(e => console.error('❌ Ошибка при отправке подтверждения исполнителю:', e));
-
-    // 4. Обновляем ссылку на Google Диск через 3 минуты
-    setTimeout(async () => {
-      try {
-        const diskUrl = await getGoogleDiskLink(state.row);
-        if (diskUrl) {
-          const updatedMessage = formatCompletionMessage(completionData, diskUrl);
-          await editMessageSafe(
-            state.chatId,
-            state.messageId,
-            updatedMessage,
-            { disable_web_page_preview: false }
-          );
-          console.log('🔁 Ссылка на диск обновлена в сообщении');
-        }
-      } catch (e) {
-        console.error('⚠️ Ошибка при обновлении ссылки на диск:', e);
-      }
-    }, 180000);
-
-    // 5. Очищаем состояние
+    // Очистка состояния
     delete userStates[chatId];
-    console.log('🧹 Состояние пользователя очищено');
+    console.log(`🗑 Состояние пользователя очищено`);
 
-  } catch (e) {
-    console.error('💥 Критическая ошибка при завершении заявки:', e);
-    await sendMessage(chatId, '❌ Произошла ошибка при завершении заявки');
-    await clearUserState(chatId);
-  } finally {
-    return res.sendStatus(200);
+  } catch (error) {
+    console.error('❌ Ошибка при закрытии заявки:', error.message);
+    console.error(error.stack);
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: message.chat.id,
+      text: `❌ Ошибка при закрытии заявки: ${error.message}`,
+    });
   }
 }
