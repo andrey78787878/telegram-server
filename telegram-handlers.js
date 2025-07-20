@@ -709,95 +709,112 @@ module.exports = (app, userStates) => {
 
     // Обработка фото
 // Обработка фото
-if (state.stage === 'waiting_photo' && msg.photo) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+// Обработка обычных сообщений (фото, сумма, комментарий)
+if (body.message && userStates[body.message.chat.id]) {
+  const msg = body.message;
+  const chatId = msg.chat.id;
+  const state = userStates[chatId];
 
-  const fileId = msg.photo[msg.photo.length - 1].file_id;
-  state.completionData = {
-    photoFileId: fileId,
-    messageId: msg.message_id,
-  };
-  const sent = await bot.sendMessage(chatId, '💰 Введите сумму (числом):', {
-    reply_to_message_id: msg.message_id,
-  });
-  state.stage = 'waiting_sum';
-  state.serviceMessages = [sent.message_id];
-  return res.sendStatus(200);
-}
-
-// Обработка суммы
-if (state.stage === 'waiting_sum' && msg.text) {
-  const sum = msg.text.replace(/\D/g, '');
-  if (!sum) {
-    const sent = await bot.sendMessage(chatId, '❗ Введите корректную сумму (числом).');
-    state.serviceMessages.push(sent.message_id);
+  // Обработка команды отмены
+  if (msg.text === '/cancel') {
+    await clearUserState(chatId);
+    await sendMessage(chatId, '❌ Процесс завершения заявки отменен');
     return res.sendStatus(200);
   }
 
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
+  // Обработка фото
+  if (state.stage === 'waiting_photo' && msg.photo) {
+    try {
+      // Удаляем сообщение с запросом фото
+      await deleteMessageSafe(chatId, state.serviceMessages[0]);
+      
+      // Получаем файл фото
+      const fileId = msg.photo[msg.photo.length - 1].file_id;
+      const fileUrl = await getTelegramFileUrl(fileId);
+      
+      // Сохраняем информацию о фото
+      state.photoUrl = fileUrl;
+      state.stage = 'waiting_sum';
+      
+      // Запрашиваем сумму
+      const sumMessage = await sendMessage(chatId, '💰 Введите сумму:');
+      state.serviceMessages.push(sumMessage.data.result.message_id);
+      
+      return res.sendStatus(200);
+    } catch (e) {
+      console.error('Ошибка обработки фото:', e);
+      await clearUserState(chatId);
+      await sendMessage(chatId, '❌ Ошибка обработки фото. Попробуйте снова.');
+      return res.sendStatus(200);
+    }
+  }
 
-  state.completionData.sum = sum;
-  const sent = await bot.sendMessage(chatId, '💬 Введите комментарий к заявке:');
-  state.stage = 'waiting_comment';
-  state.serviceMessages = [sent.message_id];
-  return res.sendStatus(200);
+  // Обработка суммы
+  if (state.stage === 'waiting_sum' && msg.text) {
+    try {
+      // Удаляем сообщение с запросом суммы
+      await deleteMessageSafe(chatId, state.serviceMessages[1]);
+      
+      // Проверяем, что сумма - число
+      const sum = msg.text.trim();
+      if (!/^\d+$/.test(sum)) {
+        throw new Error('Неверный формат суммы');
+      }
+      
+      state.sum = sum;
+      state.stage = 'waiting_comment';
+      
+      // Запрашиваем комментарий
+      const commentMessage = await sendMessage(chatId, '💬 Введите комментарий:');
+      state.serviceMessages.push(commentMessage.data.result.message_id);
+      
+      return res.sendStatus(200);
+    } catch (e) {
+      console.error('Ошибка обработки суммы:', e);
+      await clearUserState(chatId);
+      await sendMessage(chatId, '❌ Неверный формат суммы. Введите только цифры.');
+      return res.sendStatus(200);
+    }
+  }
+
+  // Обработка комментария
+  if (state.stage === 'waiting_comment' && msg.text) {
+    try {
+      // Удаляем сообщение с запросом комментария
+      await deleteMessageSafe(chatId, state.serviceMessages[2]);
+      
+      // Сохраняем комментарий
+      state.comment = msg.text;
+      state.executor = state.username;
+      
+      // Рассчитываем просрочку
+      state.delayDays = calculateDelayDays(state.originalRequest?.deadline);
+      
+      // Формируем данные для завершения
+      const completionData = {
+        row: state.row,
+        photoUrl: state.photoUrl,
+        sum: state.sum,
+        comment: state.comment,
+        executor: state.executor,
+        originalRequest: state.originalRequest,
+        isEmergency: state.isEmergency,
+        isFromLS: state.isFromLS,
+        delayDays: state.delayDays
+      };
+      
+      // Синхронизируем статус заявки
+      await syncRequestStatus(state.chatId, state.messageId, completionData);
+      
+      // Очищаем состояние
+      await clearUserState(chatId);
+      
+      return res.sendStatus(200);
+    } catch (e) {
+      console.error('Ошибка обработки комментария:', e);
+      await clearUserState(chatId);
+      await sendMessage(chatId, '❌ Ошибка обработки комментария. Попробуйте снова.');
+      return res.sendStatus(200);
+    }
+  }
 }
-
-// Обработка комментария
-if (state.stage === 'waiting_comment' && msg.text) {
-  const comment = msg.text.trim();
-  await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(console.error);
-
-  const { sum, photoFileId, messageId } = state.completionData;
-
-  // Получаем ссылку на фото из Telegram
-  const fileInfo = await axios.get(`${TELEGRAM_API}/getFile?file_id=${photoFileId}`);
-  const filePath = fileInfo.data.result.file_path;
-  const fileUrl = `${TELEGRAM_FILE_API}/${filePath}`;
-
-  // Загружаем фото на Google Диск
-  const photoResponse = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-  const form = new FormData();
-  form.append('photo', Buffer.from(photoResponse.data), {
-    filename: 'done.jpg',
-    contentType: 'image/jpeg',
-  });
-  form.append('sum', sum);
-  form.append('comment', comment);
-  form.append('message_id', messageId);
-  form.append('row', state.row);
-  form.append('username', `@${msg.from.username}`);
-  form.append('executor', `@${msg.from.username}`);
-
-  // Отправляем данные в Google Apps Script
-  await sendToGAS(form).catch(console.error);
-
-  // Удаляем кнопки управления
-  await sendButtonsWithRetry(state.chatId, state.messageId, []).catch(console.error);
-
-  // Отправляем финальное сообщение
-  const finalMessage = `📌 Заявка #${state.row} закрыта.\n📎 Фото: [ссылка будет в таблице]\n💰 Сумма: ${sum} сум\n👤 Исполнитель: @${msg.from.username}\n✅ Статус: Выполнено`;
-  const sent = await bot.sendMessage(chatId, finalMessage, {
-    reply_to_message_id: state.messageId,
-  });
-
-  // Удаление всех промежуточных сообщений через 60 секунд
-  setTimeout(() => {
-    const toDelete = [msg.message_id, ...state.serviceMessages];
-    toDelete.forEach(messageId =>
-      deleteMessageSafe(chatId, messageId).catch(console.error)
-    );
-  }, 60000);
-
-  // Очищаем состояние
-  delete userStates[chatId];
-
-  return res.sendStatus(200);
-}
-
-} catch (error) {
-  console.error('Webhook error:', error);
-  return res.sendStatus(500);
-}
-}); // закрывает app.post('/webhook'
-}); // закрывает module.exports
