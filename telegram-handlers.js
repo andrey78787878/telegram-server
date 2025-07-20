@@ -711,77 +711,61 @@ if (body.message && userStates[body.message.chat.id]) {
     }
   }
 // Обработка комментария
-if (state.stage === 'waiting_comment' && msg.text) {
-  try {
-    // Удаляем сообщение с запросом комментария
-    await deleteMessageSafe(chatId, state.serviceMessages[0]);
-    
-    // Сохраняем комментарий
-    const comment = msg.text;
+// Обработка комментария
+await axios.post(`${TELEGRAM_API}/sendMessage`, {
+  chat_id: chatId,
+  text: '📝 Добавьте комментарий (по необходимости):',
+  reply_to_message_id: message.message_id,
+});
 
-    // Формируем данные для завершения заявки
-    const completionData = {
-      row: state.row,
-      photoUrl: state.photoUrl,
-      sum: state.sum,
-      comment: comment,
-      executor: state.username,
-      originalRequest: state.originalRequest,
-      isEmergency: state.isEmergency,
-      isFromLS: state.isFromLS,
-      delayDays: calculateDelayDays(state.originalRequest?.deadline),
-      message_id: state.messageId,
-      status: 'Выполнено'
-    };
+} else if (step === 'waitingComment' && message.text) {
+  const comment = message.text;
+  state.comment = comment;
 
-    // 1. Обновляем основное сообщение в чате
-    await editMessageSafe(
-      state.chatId, 
-      state.messageId, 
-      formatCompletionMessage(completionData, state.photoUrl),
-      { disable_web_page_preview: false }
-    );
+  const { photoUrl, sum, messageId: parentMsgId } = state;
 
-    // 2. Отправляем данные в Google Apps Script
-    await sendToGAS(completionData);
+  const payload = {
+    photo: photoUrl,
+    sum,
+    comment,
+    row,
+    username,
+    message_id: parentMsgId,
+  };
 
-    // 3. Отправляем финальное подтверждение исполнителю
-    const finalText = `📌 Заявка #${state.row} закрыта.\n` +
-                     (state.photoUrl ? `📎 Фото: ${state.photoUrl}\n` : '') +
-                     `💰 Сумма: ${state.sum || '0'} сум\n` +
-                     `👤 Исполнитель: ${state.username}\n` +
-                     `📝 Комментарий: ${comment}`;
+  const gasResponse = await axios.post(GAS_WEB_APP_URL, payload);
+  console.log('📤 Data sent to GAS:', gasResponse.status);
 
-    await sendMessage(chatId, finalText);
+  // Получаем ссылку на фото и просрочку из ответа GAS (если реализовано)
+  const { photo_link, overdue_days } = gasResponse.data;
 
-    // 4. Обновляем ссылку на диск через 3 минуты
-    setTimeout(async () => {
-      try {
-        const diskUrl = await getGoogleDiskLink(state.row);
-        if (diskUrl) {
-          await editMessageSafe(
-            state.chatId, 
-            state.messageId, 
-            formatCompletionMessage(completionData, diskUrl),
-            { disable_web_page_preview: false }
-          );
-        }
-      } catch (e) {
-        console.error('Error updating disk link:', e);
-      }
-    }, 180000);
+  // Формируем финальный текст
+  const finalText = `📌 Заявка #${row} закрыта.\n📎 Фото: ${photo_link || '—'}\n💰 Сумма: ${sum} сум\n👤 Исполнитель: ${username}\n✅ Статус: Выполнено\n🔴 Просрочка: ${overdue_days || 0} дн.`;
 
-    // 5. Удаляем кнопки из исходного сообщения
-    await sendButtonsWithRetry(state.chatId, state.messageId, []);
+  // Обновляем материнское сообщение
+  await axios.post(`${TELEGRAM_API}/editMessageText`, {
+    chat_id: chatId,
+    message_id: parentMsgId,
+    text: finalText,
+    parse_mode: 'HTML',
+  });
 
-    // 6. Очищаем состояние
-    delete userStates[chatId];
-    
-    return res.sendStatus(200);
-  } catch (e) {
-    console.error('Ошибка завершения заявки:', e);
-    await clearUserState(chatId);
-    await sendMessage(chatId, '❌ Ошибка при завершении заявки');
-    return res.sendStatus(200);
-  }
+  // Удаляем кнопки у родительского сообщения
+  await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+    chat_id: chatId,
+    message_id: parentMsgId,
+    reply_markup: { inline_keyboard: [] },
+  });
+
+  // Удаление сервисных сообщений
+  setTimeout(() => {
+    [message.message_id].forEach(msgId => {
+      axios.post(`${TELEGRAM_API}/deleteMessage`, {
+        chat_id: chatId,
+        message_id: msgId,
+      }).catch(console.error);
+    });
+  }, 60000);
+
+  delete userStates[chatId];
 }
