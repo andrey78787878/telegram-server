@@ -712,43 +712,43 @@ if (body.message && userStates[body.message.chat.id]) {
   }
 
       // Обработка комментария
+    // ... (предыдущий код остается без изменений)
+
+      // Обработка комментария
       if (state.stage === 'waiting_comment' && msg.text) {
         try {
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          state.comment = msg.text;
-          state.executor = state.username;
-          state.delayDays = calculateDelayDays(state.originalRequest?.deadline);
           
           const completionData = {
             row: state.row,
             photoUrl: state.photoUrl,
             sum: state.sum,
-            comment: state.comment,
-            executor: state.executor,
+            comment: msg.text,
+            executor: state.username,
             originalRequest: state.originalRequest,
             isEmergency: state.isEmergency,
             isFromLS: state.isFromLS,
-            delayDays: state.delayDays,
+            delayDays: calculateDelayDays(state.originalRequest?.deadline),
             message_id: state.messageId
           };
           
           await syncRequestStatus(state.chatId, state.messageId, completionData);
           await clearUserState(chatId);
           return res.sendStatus(200);
+          
         } catch (e) {
-          console.error('Ошибка обработки комментария:', e);
+          console.error('Comment processing error:', e);
           await clearUserState(chatId);
-          await sendMessage(chatId, '❌ Ошибка обработки комментария. Попробуйте снова.');
+          await sendMessage(chatId, '❌ Ошибка обработки комментария');
           return res.sendStatus(200);
         }
       }
-    } // закрываем if (body.message && userStates[body.message.chat.id])
+    }
+    
+    return res.sendStatus(200);
+    
   } catch (error) {
-    console.error('Глобальная ошибка обработки webhook:', error);
+    console.error('Webhook handler error:', error);
     return res.sendStatus(500);
   }
-}); // закрываем app.post('/webhook')
-
-// Уберите дублирующийся module.exports в конце файла!
-// Весь код обработчика должен быть внутри одного module.exports
+});
