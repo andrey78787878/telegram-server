@@ -713,17 +713,22 @@ if (body.message && userStates[body.message.chat.id]) {
 // Обработка комментария
 // Обработка комментария
 // Обработка комментария
+// Обработка комментария
 if (state.stage === 'waiting_comment' && msg.text) {
   try {
-    // Удаляем сообщение с запросом комментария
-    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+    // Удаляем сообщение с запросом комментария (если существует)
+    if (state.serviceMessages && state.serviceMessages.length > 0) {
+      await deleteMessageSafe(chatId, state.serviceMessages[0]).catch(e => 
+        console.log('Не удалось удалить сообщение:', e.message)
+      );
+    }
     
-    // Формируем данные для завершения заявки
+    const comment = msg.text;
     const completionData = {
       row: state.row,
       photoUrl: state.photoUrl,
       sum: state.sum,
-      comment: msg.text,
+      comment: comment,
       executor: state.username,
       originalRequest: state.originalRequest,
       isEmergency: state.isEmergency,
@@ -733,28 +738,28 @@ if (state.stage === 'waiting_comment' && msg.text) {
       status: 'Выполнено'
     };
 
-    // 1. Обновляем основное сообщение в чате
+    // 1. Обновляем основное сообщение
     await editMessageSafe(
       state.chatId, 
       state.messageId, 
       formatCompletionMessage(completionData, state.photoUrl),
       { 
         disable_web_page_preview: false,
-        reply_markup: { inline_keyboard: [] } // Удаляем кнопки
+        reply_markup: { inline_keyboard: [] } // Убираем кнопки
       }
+    ).catch(e => console.error('Ошибка обновления сообщения:', e));
+
+    // 2. Отправляем данные в GAS
+    await sendToGAS(completionData).catch(e => 
+      console.error('Ошибка отправки в GAS:', e)
     );
 
-    // 2. Отправляем данные в Google Apps Script
-    await sendToGAS(completionData);
-
-    // 3. Отправляем финальное подтверждение исполнителю
-    const finalText = `📌 Заявка #${state.row} закрыта.\n` +
-                     (state.photoUrl ? `📎 Фото: ${state.photoUrl}\n` : '') +
-                     `💰 Сумма: ${state.sum || '0'} сум\n` +
-                     `👤 Исполнитель: ${state.username}\n` +
-                     `📝 Комментарий: ${msg.text}`;
-
-    await sendMessage(chatId, finalText);
+    // 3. Отправляем подтверждение исполнителю
+    await sendMessage(
+      chatId,
+      `✅ Заявка #${state.row} успешно закрыта\n` +
+      `📝 Комментарий: ${comment}`
+    ).catch(e => console.error('Ошибка отправки подтверждения:', e));
 
     // 4. Обновляем ссылку на диск через 3 минуты
     setTimeout(async () => {
@@ -769,19 +774,18 @@ if (state.stage === 'waiting_comment' && msg.text) {
           );
         }
       } catch (e) {
-        console.error('Error updating disk link:', e);
+        console.error('Ошибка обновления ссылки на диск:', e);
       }
     }, 180000);
 
     // 5. Очищаем состояние
     delete userStates[chatId];
     
-    return res.sendStatus(200);
   } catch (e) {
-    console.error('Ошибка завершения заявки:', e);
+    console.error('Критическая ошибка при завершении заявки:', e);
+    await sendMessage(chatId, '❌ Произошла ошибка при завершении заявки');
     await clearUserState(chatId);
-    await sendMessage(chatId, '❌ Ошибка при завершении заявки');
+  } finally {
     return res.sendStatus(200);
   }
 }
-
