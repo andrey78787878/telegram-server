@@ -7,8 +7,8 @@ const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
-const MANAGERS = ['@EvelinaB87', '@Andrey_Tkach_MB', '@Davr_85'];
-const EXECUTORS = ['@EvelinaB87', '@Olim19', '@Oblayor_04_09', '@Andrey_Tkach_MB', '@Davr_85', '@Andrey_tkach_y'];
+const MANAGERS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
+const EXECUTORS = ['@Andrey_Tkach_MB', '@Andrey_tkach_y'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id (username -> id)
@@ -18,7 +18,7 @@ const userStorage = new Map();
 function extractRowFromCallbackData(callbackData) {
   if (!callbackData) return null;
   const parts = callbackData.split(':');
-  return parts.length > 2 ? parseInt(parts[2], 10) : null;
+  return parts.length > 1 ? parseInt(parts[parts.length - 1], 10) : null;
 }
 
 function extractRowFromMessage(text) {
@@ -61,18 +61,15 @@ function calculateDelayDays(deadline) {
 function formatCompletionMessage(data, diskUrl = null) {
   const photoLink = diskUrl ? diskUrl : (data.photoUrl ? data.photoUrl : null);
   return `
-📌 Заявка #${data.row} закрыта.
+✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта
 ${photoLink ? `\n📸 ${photoLink}\n` : ''}
-Суть проблемы: ${data.originalRequest?.problem || 'не указано'}
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor}
-✅ Статус: Выполнено
 ${data.delayDays > 0 ? `🔴 Просрочка: ${data.delayDays} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
-🙋 Инициатор: ${data.originalRequest?.initiator || 'не указано'}
-${data.originalRequest?.phone ? `📞 Телефон: ${data.originalRequest.phone}` : ''}
+🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
   `.trim();
 }
 
@@ -208,8 +205,9 @@ module.exports = (app) => {
 
         // Извлечение номера заявки
         const row = extractRowFromCallbackData(data) || extractRowFromMessage(msg.text || msg.caption);
-        if (!row) {
+        if (!row || isNaN(row)) {
           console.error('Не удалось извлечь номер заявки');
+          await sendMessage(chatId, '❌ Ошибка: не найден номер заявки');
           return res.sendStatus(200);
         }
 
@@ -221,16 +219,65 @@ module.exports = (app) => {
         }
 
         // Обработка кнопки "Принять в работу"
-        if (data === 'accept') {
+        if (data.startsWith('accept') || data === 'accept') {
           if (!MANAGERS.includes(username)) {
             const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
             setTimeout(() => deleteMessageSafe(chatId, notManagerMsg.data.result.message_id), 30000);
             return res.sendStatus(200);
           }
 
+          const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
+          
+          // Для аварийных заявок
+          if (isEmergency) {
+            const requestData = parseRequestMessage(msg.text || msg.caption);
+            
+            const updatedText = `${msg.text || msg.caption}\n\n🚨 АВАРИЙНАЯ ЗАЯВКА - ТРЕБУЕТСЯ СРОЧНАЯ РЕАКЦИЯ!`;
+            await editMessageSafe(chatId, messageId, updatedText);
+            
+            const allRecipients = [...new Set([...MANAGERS, ...EXECUTORS])];
+            
+            for (const recipient of allRecipients) {
+              const recipientId = userStorage.get(recipient);
+              if (recipientId) {
+                await sendMessage(
+                  recipientId,
+                  `🚨 АВАРИЙНАЯ ЗАЯВКА #${row}\n\n` +
+                  `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+                  `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+                  `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+                  `‼️ ТРЕБУЕТСЯ НЕМЕДЛЕННАЯ РЕАКЦИЯ!`,
+                  {
+                    reply_markup: {
+                      inline_keyboard: [
+                        [
+                          { text: '✅ Выполнено', callback_data: `done:${row}` },
+                          { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+                          { text: '❌ Отмена', callback_data: `cancel:${row}` }
+                        ]
+                      ]
+                    },
+                    disable_notification: false
+                  }
+                ).catch(e => console.error(`Error sending to ${recipient}:`, e));
+              }
+            }
+            
+            await sendToGAS({
+              row,
+              status: 'Аварийная',
+              message_id: messageId,
+              isEmergency: true
+            });
+            
+            return res.sendStatus(200);
+          }
+          
+          // Обновляем сообщение в чате
           const updatedText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе`;
           await editMessageSafe(chatId, messageId, updatedText);
 
+          // Показываем кнопки выбора исполнителей
           const buttons = EXECUTORS.map(e => [
             { text: e, callback_data: `executor:${e}:${row}` }
           ]);
@@ -239,7 +286,6 @@ module.exports = (app) => {
             reply_to_message_id: messageId
           });
 
-          // Удаляем сообщение выбора исполнителя через 1 минуту
           setTimeout(async () => {
             try {
               await deleteMessageSafe(chatId, chooseExecutorMsg.data.result.message_id);
@@ -265,54 +311,60 @@ module.exports = (app) => {
           const newText = `${msg.text || msg.caption}\n\n🟢 Заявка в работе (исполнитель: ${executorUsername})`;
           await editMessageSafe(chatId, messageId, newText);
 
-          // Отправляем уведомление в чат
+          // Меняем кнопки на действия
+          const actionButtons = [
+            [
+              { text: '✅ Выполнено', callback_data: `done:${row}` },
+              { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+              { text: '❌ Отмена', callback_data: `cancel:${row}` }
+            ]
+          ];
+
+          await sendButtonsWithRetry(chatId, messageId, actionButtons, `Выберите действие для заявки #${row}:`);
+
+          // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
           await sendMessage(
             chatId,
             `📢 ${executorUsername}, вам назначена заявка #${row}!`,
             { reply_to_message_id: messageId }
           );
 
-if (data.startsWith('executor:')) {
-  const executorUsername = data.split(':')[1];
-  
-  // Отправляем пуш в ЛС исполнителю
-  try {
-    const executorId = userStorage.get(executorUsername);
-    console.log('Debug: Attempting to send PM to:', {
-      executorUsername,
-      executorId,
-      userStorage: Array.from(userStorage.entries())
-    });
+          // Дублируем уведомление в ЛС исполнителю
+          try {
+            const executorId = userStorage.get(executorUsername);
+            if (executorId) {
+              const requestData = parseRequestMessage(msg.text || msg.caption);
+              
+              await sendMessage(
+                executorId,
+                `📌 Вам назначена заявка #${row}\n\n` +
+                `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+                `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+                `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+                `⚠️ Приступайте к выполнению`,
+                { 
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        { text: '✅ Выполнено', callback_data: `done:${row}` },
+                        { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+                        { text: '❌ Отмена', callback_data: `cancel:${row}` }
+                      ]
+                    ]
+                  },
+                  disable_notification: false 
+                }
+              );
+            }
+          } catch (e) {
+            console.error('Ошибка отправки уведомления в ЛС:', e);
+          }
 
-    if (executorId) {
-      const requestData = parseRequestMessage(msg.text || msg.caption);
-      await sendMessage(
-        executorId,
-        `📌 Вам назначена новая заявка #${row}\n\n` +
-        `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
-        `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
-        `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
-        `⚠️ Пожалуйста, приступайте к выполнению!`
-      );
-      console.log('Debug: PM successfully sent to', executorUsername);
-    } else {
-      console.error('Debug: Executor ID not found for', executorUsername);
-    }
-  } catch (e) {
-    console.error('Ошибка отправки уведомления в ЛС:', {
-      error: e,
-      executorUsername,
-      executorId,
-      stack: e.stack
-    });
-  }
-}
-          // Отправляем данные в GAS
           await sendToGAS({
             row,
             status: 'В работе',
             executor: executorUsername,
-            message_id: messageId,
+            message_id: messageId
           });
 
           return res.sendStatus(200);
@@ -327,7 +379,12 @@ if (data.startsWith('executor:')) {
           }
 
           // Отправляем запрос на фото
-          const photoMsg = await sendMessage(chatId, '📸 Пришлите фото выполненных работ');
+          const photoMsg = await sendMessage(
+            chatId, 
+            '📸 Пришлите фото выполненных работ\n\n' +
+            '⚠️ Для отмены нажмите /cancel',
+            { reply_to_message_id: messageId }
+          );
           
           userStates[chatId] = {
             stage: 'waiting_photo',
@@ -335,10 +392,10 @@ if (data.startsWith('executor:')) {
             username,
             messageId,
             originalRequest: parseRequestMessage(msg.text || msg.caption),
-            serviceMessages: [photoMsg.data.result.message_id]
+            serviceMessages: [photoMsg.data.result.message_id],
+            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
           };
 
-          // Удалим запрос через 2 минуты
           setTimeout(() => {
             deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e));
           }, 120000);
@@ -395,18 +452,15 @@ if (data.startsWith('executor:')) {
 
         // Получение фото
         if (state.stage === 'waiting_photo' && msg.photo) {
-          // Удаляем предыдущий запрос
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
           
           const fileId = msg.photo.at(-1).file_id;
           state.photoUrl = await getTelegramFileUrl(fileId);
           
-          // Запрашиваем сумму
           const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
           state.stage = 'waiting_sum';
           state.serviceMessages = [sumMsg.data.result.message_id];
           
-          // Удалим запрос через 2 минуты
           setTimeout(() => {
             deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
           }, 120000);
@@ -416,17 +470,14 @@ if (data.startsWith('executor:')) {
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
-          // Удаляем предыдущий запрос
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
           
           state.sum = msg.text;
           
-          // Запрашиваем комментарий
           const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
           state.stage = 'waiting_comment';
           state.serviceMessages = [commentMsg.data.result.message_id];
           
-          // Удалим запрос через 2 минуты
           setTimeout(() => {
             deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
           }, 120000);
@@ -436,12 +487,10 @@ if (data.startsWith('executor:')) {
 
         // Получение комментария
         if (state.stage === 'waiting_comment' && msg.text) {
-          // Удаляем предыдущий запрос
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
           
           state.comment = msg.text;
 
-          // Формируем данные для отправки
           const completionData = {
             row: state.row,
             sum: state.sum,
@@ -450,10 +499,10 @@ if (data.startsWith('executor:')) {
             executor: state.username,
             originalRequest: state.originalRequest,
             delayDays: calculateDelayDays(state.originalRequest?.deadline),
-            status: 'Выполнено'
+            status: 'Выполнено',
+            isEmergency: state.isEmergency
           };
 
-          // Сначала отправляем с телеграм-ссылкой (с предпросмотром)
           await editMessageSafe(
             chatId, 
             state.messageId, 
@@ -461,10 +510,8 @@ if (data.startsWith('executor:')) {
             { disable_web_page_preview: false }
           );
 
-          // Отправляем данные в GAS
           await sendToGAS(completionData);
 
-          // Через 3 минуты обновляем с Google Disk ссылкой
           setTimeout(async () => {
             try {
               const diskUrl = await getGoogleDiskLink(state.row);
@@ -481,7 +528,6 @@ if (data.startsWith('executor:')) {
             }
           }, 180000);
 
-          // Удаляем кнопки
           await sendButtonsWithRetry(chatId, state.messageId, []);
 
           delete userStates[chatId];
