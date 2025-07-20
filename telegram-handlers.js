@@ -752,4 +752,10 @@ if (body.message && userStates[body.message.chat.id]) {
       return res.sendStatus(200);
     }
   }
-}
+} // закрываем обработку обычных сообщений
+
+// Закрываем обработчик webhook
+}); // закрываем app.post('/webhook'
+
+// Закрываем экспорт модуля
+}); // закрываем module.exports
