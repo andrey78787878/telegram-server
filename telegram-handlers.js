@@ -643,79 +643,113 @@ if (body.message && userStates[body.message.chat.id]) {
 
   // Обработка фото
    // Обработка фото
-      if (state.stage === 'waiting_photo' && message.photo) {
-        console.log('[ЭТАП] Фото получено');
-        const photo = message.photo[message.photo.length - 1];
-        const file = await downloadFile(photo.file_id);
+// Обработка обычных сообщений (фото, сумма, комментарий)
+if (body.message && userStates[body.message.chat.id]) {
+  const msg = body.message;
+  const chatId = msg.chat.id;
+  const state = userStates[chatId];
 
-        const form = new FormData();
-        form.append('photo', file.stream, file.filename);
-        form.append('row', state.row);
-        form.append('message_id', state.originalMessageId);
-        form.append('username', state.username);
+  // Обработка команды отмены
+  if (msg.text === '/cancel') {
+    await clearUserState(chatId);
+    await sendMessage(chatId, '❌ Процесс завершения заявки отменен');
+    return res.sendStatus(200);
+  }
 
-        const { data } = await axios.post(`${GAS_WEB_APP_URL}?stage=photo`, form, {
-          headers: form.getHeaders()
-        });
-
-        const reply = await sendMessage(chatId, '✅ Фото получено. Введите сумму работ в формате: 150000', {
-          reply_to_message_id: message.message_id
-        });
-
-        state.stage = 'waiting_sum';
-        state.serviceMessages.push(reply.message_id);
-        return res.sendStatus(200);
-      }
-
-      // Обработка суммы
-      if (state.stage === 'waiting_sum' && message.text) {
-        console.log('[ЭТАП] Сумма получена');
-        const sum = parseInt(message.text.replace(/\D/g, ''));
-        if (isNaN(sum)) {
-          const reply = await sendMessage(chatId, '🚫 Введите сумму числом, например: 150000', {
-            reply_to_message_id: message.message_id
-          });
-          state.serviceMessages.push(reply.message_id);
-          return res.sendStatus(200);
-        }
-
-        const reply = await sendMessage(chatId, '💬 Теперь введите комментарий по заявке', {
-          reply_to_message_id: message.message_id
-        });
-
-        state.sum = sum;
-        state.stage = 'waiting_comment';
-        state.serviceMessages.push(reply.message_id);
-        return res.sendStatus(200);
-      }
-
-      // Обработка комментария
-      if (state.stage === 'waiting_comment' && message.text) {
-        console.log('[ЭТАП] Комментарий получен');
-        state.comment = message.text;
-
-        const form = new FormData();
-        form.append('row', state.row);
-        form.append('message_id', state.originalMessageId);
-        form.append('sum', state.sum);
-        form.append('comment', state.comment);
-        form.append('username', state.username);
-        form.append('executor', state.executor);
-
-        const { data } = await axios.post(`${GAS_WEB_APP_URL}?stage=final`, form, {
-          headers: form.getHeaders()
-        });
-
-        const reply = await sendMessage(chatId, `✅ Заявка #${state.row} закрыта. 💰 Сумма: ${state.sum} сум`, {
-          reply_to_message_id: message.message_id
-        });
-
-        state.serviceMessages.push(reply.message_id);
-        delete userStates[chatId];
-        return res.sendStatus(200);
-      }
+  // Обработка фото
+  if (state.stage === 'waiting_photo' && msg.photo) {
+    try {
+      // Удаляем сообщение с запросом фото
+      await deleteMessageSafe(chatId, state.serviceMessages[0]);
+      
+      // Получаем файл фото
+      const fileId = msg.photo[msg.photo.length - 1].file_id;
+      const fileUrl = await getTelegramFileUrl(fileId);
+      
+      // Сохраняем информацию о фото
+      state.photoUrl = fileUrl;
+      state.stage = 'waiting_sum';
+      
+      // Запрашиваем сумму
+      const sumMessage = await sendMessage(chatId, '💰 Введите сумму:');
+      state.serviceMessages = [sumMessage.data.result.message_id]; // Сбрасываем массив сообщений
+      
+      return res.sendStatus(200);
+    } catch (e) {
+      console.error('Ошибка обработки фото:', e);
+      await clearUserState(chatId);
+      await sendMessage(chatId, '❌ Ошибка обработки фото. Попробуйте снова.');
+      return res.sendStatus(200);
     }
+  }
 
-    res.sendStatus(200);
-  });
-};
+  // Обработка суммы
+  if (state.stage === 'waiting_sum' && msg.text) {
+    try {
+      // Удаляем сообщение с запросом суммы
+      await deleteMessageSafe(chatId, state.serviceMessages[0]);
+      
+      // Проверяем, что сумма - число
+      const sum = msg.text.trim();
+      if (!/^\d+$/.test(sum)) {
+        throw new Error('Неверный формат суммы');
+      }
+      
+      state.sum = sum;
+      state.stage = 'waiting_comment';
+      
+      // Запрашиваем комментарий
+      const commentMessage = await sendMessage(chatId, '💬 Введите комментарий:');
+      state.serviceMessages = [commentMessage.data.result.message_id]; // Обновляем массив сообщений
+      
+      return res.sendStatus(200);
+    } catch (e) {
+      console.error('Ошибка обработки суммы:', e);
+      await clearUserState(chatId);
+      await sendMessage(chatId, '❌ Неверный формат суммы. Введите только цифры.');
+      return res.sendStatus(200);
+    }
+  }
+
+  // Обработка комментария
+  if (state.stage === 'waiting_comment' && msg.text) {
+    try {
+      // Удаляем сообщение с запросом комментария
+      await deleteMessageSafe(chatId, state.serviceMessages[0]);
+      
+      // Сохраняем комментарий
+      state.comment = msg.text;
+      state.executor = state.username;
+      
+      // Рассчитываем просрочку
+      state.delayDays = calculateDelayDays(state.originalRequest?.deadline);
+      
+      // Формируем данные для завершения
+      const completionData = {
+        row: state.row,
+        photoUrl: state.photoUrl,
+        sum: state.sum,
+        comment: state.comment,
+        executor: state.executor,
+        originalRequest: state.originalRequest,
+        isEmergency: state.isEmergency,
+        isFromLS: state.isFromLS,
+        delayDays: state.delayDays,
+        message_id: state.messageId // Добавляем ID сообщения
+      };
+      
+      // Синхронизируем статус заявки
+      await syncRequestStatus(state.chatId, state.messageId, completionData);
+      
+      // Очищаем состояние
+      await clearUserState(chatId);
+      
+      return res.sendStatus(200);
+    } catch (e) {
+      console.error('Ошибка обработки комментария:', e);
+      await clearUserState(chatId);
+      await sendMessage(chatId, '❌ Ошибка обработки комментария. Попробуйте снова.');
+      return res.sendStatus(200);
+    }
+  }
+}
