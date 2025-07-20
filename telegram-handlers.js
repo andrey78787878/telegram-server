@@ -747,7 +747,7 @@ if (body.message && userStates[body.message.chat.id]) {
     
     return res.sendStatus(200);
     
-  } catch (error) {
+  catch (error) {
     console.error('Webhook handler error:', error);
     return res.sendStatus(500);
   }
