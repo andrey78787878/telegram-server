@@ -710,9 +710,6 @@ if (body.message && userStates[body.message.chat.id]) {
       return res.sendStatus(200);
     }
   }
-
-      // Обработка комментария
-    // ... (предыдущий код остается без изменений)
       // Обработка комментария
       if (state.stage === 'waiting_comment' && msg.text) {
         try {
@@ -736,7 +733,7 @@ if (body.message && userStates[body.message.chat.id]) {
           return res.sendStatus(200);
           
         } catch (e) {
-          console.error('Comment processing error:', e);
+          console.error('Ошибка завершения заявки:', e);
           await clearUserState(chatId);
           await sendMessage(chatId, '❌ Ошибка обработки комментария');
           return res.sendStatus(200);
@@ -746,8 +743,8 @@ if (body.message && userStates[body.message.chat.id]) {
     
     return res.sendStatus(200);
     
-  } catch (error) {  // <-- Эта строка должна быть на одном уровне с открывающим try
-    console.error('Webhook handler error:', error);
+  } catch (error) {
+    console.error('Ошибка в обработчике webhook:', error);
     return res.sendStatus(500);
   }
 }); // закрываем app.post('/webhook')
