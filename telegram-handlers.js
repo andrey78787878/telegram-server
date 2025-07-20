@@ -711,20 +711,15 @@ if (body.message && userStates[body.message.chat.id]) {
     }
   }
 
-  // Обработка комментария
-// ... (предыдущий код остается без изменений до обработки комментария)
-
       // Обработка комментария
       if (state.stage === 'waiting_comment' && msg.text) {
         try {
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
           
-          // Сохраняем комментарий
           state.comment = msg.text;
           state.executor = state.username;
           state.delayDays = calculateDelayDays(state.originalRequest?.deadline);
           
-          // Формируем данные для завершения
           const completionData = {
             row: state.row,
             photoUrl: state.photoUrl,
@@ -738,12 +733,8 @@ if (body.message && userStates[body.message.chat.id]) {
             message_id: state.messageId
           };
           
-          // Синхронизируем статус заявки
           await syncRequestStatus(state.chatId, state.messageId, completionData);
-          
-          // Очищаем состояние
           await clearUserState(chatId);
-          
           return res.sendStatus(200);
         } catch (e) {
           console.error('Ошибка обработки комментария:', e);
@@ -759,8 +750,5 @@ if (body.message && userStates[body.message.chat.id]) {
   }
 }); // закрываем app.post('/webhook')
 
-module.exports = (app) => {
-  app.post('/webhook', async (req, res) => {
-    // ... (основной код обработчика webhook)
-  });
-}; // закрываем module.exports
+// Уберите дублирующийся module.exports в конце файла!
+// Весь код обработчика должен быть внутри одного module.exports
