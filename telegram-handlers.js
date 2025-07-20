@@ -711,52 +711,77 @@ if (body.message && userStates[body.message.chat.id]) {
     }
   }
 // Обработка комментария
-await axios.post(`${TELEGRAM_API}/sendMessage`, {
-  chat_id: chatId,
-  text: '📝 Добавьте комментарий (по необходимости):',
-  reply_to_message_id: message.message_id,
-});
+if (state.stage === 'waiting_comment' && msg.text) {
+  try {
+    // Удаляем сообщение с запросом комментария
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+    
+    // Сохраняем комментарий
+    state.comment = msg.text;
 
-} else if (step === 'waitingComment' && message.text) {
-  const comment = message.text;
-  state.comment = comment;
+    // Формируем данные для завершения заявки
+    const completionData = {
+      row: state.row,
+      photoUrl: state.photoUrl,
+      sum: state.sum,
+      comment: state.comment,
+      executor: state.username,
+      originalRequest: state.originalRequest,
+      isEmergency: state.isEmergency,
+      isFromLS: state.isFromLS,
+      delayDays: calculateDelayDays(state.originalRequest?.deadline),
+      message_id: state.messageId,
+      status: 'Выполнено'
+    };
 
-  const { photoUrl, sum, row, username, parentMsgId } = state;
+    // 1. Обновляем основное сообщение в чате
+    await editMessageSafe(
+      state.chatId, 
+      state.messageId, 
+      formatCompletionMessage(completionData, state.photoUrl),
+      { disable_web_page_preview: false }
+    );
 
-  const payload = {
-    photo: photoUrl,
-    sum,
-    comment,
-    row,
-    username,
-    message_id: parentMsgId,
-  };
+    // 2. Отправляем данные в Google Apps Script
+    await sendToGAS(completionData);
 
-  const gasResponse = await axios.post(GAS_WEB_APP_URL, payload);
-  console.log('📤 Data sent to GAS:', gasResponse.status);
+    // 3. Отправляем финальное подтверждение исполнителю
+    const finalText = `📌 Заявка #${state.row} закрыта.\n` +
+                     (state.photoUrl ? `📎 Фото: ${state.photoUrl}\n` : '') +
+                     `💰 Сумма: ${state.sum || '0'} сум\n` +
+                     `👤 Исполнитель: ${state.username}\n` +
+                     `📝 Комментарий: ${state.comment}`;
 
-  const finalText = `📌 Заявка #${row} закрыта.\n` +
-                    (photoUrl ? `📎 Фото: ${photoUrl}\n` : '') +
-                    `💰 Сумма: ${sum} сум\n` +
-                    `👤 Исполнитель: ${username}\n` +
-                    `📝 Комментарий: ${comment}`;
+    await sendMessage(chatId, finalText);
 
-  const finalMsg = await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: chatId,
-    text: finalText,
-    reply_to_message_id: parentMsgId,
-  });
+    // 4. Обновляем ссылку на диск через 3 минуты
+    setTimeout(async () => {
+      try {
+        const diskUrl = await getGoogleDiskLink(state.row);
+        if (diskUrl) {
+          await editMessageSafe(
+            state.chatId, 
+            state.messageId, 
+            formatCompletionMessage(completionData, diskUrl),
+            { disable_web_page_preview: false }
+          );
+        }
+      } catch (e) {
+        console.error('Error updating disk link:', e);
+      }
+    }, 180000);
 
-  // Удаляем все промежуточные сообщения (бота и пользователя)
-  setTimeout(() => {
-    const toDelete = [message.message_id, finalMsg.data.result.message_id];
-    toDelete.forEach(msgId => {
-      axios.post(`${TELEGRAM_API}/deleteMessage`, {
-        chat_id: chatId,
-        message_id: msgId,
-      }).catch(console.error);
-    });
-  }, 60000);
+    // 5. Удаляем кнопки из исходного сообщения
+    await sendButtonsWithRetry(state.chatId, state.messageId, []);
 
-  delete userStates[chatId];
+    // 6. Очищаем состояние
+    delete userStates[chatId];
+    
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error('Ошибка завершения заявки:', e);
+    await clearUserState(chatId);
+    await sendMessage(chatId, '❌ Ошибка при завершении заявки');
+    return res.sendStatus(200);
+  }
 }
