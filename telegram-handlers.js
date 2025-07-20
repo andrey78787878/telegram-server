@@ -437,53 +437,81 @@ module.exports = (app) => {
       }
 
       // Обработка обычных сообщений
-      if (body.message && userStates[body.message.chat.id]) {
-        const msg = body.message;
-        const chatId = msg.chat.id;
-        const state = userStates[chatId];
+ // Обработка обычных сообщений (фото, сумма, комментарий)
+if (body.message && userStates[body.message.chat.id]) {
+  const msg = body.message;
+  const chatId = msg.chat.id;
+  const state = userStates[chatId];
 
-        // Получение фото
-        if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          const fileId = msg.photo.at(-1).file_id;
-          state.photoUrl = await getTelegramFileUrl(fileId);
-          
-          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
-          state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
-          
-          return res.sendStatus(200);
-        }
+  // Инициализация массива, если ещё не был
+  if (!state.userMessages) state.userMessages = [];
 
-        // Получение суммы
-        if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          state.sum = msg.text;
-          
-          const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
-          state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
-          
-          return res.sendStatus(200);
-        }
+  // Получение фото
+  if (state.stage === 'waiting_photo' && msg.photo) {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+    
+    const fileId = msg.photo.at(-1).file_id;
+    state.photoUrl = await getTelegramFileUrl(fileId);
 
-        // Получение комментария
-        if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          state.comment = msg.text;
+    // Сохраняем сообщение пользователя (фото)
+    state.userMessages.push(msg.message_id);
 
-          const completionData = {
+    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+    state.stage = 'waiting_sum';
+    state.serviceMessages = [sumMsg.data.result.message_id];
+
+    // Удаление бота и пользователя через минуту
+    setTimeout(() => {
+      deleteMessageSafe(chatId, sumMsg.data.result.message_id);
+      deleteMessageSafe(chatId, msg.message_id);
+    }, 60000);
+
+    return res.sendStatus(200);
+  }
+
+  // Получение суммы
+  if (state.stage === 'waiting_sum' && msg.text) {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+
+    state.sum = msg.text;
+    state.userMessages.push(msg.message_id);
+
+    const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
+    state.stage = 'waiting_comment';
+    state.serviceMessages = [commentMsg.data.result.message_id];
+
+    setTimeout(() => {
+      deleteMessageSafe(chatId, commentMsg.data.result.message_id);
+      deleteMessageSafe(chatId, msg.message_id);
+    }, 60000);
+
+    return res.sendStatus(200);
+  }
+
+  // Получение комментария
+  if (state.stage === 'waiting_comment' && msg.text) {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+
+    state.comment = msg.text;
+    state.userMessages.push(msg.message_id);
+
+    // Здесь логика отправки в таблицу и финального сообщения (не показана)
+
+    // Удаление всех сообщений (бота и пользователя) через минуту
+    setTimeout(() => {
+      for (const msgId of [...state.serviceMessages, ...state.userMessages]) {
+        deleteMessageSafe(chatId, msgId);
+      }
+    }, 60000);
+
+    // Очистка состояния
+    delete userStates[chatId];
+
+    return res.sendStatus(200);
+  }
+
+  
+        const completionData = {
             row: state.row,
             sum: state.sum,
             comment: state.comment,
