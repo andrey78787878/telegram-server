@@ -14,7 +14,7 @@ const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 // Хранилище user_id (username -> id)
 const userStorage = new Map();
 
-// Хранилище связанных сообщений (row -> {chatMessageId, privateMessageIds})
+// Хранилище связанных сообщений (row -> {chatId, chatMessageId, privateMessageIds})
 const messageLinks = new Map();
 
 // Вспомогательные функции
@@ -184,6 +184,7 @@ async function syncRequestStatus(row, completionData) {
       await editMessageSafe(links.chatId, links.chatMessageId, completionMessage, {
         disable_web_page_preview: false
       });
+      await sendButtonsWithRetry(links.chatId, links.chatMessageId, []);
     }
     
     // Обновляем сообщения в ЛС
@@ -192,16 +193,6 @@ async function syncRequestStatus(row, completionData) {
         await editMessageSafe(chatId, messageId, completionMessage, {
           disable_web_page_preview: false
         });
-      }
-    }
-    
-    // Удаляем кнопки действий
-    if (links.chatMessageId) {
-      await sendButtonsWithRetry(links.chatId, links.chatMessageId, []);
-    }
-    
-    if (links.privateMessageIds) {
-      for (const {chatId, messageId} of links.privateMessageIds) {
         await sendButtonsWithRetry(chatId, messageId, []);
       }
     }
@@ -452,23 +443,26 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
-          // Отправляем запрос на фото
-          const photoMsg = await sendMessage(
-            chatId, 
-            '📸 Пришлите фото выполненных работ\n\n' +
-            '⚠️ Для отмены нажмите /cancel',
-            { reply_to_message_id: messageId }
-          );
-          
+          // Для всех случаев (и чат и ЛС) создаем состояние
           userStates[chatId] = {
             stage: 'waiting_photo',
             row: parseInt(data.split(':')[1]),
             username,
             messageId,
             originalRequest: parseRequestMessage(msg.text || msg.caption),
-            serviceMessages: [photoMsg.data.result.message_id],
-            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
+            serviceMessages: [],
+            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨'),
+            isPrivate: chatId === user.id // Флаг, что это ЛС
           };
+
+          const photoMsg = await sendMessage(
+            chatId, 
+            '📸 Пришлите фото выполненных работ\n\n' +
+            '⚠️ Для отмены нажмите /cancel',
+            msg.chat.type !== 'private' ? { reply_to_message_id: messageId } : {}
+          );
+          
+          userStates[chatId].serviceMessages.push(photoMsg.data.result.message_id);
 
           setTimeout(() => {
             deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e));
@@ -485,14 +479,21 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
-          await sendMessage(chatId, '⏳ Заявка переведена в статус "Ожидает поставки"', { 
-            reply_to_message_id: messageId 
-          });
+          const row = parseInt(data.split(':')[1]);
+          const requestData = parseRequestMessage(msg.text || msg.caption);
           
-          await sendToGAS({ 
-            row: parseInt(data.split(':')[1]), 
-            status: 'Ожидает поставки' 
-          });
+          const completionData = {
+            row,
+            status: 'Ожидает поставки',
+            executor: username,
+            originalRequest: requestData,
+            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
+          };
+
+          // Синхронизируем статус во всех сообщениях
+          await syncRequestStatus(row, completionData);
+          
+          await sendToGAS(completionData);
           
           return res.sendStatus(200);
         }
@@ -501,18 +502,25 @@ module.exports = (app) => {
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 100000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
             return res.sendStatus(200);
           }
 
-          await sendMessage(chatId, '🚫 Заявка отменена', { 
-            reply_to_message_id: messageId 
-          });
+          const row = parseInt(data.split(':')[1]);
+          const requestData = parseRequestMessage(msg.text || msg.caption);
           
-          await sendToGAS({ 
-            row: parseInt(data.split(':')[1]), 
-            status: 'Отменено' 
-          });
+          const completionData = {
+            row,
+            status: 'Отменено',
+            executor: username,
+            originalRequest: requestData,
+            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
+          };
+
+          // Синхронизируем статус во всех сообщениях
+          await syncRequestStatus(row, completionData);
+          
+          await sendToGAS(completionData);
           
           return res.sendStatus(200);
         }
@@ -524,11 +532,12 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
+        // Получение фото
        // Получение фото
 if (state.stage === 'waiting_photo' && msg.photo) {
   // Удаляем предыдущее сервисное сообщение, если есть
   if (state.serviceMessages.length) {
-    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+    await deleteMessageSafe(chatId, state.serviceMessages[20000]);
   }
 
   const fileId = msg.photo.at(-1).file_id;
@@ -553,7 +562,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[20000]);
+          await Promise.all(state.serviceMessages.map(id => deleteMessageSafe(chatId, id)));
           
           state.sum = msg.text;
           
@@ -570,7 +579,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
         // Получение комментария
         if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[20000]);
+          await Promise.all(state.serviceMessages.map(id => deleteMessageSafe(chatId, id)));
           
           state.comment = msg.text;
 
