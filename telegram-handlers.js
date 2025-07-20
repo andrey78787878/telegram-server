@@ -710,54 +710,53 @@ if (body.message && userStates[body.message.chat.id]) {
       return res.sendStatus(200);
     }
   }
-      // Обработка комментария
-                await axios.post(`${TELEGRAM_API}/sendMessage`, {
-            chat_id: chatId,
-            text: '📝 Добавьте комментарий (по необходимости):',
-            reply_to_message_id: message.message_id,
-          });
+// Обработка комментария
+await axios.post(`${TELEGRAM_API}/sendMessage`, {
+  chat_id: chatId,
+  text: '📝 Добавьте комментарий (по необходимости):',
+  reply_to_message_id: message.message_id,
+});
 
-        } else if (step === 'waitingComment' && message.text) {
-          const comment = message.text;
-          state.comment = comment;
+} else if (step === 'waitingComment' && message.text) {
+  const comment = message.text;
+  state.comment = comment;
 
-          const { photoUrl, sum } = state;
+  const { photoUrl, sum, row, username, parentMsgId } = state;
 
-          const payload = {
-            photo: photoUrl,
-            sum,
-            comment,
-            row,
-            username,
-            message_id: parentMsgId,
-          };
+  const payload = {
+    photo: photoUrl,
+    sum,
+    comment,
+    row,
+    username,
+    message_id: parentMsgId,
+  };
 
-          const gasResponse = await axios.post(GAS_WEB_APP_URL, payload);
-          console.log('📤 Data sent to GAS:', gasResponse.status);
+  const gasResponse = await axios.post(GAS_WEB_APP_URL, payload);
+  console.log('📤 Data sent to GAS:', gasResponse.status);
 
-          await axios.post(`${TELEGRAM_API}/sendMessage`, {
-            chat_id: chatId,
-            text: `✅ Заявка #${row} закрыта. 💰 Сумма: ${sum} сум 👤 Исполнитель: ${username}`,
-            reply_to_message_id: parentMsgId,
-          });
+  const finalText = `📌 Заявка #${row} закрыта.\n` +
+                    (photoUrl ? `📎 Фото: ${photoUrl}\n` : '') +
+                    `💰 Сумма: ${sum} сум\n` +
+                    `👤 Исполнитель: ${username}\n` +
+                    `📝 Комментарий: ${comment}`;
 
-          setTimeout(() => {
-            const toDelete = [message.message_id];
-            toDelete.forEach(msgId => {
-              axios.post(`${TELEGRAM_API}/deleteMessage`, {
-                chat_id: chatId,
-                message_id: msgId,
-              }).catch(console.error);
-            });
-          }, 60000);
-
-          delete userStates[chatId];
-        }
-      }
-    } catch (err) {
-      console.error('❌ Ошибка:', err);
-    }
-
-    res.sendStatus(200);
+  const finalMsg = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    chat_id: chatId,
+    text: finalText,
+    reply_to_message_id: parentMsgId,
   });
-};
+
+  // Удаляем все промежуточные сообщения (бота и пользователя)
+  setTimeout(() => {
+    const toDelete = [message.message_id, finalMsg.data.result.message_id];
+    toDelete.forEach(msgId => {
+      axios.post(`${TELEGRAM_API}/deleteMessage`, {
+        chat_id: chatId,
+        message_id: msgId,
+      }).catch(console.error);
+    });
+  }, 60000);
+
+  delete userStates[chatId];
+}
