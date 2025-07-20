@@ -711,7 +711,6 @@ if (body.message && userStates[body.message.chat.id]) {
     }
   }
       // Обработка комментария
-            // Обработка комментария
       if (state.stage === 'waiting_comment' && msg.text) {
         try {
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
@@ -732,19 +731,18 @@ if (body.message && userStates[body.message.chat.id]) {
           await syncRequestStatus(state.chatId, state.messageId, completionData);
           await clearUserState(chatId);
           return res.sendStatus(200);
-          
         } catch (e) {
-          console.error('Ошибка завершения заявки:', e);
+          console.error('Ошибка завершения:', e);
           await clearUserState(chatId);
-          await sendMessage(chatId, '❌ Ошибка обработки комментария');
+          await sendMessage(chatId, '❌ Ошибка при завершении');
           return res.sendStatus(200);
         }
       }
     }
     
     return res.sendStatus(200);
-  } catch (error) {  // Главный обработчик ошибок webhook
-    console.error('Ошибка в обработчике webhook:', error);
+  } catch (error) {
+    console.error('Глобальная ошибка:', error);
     return res.sendStatus(500);
   }
 }); // закрываем app.post('/webhook')
