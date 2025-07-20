@@ -14,6 +14,9 @@ const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 // Хранилище user_id (username -> id)
 const userStorage = new Map();
 
+// Хранилище связанных сообщений (row -> {chatMessageId, privateMessageIds})
+const messageLinks = new Map();
+
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
   if (!callbackData) return null;
@@ -167,6 +170,47 @@ async function getGoogleDiskLink(row) {
   }
 }
 
+// Функция для синхронизации статуса заявки
+async function syncRequestStatus(row, completionData) {
+  try {
+    const links = messageLinks.get(row);
+    if (!links) return;
+
+    // Форматируем сообщение о завершении
+    const completionMessage = formatCompletionMessage(completionData);
+    
+    // Обновляем сообщение в чате
+    if (links.chatMessageId) {
+      await editMessageSafe(links.chatId, links.chatMessageId, completionMessage, {
+        disable_web_page_preview: false
+      });
+    }
+    
+    // Обновляем сообщения в ЛС
+    if (links.privateMessageIds && links.privateMessageIds.length > 0) {
+      for (const {chatId, messageId} of links.privateMessageIds) {
+        await editMessageSafe(chatId, messageId, completionMessage, {
+          disable_web_page_preview: false
+        });
+      }
+    }
+    
+    // Удаляем кнопки действий
+    if (links.chatMessageId) {
+      await sendButtonsWithRetry(links.chatId, links.chatMessageId, []);
+    }
+    
+    if (links.privateMessageIds) {
+      for (const {chatId, messageId} of links.privateMessageIds) {
+        await sendButtonsWithRetry(chatId, messageId, []);
+      }
+    }
+    
+  } catch (error) {
+    console.error('Error syncing request status:', error);
+  }
+}
+
 // Хранилище состояний
 const userStates = {};
 
@@ -237,10 +281,19 @@ module.exports = (app) => {
             
             const allRecipients = [...new Set([...MANAGERS, ...EXECUTORS])];
             
+            // Инициализируем хранилище для этой заявки
+            if (!messageLinks.has(row)) {
+              messageLinks.set(row, {
+                chatId: chatId,
+                chatMessageId: messageId,
+                privateMessageIds: []
+              });
+            }
+            
             for (const recipient of allRecipients) {
               const recipientId = userStorage.get(recipient);
               if (recipientId) {
-                await sendMessage(
+                const privateMsg = await sendMessage(
                   recipientId,
                   `🚨 АВАРИЙНАЯ ЗАЯВКА #${row}\n\n` +
                   `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
@@ -260,6 +313,16 @@ module.exports = (app) => {
                     disable_notification: false
                   }
                 ).catch(e => console.error(`Error sending to ${recipient}:`, e));
+                
+                // Сохраняем ссылку на сообщение в ЛС
+                if (privateMsg && privateMsg.data && privateMsg.data.result) {
+                  const links = messageLinks.get(row);
+                  links.privateMessageIds.push({
+                    chatId: recipientId,
+                    messageId: privateMsg.data.result.message_id
+                  });
+                  messageLinks.set(row, links);
+                }
               }
             }
             
@@ -327,7 +390,16 @@ module.exports = (app) => {
             if (executorId) {
               const requestData = parseRequestMessage(msg.text || msg.caption);
               
-              await sendMessage(
+              // Инициализируем хранилище для этой заявки
+              if (!messageLinks.has(row)) {
+                messageLinks.set(row, {
+                  chatId: chatId,
+                  chatMessageId: messageId,
+                  privateMessageIds: []
+                });
+              }
+              
+              const privateMsg = await sendMessage(
                 executorId,
                 `📌 Вам назначена заявка #${row}\n\n` +
                 `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
@@ -347,6 +419,16 @@ module.exports = (app) => {
                   disable_notification: false 
                 }
               );
+              
+              // Сохраняем ссылку на сообщение в ЛС
+              if (privateMsg && privateMsg.data && privateMsg.data.result) {
+                const links = messageLinks.get(row);
+                links.privateMessageIds.push({
+                  chatId: executorId,
+                  messageId: privateMsg.data.result.message_id
+                });
+                messageLinks.set(row, links);
+              }
             }
           } catch (e) {
             console.error('Ошибка отправки уведомления в ЛС:', e);
@@ -419,7 +501,7 @@ module.exports = (app) => {
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 100000);
             return res.sendStatus(200);
           }
 
@@ -444,7 +526,7 @@ module.exports = (app) => {
 
         // Получение фото
         if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await deleteMessageSafe(chatId, state.serviceMessages[20000]);
           
           const fileId = msg.photo.at(-1).file_id;
           state.photoUrl = await getTelegramFileUrl(fileId);
@@ -462,7 +544,7 @@ module.exports = (app) => {
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await deleteMessageSafe(chatId, state.serviceMessages[20000]);
           
           state.sum = msg.text;
           
@@ -479,7 +561,7 @@ module.exports = (app) => {
 
         // Получение комментария
         if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          await deleteMessageSafe(chatId, state.serviceMessages[20000]);
           
           state.comment = msg.text;
 
@@ -495,12 +577,8 @@ module.exports = (app) => {
             isEmergency: state.isEmergency
           };
 
-          await editMessageSafe(
-            chatId, 
-            state.messageId, 
-            formatCompletionMessage(completionData, state.photoUrl),
-            { disable_web_page_preview: false }
-          );
+          // Синхронизируем статус во всех связанных сообщениях
+          await syncRequestStatus(state.row, completionData);
 
           await sendToGAS(completionData);
 
@@ -508,19 +586,13 @@ module.exports = (app) => {
             try {
               const diskUrl = await getGoogleDiskLink(state.row);
               if (diskUrl) {
-                await editMessageSafe(
-                  chatId, 
-                  state.messageId, 
-                  formatCompletionMessage(completionData, diskUrl),
-                  { disable_web_page_preview: false }
-                );
+                completionData.photoUrl = diskUrl;
+                await syncRequestStatus(state.row, completionData);
               }
             } catch (e) {
               console.error('Error updating disk link:', e);
             }
           }, 180000);
-
-          await sendButtonsWithRetry(chatId, state.messageId, []);
 
           delete userStates[chatId];
           return res.sendStatus(200);
