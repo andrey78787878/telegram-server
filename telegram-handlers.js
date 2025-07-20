@@ -712,50 +712,42 @@ if (body.message && userStates[body.message.chat.id]) {
   }
 
   // Обработка комментария
-  if (state.stage === 'waiting_comment' && msg.text) {
-    try {
-      // Удаляем сообщение с запросом комментария
-      await deleteMessageSafe(chatId, state.serviceMessages[0]);
-      
-      // Сохраняем комментарий
-      state.comment = msg.text;
-      state.executor = state.username;
-      
-      // Рассчитываем просрочку
-      state.delayDays = calculateDelayDays(state.originalRequest?.deadline);
-      
-      // Формируем данные для завершения
-      const completionData = {
-        row: state.row,
-        photoUrl: state.photoUrl,
-        sum: state.sum,
-        comment: state.comment,
-        executor: state.executor,
-        originalRequest: state.originalRequest,
-        isEmergency: state.isEmergency,
-        isFromLS: state.isFromLS,
-        delayDays: state.delayDays,
-        message_id: state.messageId // Добавляем ID сообщения
-      };
-      
-      // Синхронизируем статус заявки
-      await syncRequestStatus(state.chatId, state.messageId, completionData);
-      
-      // Очищаем состояние
-      await clearUserState(chatId);
-      
-      return res.sendStatus(200);
-    } catch (e) {
-      console.error('Ошибка обработки комментария:', e);
-      await clearUserState(chatId);
-      await sendMessage(chatId, '❌ Ошибка обработки комментария. Попробуйте снова.');
-      return res.sendStatus(200);
-    }
+// Обработка комментария
+      if (state.stage === 'waiting_comment' && msg.text) {
+        try {
+          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          state.comment = msg.text;
+          state.executor = state.username;
+          state.delayDays = calculateDelayDays(state.originalRequest?.deadline);
+          
+          const completionData = {
+            row: state.row,
+            photoUrl: state.photoUrl,
+            sum: state.sum,
+            comment: state.comment,
+            executor: state.executor,
+            originalRequest: state.originalRequest,
+            isEmergency: state.isEmergency,
+            isFromLS: state.isFromLS,
+            delayDays: state.delayDays,
+            message_id: state.messageId
+          };
+          
+          await syncRequestStatus(state.chatId, state.messageId, completionData);
+          await clearUserState(chatId);
+          return res.sendStatus(200);
+        } catch (e) {
+          console.error('Ошибка обработки комментария:', e);
+          await clearUserState(chatId);
+          await sendMessage(chatId, '❌ Ошибка обработки комментария. Попробуйте снова.');
+          return res.sendStatus(200);
+        }
+      }
+    } // закрываем if (body.message && userStates[body.message.chat.id])
+  } catch (error) {
+    console.error('Ошибка в обработчике webhook:', error);
+    return res.sendStatus(500);
   }
-} // закрываем обработку обычных сообщений
+}); // закрываем app.post('/webhook')
+}; // закрываем module.exports
 
-// Закрываем обработчик webhook
-}); // закрываем app.post('/webhook'
-
-// Закрываем экспорт модуля
-}); // закрываем module.exports
