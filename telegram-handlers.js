@@ -584,12 +584,14 @@ if (state.stage === 'waiting_photo' && msg.photo) {
             timestamp: new Date().toISOString()
           };
 
-          await editMessageSafe(
-            chatId, 
-            state.messageId, 
-            formatCompletionMessage(completionData, state.photoUrl),
-            { disable_web_page_preview: false }
-          );
+        const finalMsg = await sendMessage(
+  chatId,
+  formatCompletionMessage(completionData, state.photoUrl),
+  {
+    reply_to_message_id: state.messageId,
+    disable_web_page_preview: false
+  }
+);
 
           await sendToGAS(completionData);
 
