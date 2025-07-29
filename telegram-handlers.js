@@ -520,23 +520,27 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
-        // Получение фото
-        if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          const fileId = msg.photo.at(-1).file_id;
-          state.photoUrl = await getTelegramFileUrl(fileId);
-          
-          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
-          state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
-          
-          return res.sendStatus(200);
-        }
+        // Получение фото 
+if (state.stage === 'waiting_photo' && msg.photo) {
+  await deleteMessageSafe(chatId, state.serviceMessages[0]);
+
+  const fileId = msg.photo.at(-1).file_id;
+
+  // Получаем прямую ссылку на файл Telegram
+  const fileUrl = await getTelegramFileUrl(fileId);
+  state.photoUrl = fileUrl;             // <-- ранее использовалось
+  state.photoDirectUrl = fileUrl;       // <-- добавляем прямую ссылку
+
+  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+  state.stage = 'waiting_sum';
+  state.serviceMessages = [sumMsg.data.result.message_id];
+
+  setTimeout(() => {
+    deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
+  }, 120000);
+
+  return res.sendStatus(200);
+}
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
