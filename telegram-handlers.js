@@ -533,7 +533,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
   row: state.row,
   sum: state.sum,
   comment: state.comment,
-  photo: state.photoUrl, // ✅ отправляем под нужным именем
+  photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
 
   const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
   state.stage = 'waiting_sum';
