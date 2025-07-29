@@ -569,7 +569,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
             row: state.row,
             sum: state.sum,
             comment: state.comment,
-            photoUrl: state.photoUrl,
+            photo: state.photoUrl,
             executor: state.username,
             originalRequest: state.originalRequest,
             delayDays: calculateDelayDays(state.originalRequest?.deadline),
