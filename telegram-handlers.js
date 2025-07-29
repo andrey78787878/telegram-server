@@ -584,14 +584,21 @@ if (state.stage === 'waiting_photo' && msg.photo) {
             timestamp: new Date().toISOString()
           };
 
-        const finalMsg = await sendMessage(
+const finalMsg = await sendMessage(
   chatId,
-  formatCompletionMessage(completionData, state.photoUrl),
+  `📌 Заявка закрыта\n\n` + formatCompletionMessage(completionData, state.photoUrl),
   {
-    reply_to_message_id: state.messageId,
+    reply_to_message_id: state.messageId, // <-- это должен быть ID материнской заявки
     disable_web_page_preview: false
   }
 );
+
+  // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
+          await sendMessage(
+            chatId,
+            `📢 ${executorUsername}, вам назначена заявка #${row}!`,
+            { reply_to_message_id: messageId }
+          );
 
           await sendToGAS(completionData);
 
