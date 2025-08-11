@@ -528,12 +528,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
   // Получаем прямую ссылку на файл Telegram
   const fileUrl = await getTelegramFileUrl(fileId);
-  state.photoUrl = fileUrl;             // <-- ранее использовалось
- const completionData = {
-  row: state.row,
-  sum: state.sum,
-  comment: state.comment,
-  photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
+  state.photoUrl = fileUrl;
 
   const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
   state.stage = 'waiting_sum';
@@ -545,6 +540,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
   return res.sendStatus(200);
 }
+
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
