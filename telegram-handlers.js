@@ -6,39 +6,45 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
-// Права пользователей
-// Права пользователей
 // Фиксированный список исполнителей
-const EXECUTORS = ['@Andrey_Tkach_MB', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
+const EXECUTORS = [
+  '@Andrey_Tkach_MB',
+  '@Olim19',
+  '@Davr_85',
+  '@Oblayor_04_09',
+  '@IkromovichV',
+  '@EvelinaB87'
+];
 
 // Хранилище user_id (username -> id)
 const userStorage = new Map();
 
-// При каждом сообщении пользователя — сохраняем его ID
+// Сохраняем ID пользователя при каждом его сообщении боту
 if (body.message?.from?.username) {
   const username = `@${body.message.from.username}`;
   userStorage.set(username, body.message.from.id);
 }
 
-// Кнопки только для тех исполнителей, кто писал боту
+// Формируем кнопки только для исполнителей, которые уже писали боту
 const buttons = EXECUTORS
   .filter(username => userStorage.has(username))
   .map(username => [
     { text: username, callback_data: `executor:${username}:${row}` }
   ]);
 
-// Когда исполнитель выбран
+// Обработка выбора исполнителя
 if (body.callback_query?.data?.startsWith('executor:')) {
   const [, username, row] = body.callback_query.data.split(':');
 
-  // Отправка уведомления исполнителю
+  // Уведомление исполнителю в ЛС
   if (userStorage.has(username)) {
     const executorId = userStorage.get(username);
     sendTelegramMessage(executorId, `Вам назначена новая заявка №${row}`);
   } else {
-    console.log(`❌ Не удалось отправить уведомление: ${username} не писал боту`);
+    console.log(`❌ ${username} не писал боту — уведомление не отправлено`);
   }
 }
+
 
 
 // Вспомогательные функции
