@@ -6,7 +6,8 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
-// Фиксированный список исполнителей
+// Права пользователей
+const MANAGERS = ['@Andrey_Tkach_MB', '@Davr_85', '@EvelinaB87'];
 const EXECUTORS = [
   '@Andrey_Tkach_MB',
   '@Olim19',
@@ -15,35 +16,43 @@ const EXECUTORS = [
   '@IkromovichV',
   '@EvelinaB87'
 ];
+const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id (username -> id)
 const userStorage = new Map();
 
-// Сохраняем ID пользователя при каждом его сообщении боту
+// Сохраняем ID пользователя при каждом сообщении боту
 if (body.message?.from?.username) {
   const username = `@${body.message.from.username}`;
   userStorage.set(username, body.message.from.id);
 }
 
-// Формируем кнопки только для исполнителей, которые уже писали боту
-const buttons = EXECUTORS
-  .filter(username => userStorage.has(username))
-  .map(username => [
-    { text: username, callback_data: `executor:${username}:${row}` }
-  ]);
+// === Функция формирования кнопок выбора исполнителя ===
+function getExecutorButtons(row) {
+  return EXECUTORS
+    .filter(username => userStorage.has(username)) // только те, кто писал боту
+    .map(username => [
+      { text: username, callback_data: `executor:${username}:${row}` }
+    ]);
+}
 
-// Обработка выбора исполнителя
+// === Пример формирования клавиатуры в твоей функции ===
+const inlineKeyboard = {
+  inline_keyboard: getExecutorButtons(row) // row — номер строки заявки
+};
+
+// === Обработка выбора исполнителя ===
 if (body.callback_query?.data?.startsWith('executor:')) {
   const [, username, row] = body.callback_query.data.split(':');
 
-  // Уведомление исполнителю в ЛС
   if (userStorage.has(username)) {
     const executorId = userStorage.get(username);
-    sendTelegramMessage(executorId, `Вам назначена новая заявка №${row}`);
+    sendTelegramMessage(executorId, `📌 Вам назначена новая заявка №${row}`);
   } else {
     console.log(`❌ ${username} не писал боту — уведомление не отправлено`);
   }
 }
+
 
 
 
