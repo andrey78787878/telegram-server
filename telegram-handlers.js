@@ -7,12 +7,32 @@ const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
+// Права пользователей
 const MANAGERS = ['@Andrey_Tkach_MB', '@Davr_85', '@EvelinaB87'];
-const EXECUTORS = ['@Andrey_Tkach_MB', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
-const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
+let EXECUTORS = ['@Andrey_Tkach_MB', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87']; // let, чтобы менять
+let AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id (username -> id)
 const userStorage = new Map();
+
+// Функция для добавления нового исполнителя
+function addExecutor(username) {
+  if (!EXECUTORS.includes(username)) {
+    EXECUTORS.push(username);
+    AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])]; // обновляем права
+    console.log(`Добавлен новый исполнитель: ${username}`);
+  }
+}
+
+// Когда пользователь пишет боту — сохраняем его и, при необходимости, добавляем как исполнителя
+if (body.message?.from?.username) {
+  const username = `@${body.message.from.username}`;
+  userStorage.set(username, body.message.from.id);
+
+  // Если этот пользователь должен быть исполнителем — добавляем
+  // Здесь условие можно менять: например, только если он в группе или в таблице
+  addExecutor(username);
+}
 
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
