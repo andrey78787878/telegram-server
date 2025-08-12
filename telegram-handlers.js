@@ -8,31 +8,38 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
 // Права пользователей
-const MANAGERS = ['@Andrey_Tkach_MB', '@Davr_85', '@EvelinaB87'];
-let EXECUTORS = ['@Andrey_Tkach_MB', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87']; // let, чтобы менять
-let AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
+// Фиксированный список исполнителей
+const EXECUTORS = ['@Andrey_Tkach_MB', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 
 // Хранилище user_id (username -> id)
 const userStorage = new Map();
 
-// Функция для добавления нового исполнителя
-function addExecutor(username) {
-  if (!EXECUTORS.includes(username)) {
-    EXECUTORS.push(username);
-    AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])]; // обновляем права
-    console.log(`Добавлен новый исполнитель: ${username}`);
-  }
-}
-
-// Когда пользователь пишет боту — сохраняем его и, при необходимости, добавляем как исполнителя
+// При каждом сообщении пользователя — сохраняем его ID
 if (body.message?.from?.username) {
   const username = `@${body.message.from.username}`;
   userStorage.set(username, body.message.from.id);
-
-  // Если этот пользователь должен быть исполнителем — добавляем
-  // Здесь условие можно менять: например, только если он в группе или в таблице
-  addExecutor(username);
 }
+
+// Кнопки только для тех исполнителей, кто писал боту
+const buttons = EXECUTORS
+  .filter(username => userStorage.has(username))
+  .map(username => [
+    { text: username, callback_data: `executor:${username}:${row}` }
+  ]);
+
+// Когда исполнитель выбран
+if (body.callback_query?.data?.startsWith('executor:')) {
+  const [, username, row] = body.callback_query.data.split(':');
+
+  // Отправка уведомления исполнителю
+  if (userStorage.has(username)) {
+    const executorId = userStorage.get(username);
+    sendTelegramMessage(executorId, `Вам назначена новая заявка №${row}`);
+  } else {
+    console.log(`❌ Не удалось отправить уведомление: ${username} не писал боту`);
+  }
+}
+
 
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
