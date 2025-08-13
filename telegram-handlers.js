@@ -638,5 +638,5 @@ ${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.dela
       console.error('Webhook error:', error);
       return res.sendStatus(500);
     }
-  });
-};
+  }); // закрываем app.post
+}; //
