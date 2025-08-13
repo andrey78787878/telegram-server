@@ -590,7 +590,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
   await sendMessage(
             chatId,
-  `📌 Заявка закрыта\n\n`#${row}!`,
+  `📌 Заявка закрыта\n\n#${row}!`,
             { reply_to_message_id: messageId }
 );
 
