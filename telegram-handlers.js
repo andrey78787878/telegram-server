@@ -515,121 +515,125 @@ module.exports = (app) => {
       }
 
       // Обработка обычных сообщений (фото, сумма, комментарий)
-      if (body.message && userStates[body.message.chat.id]) {
-        const msg = body.message;
-        const chatId = msg.chat.id;
-        const state = userStates[chatId];
+     // Проверка обычных сообщений (фото, сумма, комментарий)
+if (body.message && userStates[body.message.chat.id]) {
+  (async () => {  // оборачиваем в async IIFE
+    try {
+      const msg = body.message;
+      const chatId = msg.chat.id;
+      const state = userStates[chatId];
 
-        // Получение фото 
-if (state.stage === 'waiting_photo' && msg.photo) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]);
+      // ------------------- Получение фото -------------------
+      if (state.stage === 'waiting_photo' && msg.photo) {
+        // Удаляем сервисное сообщение "пришлите фото"
+        await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
-  const fileId = msg.photo.at(-1).file_id;
+        const fileId = msg.photo.at(-1).file_id;
+        state.photoUrl = await getTelegramFileUrl(fileId);
 
-  // Получаем прямую ссылку на файл Telegram
-  const fileUrl = await getTelegramFileUrl(fileId);
-  state.photoUrl = fileUrl;             // <-- ранее использовалось
- const completionData = {
-  row: state.row,
-  sum: state.sum,
-  comment: state.comment,
-  photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
+        // Отправляем запрос суммы
+        const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+        state.stage = 'waiting_sum';
+        state.serviceMessages = [sumMsg.data.result.message_id];
 
-  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
-  state.stage = 'waiting_sum';
-  state.serviceMessages = [sumMsg.data.result.message_id];
+        // Через 2 минуты удаляем сервисное сообщение
+        setTimeout(() => deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error), 120000);
 
-  setTimeout(() => {
-    deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-  }, 120000);
-
-  return res.sendStatus(200);
-}
-
-        // Получение суммы
-        if (state.stage === 'waiting_sum' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          state.sum = msg.text;
-          
-          const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
-          state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg.data.result.message_id];
-          
-          setTimeout(() => {
-            deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
-          
-          return res.sendStatus(200);
-        }
-
-        // Получение комментария
-        if (state.stage === 'waiting_comment' && msg.text) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          
-          state.comment = msg.text;
-
-          const completionData = {
-            row: state.row,
-            sum: state.sum,
-            comment: state.comment,
-            photo: state.photoUrl,
-            executor: state.username,
-            originalRequest: state.originalRequest,
-            delayDays: calculateDelayDays(state.originalRequest?.deadline),
-            status: 'Выполнено',
-            isEmergency: state.isEmergency,
-            pizzeria: state.originalRequest?.pizzeria,
-            problem: state.originalRequest?.problem,
-            deadline: state.originalRequest?.deadline,
-            initiator: state.originalRequest?.initiator,
-            phone: state.originalRequest?.phone,
-            category: state.originalRequest?.category,
-            timestamp: new Date().toISOString()
-          };
-
-  await sendMessage(
-            chatId,
-  `📌 Заявка закрыта\n\n#${row}!`,
-            { reply_to_message_id: messageId }
-);
-
-  // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
-          await sendMessage(
-            chatId,
-            `📢 ${executorUsername}, вам назначена заявка #${row}!`,
-            { reply_to_message_id: messageId }
-          );
-
-          await sendToGAS(completionData);
-
-          setTimeout(async () => {
-            try {
-              const diskUrl = await getGoogleDiskLink(state.row);
-              if (diskUrl) {
-                await editMessageSafe(
-                  chatId, 
-                  state.messageId, 
-                  formatCompletionMessage(completionData, diskUrl),
-                  { disable_web_page_preview: false }
-                );
-              }
-            } catch (e) {
-              console.error('Error updating disk link:', e);
-            }
-          }, 180000);
-
-          await sendButtonsWithRetry(chatId, state.messageId, []);
-
-          delete userStates[chatId];
-          return res.sendStatus(200);
-        }
+        return;
       }
 
-      return res.sendStatus(200);
+      // ------------------- Получение суммы -------------------
+      if (state.stage === 'waiting_sum' && msg.text) {
+        await deleteMessageSafe(chatId, state.serviceMessages[0]);
+        state.sum = msg.text;
+
+        // Запрос комментария
+        const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
+        state.stage = 'waiting_comment';
+        state.serviceMessages = [commentMsg.data.result.message_id];
+
+        setTimeout(() => deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(console.error), 120000);
+
+        return;
+      }
+
+      // ------------------- Получение комментария -------------------
+      if (state.stage === 'waiting_comment' && msg.text) {
+        await deleteMessageSafe(chatId, state.serviceMessages[0]);
+        state.comment = msg.text;
+
+        // Копируем данные перед удалением состояния
+        const completionData = {
+          row: state.row,
+          sum: state.sum,
+          comment: state.comment,
+          photo: state.photoUrl,
+          executor: state.username,
+          originalRequest: state.originalRequest,
+          delayDays: calculateDelayDays(state.originalRequest?.deadline),
+          status: 'Выполнено',
+          isEmergency: state.isEmergency,
+          pizzeria: state.originalRequest?.pizzeria,
+          problem: state.originalRequest?.problem,
+          deadline: state.originalRequest?.deadline,
+          initiator: state.originalRequest?.initiator,
+          phone: state.originalRequest?.phone,
+          category: state.originalRequest?.category,
+          timestamp: new Date().toISOString()
+        };
+
+        // ✅ Удаляем кнопки у материнского сообщения
+        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+          chat_id: chatId,
+          message_id: state.messageId,
+          reply_markup: null
+        }).catch(console.error);
+
+        // Получаем ссылку с Google Диска
+        const diskUrl = await getGoogleDiskLink(state.row);
+
+        // Формируем финальный текст
+        const finalText = `
+✅ Заявка #${state.row} закрыта
+📸 ${diskUrl || (state.photoUrl ? 'см. фото ниже' : 'нет фото')}
+💬 Комментарий: ${state.comment || 'нет комментария'}
+💰 Сумма: ${state.sum || '0'} сум
+👤 Исполнитель: ${state.username}
+${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.delayDays} дн.` : ''}
+━━━━━━━━━━━━
+🏢 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}
+🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}
+`.trim();
+
+        // Отправляем финальное сообщение (текст или фото)
+        if (state.photoUrl) {
+          await sendPhoto(chatId, state.photoUrl, {
+            caption: finalText,
+            reply_to_message_id: state.messageId
+          });
+        } else {
+          await sendMessage(chatId, finalText, { reply_to_message_id: state.messageId });
+        }
+
+        // Отправляем данные в GAS
+        await sendToGAS(completionData);
+
+        // Через 3 минуты обновляем ссылку с диска
+        setTimeout(async () => {
+          const diskUrlUpdate = await getGoogleDiskLink(state.row);
+          if (diskUrlUpdate) {
+            await editMessageSafe(chatId, state.messageId, formatCompletionMessage(completionData, diskUrlUpdate), { disable_web_page_preview: false });
+          }
+        }, 180000);
+
+        // Удаляем состояние пользователя
+        delete userStates[chatId];
+
+        return;
+      }
+
     } catch (error) {
       console.error('Webhook error:', error);
-      return res.sendStatus(500);
     }
-  });
-};
+  })(); // конец async IIFE
+}
