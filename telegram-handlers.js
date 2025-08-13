@@ -648,9 +648,10 @@ ${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.dela
 
     return res.sendStatus(200);
 
-  } catch (error) {
-    console.error('Webhook error:', error);
-    return res.sendStatus(500);
-  }
-}
-
+    } catch (error) {
+      console.error('Webhook error:', error);
+      return res.sendStatus(500);
+    }
+  }); // конец app.post
+}; // конец module.exports
+То есть нужно
