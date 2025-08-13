@@ -635,5 +635,5 @@ ${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.dela
     } catch (error) {
       console.error('Webhook error:', error);
     }
-  })(); // конец async IIFE
-}
+  });
+}; // конец
