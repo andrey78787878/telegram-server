@@ -535,7 +535,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
   comment: state.comment,
   photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
 
-async function myHandler(...) {
+async function myHandler() {
     const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
 }
   state.stage = 'waiting_sum';
