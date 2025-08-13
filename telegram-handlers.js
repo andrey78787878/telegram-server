@@ -626,14 +626,17 @@ ${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.dela
           }
         }, 180000);
 
-        // Удаляем состояние пользователя
-        delete userStates[chatId];
+   await sendButtonsWithRetry(chatId, state.messageId, []);
 
-        return;
+          delete userStates[chatId];
+          return res.sendStatus(200);
+        }
       }
 
+      return res.sendStatus(200);
     } catch (error) {
       console.error('Webhook error:', error);
+      return res.sendStatus(500);
     }
   });
-}; // конец
+};
