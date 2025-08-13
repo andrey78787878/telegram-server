@@ -592,7 +592,41 @@ if (state.stage === 'waiting_photo' && msg.photo) {
             timestamp: new Date().toISOString()
           };
 
+};
+
 await sendMessage(chatId, `📌 Заявка закрыта\n\n#${state.row}!`);
+
+// 1️⃣ Убираем кнопки у материнской заявки
+await sendButtonsWithRetry(chatId, state.messageId, []);
+
+// 2️⃣ Получаем ссылку с Google Диска
+const diskUrl = await getGoogleDiskLink(state.row);
+
+// 3️⃣ Формируем финальный текст
+const finalText =
+`✅ Заявка #${state.row} закрыта
+
+📸 ${diskUrl || (state.photoUrl ? 'см. фото ниже' : 'нет фото')}
+
+💬 Комментарий: ${state.comment || 'нет комментария'}
+💰 Сумма: ${state.sum || '0'} сум
+👤 Исполнитель: ${state.username}
+${state.delayDays > 0 ? `🔴 Просрочка: ${state.delayDays} дн.` : ''}
+━━━━━━━━━━━━
+🏢 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}
+🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}`;
+
+// 4️⃣ Отправляем финальное сообщение (фото или текст)
+if (state.photoUrl) {
+  await sendPhoto(chatId, state.photoUrl, {
+    caption: finalText,
+    reply_to_message_id: state.messageId
+  });
+} else {
+  await sendMessage(chatId, finalText, {
+    reply_to_message_id: state.messageId
+  });
+}
 
   // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
           await sendMessage(
