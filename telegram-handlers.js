@@ -520,7 +520,7 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
-        // Получение фото 
+// Получение фото 
 if (state.stage === 'waiting_photo' && msg.photo) {
   await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
@@ -529,15 +529,16 @@ if (state.stage === 'waiting_photo' && msg.photo) {
   // Получаем прямую ссылку на файл Telegram
   const fileUrl = await getTelegramFileUrl(fileId);
   state.photoUrl = fileUrl;             // <-- ранее использовалось
- const completionData = {
-  row: state.row,
-  sum: state.sum,
-  comment: state.comment,
-  photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
 
-async function myHandler() {
-    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
-}
+  const completionData = {
+    row: state.row,
+    sum: state.sum,
+    comment: state.comment,
+    photo: state.photoDirectUrl // ✅ отправляем под нужным именем
+  };
+
+  // Запрос суммы работ
+  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
   state.stage = 'waiting_sum';
   state.serviceMessages = [sumMsg.data.result.message_id];
 
@@ -547,6 +548,7 @@ async function myHandler() {
 
   return res.sendStatus(200);
 }
+
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
