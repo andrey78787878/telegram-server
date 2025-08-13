@@ -419,68 +419,122 @@ module.exports = (app) => {
         }
 
         // Обработка завершения заявки
-        if (data.startsWith('done:')) {
-          if (!EXECUTORS.includes(username)) {
-            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
-            return res.sendStatus(200);
-          }
+        if (data.startsWith('done:')) {// Обработка завершения заявки
+if (data.startsWith('done:')) {
+  if (!EXECUTORS.includes(username)) {
+    const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
+    setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
+    return res.sendStatus(200);
+  }
 
-          // Отправляем запрос на фото
-          const photoMsg = await sendMessage(
-            chatId, 
-            '📸 Пришлите фото выполненных работ\n\n' +
-            '⚠️ Для отмены нажмите /cancel',
-            { reply_to_message_id: messageId }
-          );
-          
-          userStates[chatId] = {
-            stage: 'waiting_photo',
-            row: parseInt(data.split(':')[1]),
-            username,
-            messageId,
-            originalRequest: parseRequestMessage(msg.text || msg.caption),
-            serviceMessages: [photoMsg.data.result.message_id],
-            isEmergency: msg.text?.includes('🚨') || msg.caption?.includes('🚨')
-          };
+  // 1️⃣ Запрос фото
+  const photoMsg = await sendMessage(
+    chatId,
+    '📸 Пришлите фото выполненных работ\n\n⚠️ Для отмены нажмите /cancel',
+    { reply_to_message_id: messageId }
+  );
 
-          setTimeout(() => {
-            deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
+  userStates[chatId] = {
+    stage: 'waiting_photo',
+    row: parseInt(data.split(':')[1]),
+    username,
+    messageId,
+    originalRequest: parseRequestMessage(msg.text || msg.caption),
+    serviceMessages: [photoMsg.data.result.message_id]
+  };
 
-          return res.sendStatus(200);
-        }
+  setTimeout(() => deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e)), 120000);
 
-        // Обработка ожидания поставки
-        if (data.startsWith('wait:')) {
-          if (!EXECUTORS.includes(username)) {
-            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут менять статус заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
-            return res.sendStatus(200);
-          }
+  return res.sendStatus(200);
+}
 
-          await sendMessage(chatId, '⏳ Заявка переведена в статус "Ожидает поставки"', { 
-            reply_to_message_id: messageId 
-          });
-          
-          const requestData = parseRequestMessage(msg.text || msg.caption);
-          
-          await sendToGAS({ 
-            row: parseInt(data.split(':')[1]), 
-            status: 'Ожидает поставки',
-            executor: username,
-            message_id: messageId,
-            pizzeria: requestData?.pizzeria,
-            problem: requestData?.problem,
-            deadline: requestData?.deadline,
-            initiator: requestData?.initiator,
-            phone: requestData?.phone,
-            category: requestData?.category,
-            timestamp: new Date().toISOString()
-          });
-          
-          return res.sendStatus(200);
-        }
+// Обработка фото, суммы и комментария
+if (body.message && userStates[body.message.chat.id]) {
+  const msg = body.message;
+  const chatId = msg.chat.id;
+  const state = userStates[chatId];
+
+  // Фото
+  if (state.stage === 'waiting_photo' && msg.photo) {
+    const fileId = msg.photo.at(-1).file_id;
+    const fileUrl = await getTelegramFileUrl(fileId);
+    state.photoUrl = fileUrl;
+
+    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)', { reply_to_message_id: state.messageId });
+    state.stage = 'waiting_sum';
+    state.serviceMessages = [sumMsg.data.result.message_id];
+
+    setTimeout(() => deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e)), 120000);
+    return res.sendStatus(200);
+  }
+
+  // Сумма
+  if (state.stage === 'waiting_sum' && msg.text) {
+    state.sum = msg.text;
+
+    const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий', { reply_to_message_id: state.messageId });
+    state.stage = 'waiting_comment';
+    state.serviceMessages = [commentMsg.data.result.message_id];
+
+    setTimeout(() => deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e)), 120000);
+    return res.sendStatus(200);
+  }
+
+  // Комментарий
+  if (state.stage === 'waiting_comment' && msg.text) {
+    state.comment = msg.text;
+
+    const completionData = {
+      row: state.row,
+      sum: state.sum,
+      comment: state.comment,
+      photoUrl: state.photoUrl,
+      executor: state.username,
+      originalRequest: state.originalRequest
+    };
+
+    // 2️⃣ Редактируем материнское сообщение в нужном формате
+    await editMessageSafe(
+      chatId,
+      state.messageId,
+      formatCompletionMessage(completionData, state.photoUrl),
+      { disable_web_page_preview: false }
+    );
+
+    // 3️⃣ Убираем кнопки с материнского сообщения
+    await sendButtonsWithRetry(chatId, state.messageId, []);
+
+    // 4️⃣ Финальное уведомление ответом на материнскую заявку
+    await sendMessage(
+      chatId,
+      `📢 Заявка #${state.row} закрыта`,
+      { reply_to_message_id: state.messageId }
+    );
+
+    // 5️⃣ Отправка данных в GAS
+    await sendToGAS({
+      row: state.row,
+      sum: state.sum,
+      comment: state.comment,
+      photo: state.photoUrl,
+      executor: state.username,
+      status: 'Выполнено',
+      pizzeria: state.originalRequest?.pizzeria,
+      problem: state.originalRequest?.problem,
+      deadline: state.originalRequest?.deadline,
+      initiator: state.originalRequest?.initiator,
+      phone: state.originalRequest?.phone,
+      category: state.originalRequest?.category,
+      timestamp: new Date().toISOString()
+    });
+
+    // Убираем state
+    delete userStates[chatId];
+
+    return res.sendStatus(200);
+  }
+}
+
 
         // Обработка отмены заявки
         if (data.startsWith('cancel:')) {
