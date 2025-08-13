@@ -567,87 +567,90 @@ if (state.stage === 'waiting_photo' && msg.photo) {
           return res.sendStatus(200);
         }
 // Получение комментария
+// Получение комментария
 if (state.stage === 'waiting_comment' && msg.text) {
-  await deleteMessageSafe(chatId, state.serviceMessages[0]);
-  
-  state.comment = msg.text;
+  try {
+    await deleteMessageSafe(chatId, state.serviceMessages[0]);
+    
+    state.comment = msg.text;
 
-  const completionData = {
-    row: state.row,
-    sum: state.sum,
-    comment: state.comment,
-    photo: state.photoUrl,
-    executor: state.username,
-    originalRequest: state.originalRequest,
-    delayDays: calculateDelayDays(state.originalRequest?.deadline),
-    status: 'Выполнено',
-    isEmergency: state.isEmergency,
-    pizzeria: state.originalRequest?.pizzeria,
-    problem: state.originalRequest?.problem,
-    deadline: state.originalRequest?.deadline,
-    initiator: state.originalRequest?.initiator,
-    phone: state.originalRequest?.phone,
-    category: state.originalRequest?.category,
-    timestamp: new Date().toISOString()
-  };
+    const completionData = {
+      row: state.row,
+      sum: state.sum,
+      comment: state.comment,
+      photo: state.photoUrl,
+      executor: state.username,
+      originalRequest: state.originalRequest,
+      delayDays: calculateDelayDays(state.originalRequest?.deadline),
+      status: 'Выполнено',
+      isEmergency: state.isEmergency,
+      pizzeria: state.originalRequest?.pizzeria,
+      problem: state.originalRequest?.problem,
+      deadline: state.originalRequest?.deadline,
+      initiator: state.originalRequest?.initiator,
+      phone: state.originalRequest?.phone,
+      category: state.originalRequest?.category,
+      timestamp: new Date().toISOString()
+    };
 
-  // 1️⃣ Убираем кнопки у материнской заявки
-  await sendButtonsWithRetry(chatId, state.messageId, []);
+    // 1️⃣ Убираем кнопки у материнской заявки
+    await sendButtonsWithRetry(chatId, state.messageId, []);
 
-  // 2️⃣ Получаем ссылку с Google Диска
-  const diskUrl = await getGoogleDiskLink(state.row);
+    // 2️⃣ Получаем ссылку с Google Диска
+    const diskUrl = await getGoogleDiskLink(state.row);
 
-  // 3️⃣ Формируем финальный текст
-  const finalText =
+    // 3️⃣ Формируем финальный текст
+    const finalText =
 `✅ Заявка #${state.row} закрыта
-
 📸 ${diskUrl || (state.photoUrl ? 'см. фото ниже' : 'нет фото')}
-
 💬 Комментарий: ${state.comment || 'нет комментария'}
 💰 Сумма: ${state.sum || '0'} сум
 👤 Исполнитель: ${state.username}
-${state.delayDays > 0 ? `🔴 Просрочка: ${state.delayDays} дн.` : ''}
+${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.delayDays} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}
 🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}`;
 
-  // 4️⃣ Отправляем финальное сообщение (фото или текст)
-  if (state.photoUrl) {
-    await sendPhoto(chatId, state.photoUrl, {
-      caption: finalText,
-      reply_to_message_id: state.messageId
-    });
-  } else {
-    await sendMessage(chatId, finalText, {
-      reply_to_message_id: state.messageId
-    });
-  }
-
-  // 5️⃣ Отправляем данные в GAS
-  await sendToGAS(completionData);
-
-  // 6️⃣ Через 3 минуты обновляем, если появится ссылка с диска
-  setTimeout(async () => {
-    try {
-      const diskUrlUpdate = await getGoogleDiskLink(state.row);
-      if (diskUrlUpdate) {
-        await editMessageSafe(
-          chatId, 
-          state.messageId, 
-          formatCompletionMessage(completionData, diskUrlUpdate),
-          { disable_web_page_preview: false }
-        );
-      }
-    } catch (e) {
-      console.error('Error updating disk link:', e);
+    // 4️⃣ Отправляем финальное сообщение (фото или текст)
+    if (state.photoUrl) {
+      await sendPhoto(chatId, state.photoUrl, {
+        caption: finalText,
+        reply_to_message_id: state.messageId
+      });
+    } else {
+      await sendMessage(chatId, finalText, {
+        reply_to_message_id: state.messageId
+      });
     }
-  }, 180000);
 
-  delete userStates[chatId];
-  return res.sendStatus(200);
-} catch (error) {
-  console.error('Webhook error:', error);
-  return res.sendStatus(500);
+    // 5️⃣ Отправляем данные в GAS
+    await sendToGAS(completionData);
+
+    // 6️⃣ Через 3 минуты обновляем, если появится ссылка с диска
+    setTimeout(async () => {
+      try {
+        const diskUrlUpdate = await getGoogleDiskLink(state.row);
+        if (diskUrlUpdate) {
+          await editMessageSafe(
+            chatId, 
+            state.messageId, 
+            formatCompletionMessage(completionData, diskUrlUpdate),
+            { disable_web_page_preview: false }
+          );
+        }
+      } catch (e) {
+        console.error('Error updating disk link:', e);
+      }
+    }, 180000);
+
+    // Удаляем состояние пользователя
+    delete userStates[chatId];
+
+    return res.sendStatus(200);
+
+  } catch (error) {
+    console.error('Webhook error:', error);
+    return res.sendStatus(500);
+  }
 }
-});
-};
+
