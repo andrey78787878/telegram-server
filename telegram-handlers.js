@@ -515,54 +515,57 @@ module.exports = (app) => {
       }
 
       // Обработка обычных сообщений (фото, сумма, комментарий)
-     // Проверка обычных сообщений (фото, сумма, комментарий)
+   // Обработка обычных сообщений (фото, сумма, комментарий)
 if (body.message && userStates[body.message.chat.id]) {
-  (async () => {  // оборачиваем в async IIFE
-    try {
-      const msg = body.message;
-      const chatId = msg.chat.id;
-      const state = userStates[chatId];
+  (async () => {
+    const msg = body.message;
+    const chatId = msg.chat.id;
+    const state = userStates[chatId];
 
+    try {
       // ------------------- Получение фото -------------------
       if (state.stage === 'waiting_photo' && msg.photo) {
-        // Удаляем сервисное сообщение "пришлите фото"
+        // Удаляем сервисное сообщение
         await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
         const fileId = msg.photo.at(-1).file_id;
         state.photoUrl = await getTelegramFileUrl(fileId);
 
-        // Отправляем запрос суммы
+        // Запрос суммы
         const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
         state.stage = 'waiting_sum';
         state.serviceMessages = [sumMsg.data.result.message_id];
 
-        // Через 2 минуты удаляем сервисное сообщение
-        setTimeout(() => deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(console.error), 120000);
+        setTimeout(() => {
+          deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
+        }, 120000);
 
-        return;
+        return res.sendStatus(200);
       }
 
       // ------------------- Получение суммы -------------------
       if (state.stage === 'waiting_sum' && msg.text) {
         await deleteMessageSafe(chatId, state.serviceMessages[0]);
+
         state.sum = msg.text;
 
-        // Запрос комментария
         const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий');
         state.stage = 'waiting_comment';
         state.serviceMessages = [commentMsg.data.result.message_id];
 
-        setTimeout(() => deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(console.error), 120000);
+        setTimeout(() => {
+          deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e));
+        }, 120000);
 
-        return;
+        return res.sendStatus(200);
       }
 
       // ------------------- Получение комментария -------------------
       if (state.stage === 'waiting_comment' && msg.text) {
         await deleteMessageSafe(chatId, state.serviceMessages[0]);
+
         state.comment = msg.text;
 
-        // Копируем данные перед удалением состояния
         const completionData = {
           row: state.row,
           sum: state.sum,
@@ -582,61 +585,56 @@ if (body.message && userStates[body.message.chat.id]) {
           timestamp: new Date().toISOString()
         };
 
-        // ✅ Удаляем кнопки у материнского сообщения
-        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-          chat_id: chatId,
-          message_id: state.messageId,
-          reply_markup: null
-        }).catch(console.error);
+        // 1️⃣ Убираем кнопки у материнской заявки
+        await sendButtonsWithRetry(chatId, state.messageId, []);
 
-        // Получаем ссылку с Google Диска
-        const diskUrl = await getGoogleDiskLink(state.row);
+        // 2️⃣ Отправляем данные в GAS
+        await sendToGAS(completionData);
 
-        // Формируем финальный текст
-        const finalText = `
-✅ Заявка #${state.row} закрыта
-📸 ${diskUrl || (state.photoUrl ? 'см. фото ниже' : 'нет фото')}
+        // 3️⃣ Формируем финальный текст
+        const finalText =
+`✅ Заявка #${state.row} закрыта
+📸 ${state.photoUrl || 'нет фото'}
 💬 Комментарий: ${state.comment || 'нет комментария'}
 💰 Сумма: ${state.sum || '0'} сум
 👤 Исполнитель: ${state.username}
 ${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.delayDays} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}
-🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}
-`.trim();
+🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}`;
 
-        // Отправляем финальное сообщение (текст или фото)
-        if (state.photoUrl) {
-          await sendPhoto(chatId, state.photoUrl, {
-            caption: finalText,
-            reply_to_message_id: state.messageId
-          });
-        } else {
-          await sendMessage(chatId, finalText, { reply_to_message_id: state.messageId });
-        }
+        // 4️⃣ Отправка финального сообщения
+        await sendMessage(chatId, finalText, { reply_to_message_id: state.messageId });
 
-        // Отправляем данные в GAS
-        await sendToGAS(completionData);
-
-        // Через 3 минуты обновляем ссылку с диска
+        // 5️⃣ Через 3 минуты обновляем ссылку с диска
         setTimeout(async () => {
-          const diskUrlUpdate = await getGoogleDiskLink(state.row);
-          if (diskUrlUpdate) {
-            await editMessageSafe(chatId, state.messageId, formatCompletionMessage(completionData, diskUrlUpdate), { disable_web_page_preview: false });
+          try {
+            const diskUrlUpdate = await getGoogleDiskLink(state.row);
+            if (diskUrlUpdate) {
+              await editMessageSafe(
+                chatId,
+                state.messageId,
+                formatCompletionMessage(completionData, diskUrlUpdate),
+                { disable_web_page_preview: false }
+              );
+            }
+          } catch (e) {
+            console.error('Error updating disk link:', e);
           }
         }, 180000);
 
-   await sendButtonsWithRetry(chatId, state.messageId, []);
+        // 6️⃣ Удаляем состояние пользователя
+        delete userStates[chatId];
 
-          delete userStates[chatId];
-          return res.sendStatus(200);
-        }
+        return res.sendStatus(200);
       }
 
+      // ------------------- Если сообщение не соответствует стадии -------------------
       return res.sendStatus(200);
+
     } catch (error) {
       console.error('Webhook error:', error);
       return res.sendStatus(500);
     }
-  }); // закрываем app.post
-}; //
+  })();
+}
