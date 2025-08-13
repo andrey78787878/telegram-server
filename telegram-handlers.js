@@ -419,7 +419,6 @@ module.exports = (app) => {
         }
 
         // Обработка завершения заявки
-        if (data.startsWith('done:')) {// Обработка завершения заявки
 if (data.startsWith('done:')) {
   if (!EXECUTORS.includes(username)) {
     const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
