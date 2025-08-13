@@ -535,7 +535,9 @@ if (state.stage === 'waiting_photo' && msg.photo) {
   comment: state.comment,
   photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
 
-  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+async function myHandler(...) {
+    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+}
   state.stage = 'waiting_sum';
   state.serviceMessages = [sumMsg.data.result.message_id];
 
@@ -590,7 +592,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
   await sendMessage(
             chatId,
-  `📌 Заявка закрыта\n\n#${row}!`,
+ `📌 Заявка закрыта\n\n#${row}!`,
             { reply_to_message_id: messageId }
 );
 
