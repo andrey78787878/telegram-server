@@ -520,7 +520,7 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const state = userStates[chatId];
 
-// Получение фото 
+        // Получение фото 
 if (state.stage === 'waiting_photo' && msg.photo) {
   await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
@@ -529,15 +529,12 @@ if (state.stage === 'waiting_photo' && msg.photo) {
   // Получаем прямую ссылку на файл Telegram
   const fileUrl = await getTelegramFileUrl(fileId);
   state.photoUrl = fileUrl;             // <-- ранее использовалось
+ const completionData = {
+  row: state.row,
+  sum: state.sum,
+  comment: state.comment,
+  photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
 
-  const completionData = {
-    row: state.row,
-    sum: state.sum,
-    comment: state.comment,
-    photo: state.photoDirectUrl // ✅ отправляем под нужным именем
-  };
-
-  // Запрос суммы работ
   const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
   state.stage = 'waiting_sum';
   state.serviceMessages = [sumMsg.data.result.message_id];
@@ -548,7 +545,6 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
   return res.sendStatus(200);
 }
-
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
@@ -566,90 +562,74 @@ if (state.stage === 'waiting_photo' && msg.photo) {
           
           return res.sendStatus(200);
         }
-// Получение комментария
-// Получение комментария
-if (state.stage === 'waiting_comment' && msg.text) {
-  try {
-    await deleteMessageSafe(chatId, state.serviceMessages[0]);
-    
-    state.comment = msg.text;
 
-    const completionData = {
-      row: state.row,
-      sum: state.sum,
-      comment: state.comment,
-      photo: state.photoUrl,
-      executor: state.username,
-      originalRequest: state.originalRequest,
-      delayDays: calculateDelayDays(state.originalRequest?.deadline),
-      status: 'Выполнено',
-      isEmergency: state.isEmergency,
-      pizzeria: state.originalRequest?.pizzeria,
-      problem: state.originalRequest?.problem,
-      deadline: state.originalRequest?.deadline,
-      initiator: state.originalRequest?.initiator,
-      phone: state.originalRequest?.phone,
-      category: state.originalRequest?.category,
-      timestamp: new Date().toISOString()
-    };
+        // Получение комментария
+        if (state.stage === 'waiting_comment' && msg.text) {
+          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          
+          state.comment = msg.text;
 
-    // 1️⃣ Убираем кнопки у материнской заявки
-    await sendButtonsWithRetry(chatId, state.messageId, []);
+          const completionData = {
+            row: state.row,
+            sum: state.sum,
+            comment: state.comment,
+            photo: state.photoUrl,
+            executor: state.username,
+            originalRequest: state.originalRequest,
+            delayDays: calculateDelayDays(state.originalRequest?.deadline),
+            status: 'Выполнено',
+            isEmergency: state.isEmergency,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline,
+            initiator: state.originalRequest?.initiator,
+            phone: state.originalRequest?.phone,
+            category: state.originalRequest?.category,
+            timestamp: new Date().toISOString()
+          };
 
-    // 2️⃣ Получаем ссылку с Google Диска
-    const diskUrl = await getGoogleDiskLink(state.row);
+  await sendMessage(
+            chatId,
+  `📌 Заявка закрыта\n\n#${row}!`,
+            { reply_to_message_id: messageId }
+);
 
-    // 3️⃣ Формируем финальный текст
-    const finalText =
-`✅ Заявка #${state.row} закрыта
-📸 ${diskUrl || (state.photoUrl ? 'см. фото ниже' : 'нет фото')}
-💬 Комментарий: ${state.comment || 'нет комментария'}
-💰 Сумма: ${state.sum || '0'} сум
-👤 Исполнитель: ${state.username}
-${completionData.delayDays > 0 ? `🔴 Просрочка: ${completionData.delayDays} дн.` : ''}
-━━━━━━━━━━━━
-🏢 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}
-🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}`;
-
-    // 4️⃣ Отправляем финальное сообщение (фото или текст)
-    if (state.photoUrl) {
-      await sendPhoto(chatId, state.photoUrl, {
-        caption: finalText,
-        reply_to_message_id: state.messageId
-      });
-    } else {
-      await sendMessage(chatId, finalText, {
-        reply_to_message_id: state.messageId
-      });
-    }
-
-    // 5️⃣ Отправляем данные в GAS
-    await sendToGAS(completionData);
-
-    // 6️⃣ Через 3 минуты обновляем, если появится ссылка с диска
-    setTimeout(async () => {
-      try {
-        const diskUrlUpdate = await getGoogleDiskLink(state.row);
-        if (diskUrlUpdate) {
-          await editMessageSafe(
-            chatId, 
-            state.messageId, 
-            formatCompletionMessage(completionData, diskUrlUpdate),
-            { disable_web_page_preview: false }
+  // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
+          await sendMessage(
+            chatId,
+            `📢 ${executorUsername}, вам назначена заявка #${row}!`,
+            { reply_to_message_id: messageId }
           );
-        }
-      } catch (e) {
-        console.error('Error updating disk link:', e);
-      }
-    }, 180000);
 
-    // Удаляем состояние пользователя
- delete userStates[chatId];
-return res.sendStatus(200);
+          await sendToGAS(completionData);
+
+          setTimeout(async () => {
+            try {
+              const diskUrl = await getGoogleDiskLink(state.row);
+              if (diskUrl) {
+                await editMessageSafe(
+                  chatId, 
+                  state.messageId, 
+                  formatCompletionMessage(completionData, diskUrl),
+                  { disable_web_page_preview: false }
+                );
+              }
+            } catch (e) {
+              console.error('Error updating disk link:', e);
+            }
+          }, 180000);
+
+          await sendButtonsWithRetry(chatId, state.messageId, []);
+
+          delete userStates[chatId];
+          return res.sendStatus(200);
+        }
+      }
+
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error('Webhook error:', error);
+      return res.sendStatus(500);
     }
-  } catch (error) {
-    console.error('Webhook error:', error);
-    return res.sendStatus(500);
-  }
-});
+  });
 };
