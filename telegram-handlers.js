@@ -645,11 +645,9 @@ ${state.delayDays > 0 ? `🔴 Просрочка: ${state.delayDays} дн.` : ''
 
   delete userStates[chatId];
   return res.sendStatus(200);
+} catch (error) {
+  console.error('Webhook error:', error);
+  return res.sendStatus(500);
 }
-
-       } catch (error) {
-      console.error('Webhook error:', error);
-      return res.sendStatus(500);
-    }
-  });
+});
 };
