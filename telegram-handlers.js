@@ -8,53 +8,11 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_MB', '@Davr_85', '@EvelinaB87'];
-const EXECUTORS = [
-  '@Andrey_Tkach_MB',
-  '@Olim19',
-  '@Davr_85',
-  '@Oblayor_04_09',
-  '@IkromovichV',
-  '@EvelinaB87'
-];
+const EXECUTORS = ['@Andrey_Tkach_MB', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id (username -> id)
 const userStorage = new Map();
-
-// Сохраняем ID пользователя при каждом сообщении боту
-if (body.message?.from?.username) {
-  const username = `@${body.message.from.username}`;
-  userStorage.set(username, body.message.from.id);
-}
-
-// === Функция формирования кнопок выбора исполнителя ===
-function getExecutorButtons(row) {
-  return EXECUTORS
-    .filter(username => userStorage.has(username)) // только те, кто писал боту
-    .map(username => [
-      { text: username, callback_data: `executor:${username}:${row}` }
-    ]);
-}
-
-// === Пример формирования клавиатуры в твоей функции ===
-const inlineKeyboard = {
-  inline_keyboard: getExecutorButtons(row) // row — номер строки заявки
-};
-
-// === Обработка выбора исполнителя ===
-if (body.callback_query?.data?.startsWith('executor:')) {
-  const [, username, row] = body.callback_query.data.split(':');
-
-  if (userStorage.has(username)) {
-    const executorId = userStorage.get(username);
-    sendTelegramMessage(executorId, `📌 Вам назначена новая заявка №${row}`);
-  } else {
-    console.log(`❌ ${username} не писал боту — уведомление не отправлено`);
-  }
-}
-
-
-
 
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
@@ -570,7 +528,12 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
   // Получаем прямую ссылку на файл Telegram
   const fileUrl = await getTelegramFileUrl(fileId);
-  state.photoUrl = fileUrl;
+  state.photoUrl = fileUrl;             // <-- ранее использовалось
+ const completionData = {
+  row: state.row,
+  sum: state.sum,
+  comment: state.comment,
+  photo: state.photoDirectUrl, // ✅ отправляем под нужным именем
 
   const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
   state.stage = 'waiting_sum';
@@ -582,7 +545,6 @@ if (state.stage === 'waiting_photo' && msg.photo) {
 
   return res.sendStatus(200);
 }
-
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
