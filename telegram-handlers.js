@@ -592,11 +592,7 @@ if (state.stage === 'waiting_photo' && msg.photo) {
             timestamp: new Date().toISOString()
           };
 
-  await sendMessage(
-            chatId,
- `📌 Заявка закрыта\n\n#${row}!`,
-            { reply_to_message_id: messageId }
-);
+await sendMessage(chatId, `📌 Заявка закрыта\n\n#${state.row}!`);
 
   // Отправляем ОДНО уведомление в чат (ответом на материнскую заявку)
           await sendMessage(
