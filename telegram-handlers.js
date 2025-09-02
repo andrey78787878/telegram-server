@@ -1,4 +1,7 @@
 const axios = require('axios');
+const https = require('https'); // <- добавлено
+axios.defaults.timeout = 10000; // <- добавлено: 10 сек таймаут
+axios.defaults.httpsAgent = new https.Agent({ family: 4, keepAlive: true }); // <- добавлено: форс IPv4
 const FormData = require('form-data');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -106,18 +109,8 @@ async function editMessageSafe(chatId, messageId, text, options = {}) {
   }
 }
 
-// ✅ ФИКС: корректное снятие кнопок при пустом массиве
-async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText = 'Выберите действие') {
+async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
   try {
-    if (!buttons || buttons.length === 0) {
-      // при пустом массиве удаляем разметку целиком
-      return await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: null
-      });
-    }
-
     const response = await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
       chat_id: chatId,
       message_id: messageId,
@@ -128,8 +121,7 @@ async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText = '
     if (error.response?.data?.description?.includes('not modified')) {
       return { ok: true };
     }
-    // fallback: отправим новое сообщение с этими же кнопками
-    return await sendMessage(chatId, fallbackText || ' ', {
+    return await sendMessage(chatId, fallbackText, {
       reply_markup: { inline_keyboard: buttons }
     });
   }
@@ -428,121 +420,151 @@ module.exports = (app) => {
         }
 
         // Обработка завершения заявки
-        if (data.startsWith('done:')) {
+if (data.startsWith('done:')) {
+  if (!EXECUTORS.includes(username)) {
+    const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
+    setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
+    return res.sendStatus(200);
+  }
+
+  // 1️⃣ Запрос фото
+  const photoMsg = await sendMessage(
+    chatId,
+    '📸 Пришлите фото выполненных работ\n\n⚠️ Для отмены нажмите /cancel',
+    { reply_to_message_id: messageId }
+  );
+
+  userStates[chatId] = {
+    stage: 'waiting_photo',
+    row: parseInt(data.split(':')[1]),
+    username,
+    messageId,
+    originalRequest: parseRequestMessage(msg.text || msg.caption),
+    serviceMessages: [photoMsg.data.result.message_id]
+  };
+
+  setTimeout(() => deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e)), 120000);
+
+  return res.sendStatus(200);
+}
+
+// Обработка фото, суммы и комментария
+if (body.message && userStates[body.message.chat.id]) {
+  const msg = body.message;
+  const chatId = msg.chat.id;
+  const state = userStates[chatId];
+
+  // Фото
+  if (state.stage === 'waiting_photo' && msg.photo) {
+    const fileId = msg.photo.at(-1).file_id;
+    const fileUrl = await getTelegramFileUrl(fileId);
+    state.photoUrl = fileUrl;
+
+    const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)', { reply_to_message_id: state.messageId });
+    state.stage = 'waiting_sum';
+    state.serviceMessages = [sumMsg.data.result.message_id];
+
+    setTimeout(() => deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e)), 120000);
+    return res.sendStatus(200);
+  }
+
+  // Сумма
+  if (state.stage === 'waiting_sum' && msg.text) {
+    state.sum = msg.text;
+
+    const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий', { reply_to_message_id: state.messageId });
+    state.stage = 'waiting_comment';
+    state.serviceMessages = [commentMsg.data.result.message_id];
+
+    setTimeout(() => deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e)), 120000);
+    return res.sendStatus(200);
+  }
+
+  // Комментарий
+  if (state.stage === 'waiting_comment' && msg.text) {
+    state.comment = msg.text;
+
+    const completionData = {
+      row: state.row,
+      sum: state.sum,
+      comment: state.comment,
+      photoUrl: state.photoUrl,
+      executor: state.username,
+      originalRequest: state.originalRequest
+    };
+
+    // 2️⃣ Редактируем материнское сообщение в нужном формате
+    await editMessageSafe(
+      chatId,
+      state.messageId,
+      formatCompletionMessage(completionData, state.photoUrl),
+      { disable_web_page_preview: false }
+    );
+
+    // 3️⃣ Убираем кнопки с материнского сообщения
+    await sendButtonsWithRetry(chatId, state.messageId, []);
+
+    // 4️⃣ Финальное уведомление ответом на материнскую заявку
+    await sendMessage(
+      chatId,
+      `📢 Заявка #${state.row} закрыта`,
+      { reply_to_message_id: state.messageId }
+    );
+
+    // 5️⃣ Отправка данных в GAS
+    await sendToGAS({
+      row: state.row,
+      sum: state.sum,
+      comment: state.comment,
+      photo: state.photoUrl,
+      executor: state.username,
+      status: 'Выполнено',
+      pizzeria: state.originalRequest?.pizzeria,
+      problem: state.originalRequest?.problem,
+      deadline: state.originalRequest?.deadline,
+      initiator: state.originalRequest?.initiator,
+      phone: state.originalRequest?.phone,
+      category: state.originalRequest?.category,
+      timestamp: new Date().toISOString()
+    });
+
+    // Убираем state
+    delete userStates[chatId];
+
+    return res.sendStatus(200);
+  }
+}
+
+
+        // Обработка отмены заявки
+        if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
-            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 90000);
+            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
             return res.sendStatus(200);
           }
 
-          // 1️⃣ Запрос фото
-          const photoMsg = await sendMessage(
-            chatId,
-            '📸 Пришлите фото выполненных работ\n\n⚠️ Для отмены нажмите /cancel',
-            { reply_to_message_id: messageId }
-          );
-
-          userStates[chatId] = {
-            stage: 'waiting_photo',
-            row: parseInt(data.split(':')[1]),
-            username,
-            messageId,
-            originalRequest: parseRequestMessage(msg.text || msg.caption),
-            isEmergency: (msg.text?.includes('🚨') || msg.caption?.includes('🚨')) || false,
-            serviceMessages: [photoMsg.data.result.message_id]
-          };
-
-          setTimeout(() => deleteMessageSafe(chatId, photoMsg.data.result.message_id).catch(e => console.error(e)), 120000);
-
+          await sendMessage(chatId, '🚫 Заявка отменена', { 
+            reply_to_message_id: messageId 
+          });
+          
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+          
+          await sendToGAS({ 
+            row: parseInt(data.split(':')[1]), 
+            status: 'Отменено',
+            executor: username,
+            message_id: messageId,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline,
+            initiator: requestData?.initiator,
+            phone: requestData?.phone,
+            category: requestData?.category,
+            timestamp: new Date().toISOString()
+          });
+          
           return res.sendStatus(200);
-        }
-
-        // ⚠️ Внутренний блок обработки сообщений в callback_query сохранён как есть (он не срабатывает на callback),
-        // чтобы "ничего не удалять". Ниже есть основной рабочий блок вне callback.
-        if (body.message && userStates[body.message.chat.id]) {
-          const msg = body.message;
-          const chatId = msg.chat.id;
-          const state = userStates[chatId];
-
-          // Фото
-          if (state.stage === 'waiting_photo' && msg.photo) {
-            const fileId = msg.photo.at(-1).file_id;
-            const fileUrl = await getTelegramFileUrl(fileId);
-            state.photoUrl = fileUrl;
-
-            const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)', { reply_to_message_id: state.messageId });
-            state.stage = 'waiting_sum';
-            state.serviceMessages = [sumMsg.data.result.message_id];
-
-            setTimeout(() => deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e)), 120000);
-            return res.sendStatus(200);
-          }
-
-          // Сумма
-          if (state.stage === 'waiting_sum' && msg.text) {
-            state.sum = msg.text;
-
-            const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий', { reply_to_message_id: state.messageId });
-            state.stage = 'waiting_comment';
-            state.serviceMessages = [commentMsg.data.result.message_id];
-
-            setTimeout(() => deleteMessageSafe(chatId, commentMsg.data.result.message_id).catch(e => console.error(e)), 120000);
-            return res.sendStatus(200);
-          }
-
-          // Комментарий
-          if (state.stage === 'waiting_comment' && msg.text) {
-            state.comment = msg.text;
-
-            const completionData = {
-              row: state.row,
-              sum: state.sum,
-              comment: state.comment,
-              photoUrl: state.photoUrl,
-              executor: state.username,
-              originalRequest: state.originalRequest
-            };
-
-            // 2️⃣ Редактируем материнское сообщение в нужном формате
-            await editMessageSafe(
-              chatId,
-              state.messageId,
-              formatCompletionMessage(completionData, state.photoUrl),
-              { disable_web_page_preview: false }
-            );
-
-            // 3️⃣ Убираем кнопки с материнского сообщения
-            await sendButtonsWithRetry(chatId, state.messageId, []);
-
-            // 4️⃣ Финальное уведомление ответом на материнскую заявку
-            await sendMessage(
-              chatId,
-              `📢 Заявка #${state.row} закрыта`,
-              { reply_to_message_id: state.messageId }
-            );
-
-            // 5️⃣ Отправка данных в GAS
-            await sendToGAS({
-              row: state.row,
-              sum: state.sum,
-              comment: state.comment,
-              photo: state.photoUrl,
-              executor: state.username,
-              status: 'Выполнено',
-              pizzeria: state.originalRequest?.pizzeria,
-              problem: state.originalRequest?.problem,
-              deadline: state.originalRequest?.deadline,
-              initiator: state.originalRequest?.initiator,
-              phone: state.originalRequest?.phone,
-              category: state.originalRequest?.category,
-              timestamp: new Date().toISOString()
-            });
-
-            // Убираем state
-            delete userStates[chatId];
-
-            return res.sendStatus(200);
-          }
         }
       }
 
@@ -553,26 +575,26 @@ module.exports = (app) => {
         const state = userStates[chatId];
 
         // Получение фото 
-        if (state.stage === 'waiting_photo' && msg.photo) {
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
+if (state.stage === 'waiting_photo' && msg.photo) {
+  await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
-          const fileId = msg.photo.at(-1).file_id;
+  const fileId = msg.photo.at(-1).file_id;
 
-          // Получаем прямую ссылку на файл Telegram
-          const fileUrl = await getTelegramFileUrl(fileId);
-          state.photoUrl = fileUrl;             // <-- ранее использовалось
-          state.photoDirectUrl = fileUrl;       // <-- добавляем прямую ссылку
+  // Получаем прямую ссылку на файл Telegram
+  const fileUrl = await getTelegramFileUrl(fileId);
+  state.photoUrl = fileUrl;             // <-- ранее использовалось
+  state.photoDirectUrl = fileUrl;       // <-- добавляем прямую ссылку
 
-          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
-          state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
+  const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)');
+  state.stage = 'waiting_sum';
+  state.serviceMessages = [sumMsg.data.result.message_id];
 
-          setTimeout(() => {
-            deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
-          }, 120000);
+  setTimeout(() => {
+    deleteMessageSafe(chatId, sumMsg.data.result.message_id).catch(e => console.error(e));
+  }, 120000);
 
-          return res.sendStatus(200);
-        }
+  return res.sendStatus(200);
+}
 
         // Получение суммы
         if (state.stage === 'waiting_sum' && msg.text) {
