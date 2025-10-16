@@ -449,6 +449,7 @@ module.exports = (app) => {
             messageId,
             originalRequest: parseRequestMessage(msg.text || msg.caption),
             serviceMessages: [photoMsg.data.result.message_id],
+            userMessages: [], // Для хранения message_id пользовательских сообщений
             isEmergency
           };
 
@@ -458,6 +459,9 @@ module.exports = (app) => {
             try {
               if (userStates[stateKey]?.stage === 'waiting_photo') {
                 await deleteMessageSafe(chatId, photoMsg.data.result.message_id);
+                for (const userMsgId of userStates[stateKey].userMessages) {
+                  await deleteMessageSafe(chatId, userMsgId);
+                }
                 delete userStates[stateKey];
                 await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_photo), state cleared`);
@@ -532,6 +536,7 @@ module.exports = (app) => {
         if (state?.stage === 'waiting_photo' && msg.photo) {
           console.log(`Photo received for ${stateKey}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          state.userMessages.push(messageId); // Сохраняем message_id фото
 
           const fileId = msg.photo.at(-1).file_id;
           const fileUrl = await getTelegramFileUrl(fileId);
@@ -558,6 +563,9 @@ module.exports = (app) => {
             try {
               if (userStates[stateKey]?.stage === 'waiting_sum') {
                 await deleteMessageSafe(chatId, sumMsg.data.result.message_id);
+                for (const userMsgId of userStates[stateKey].userMessages) {
+                  await deleteMessageSafe(chatId, userMsgId);
+                }
                 delete userStates[stateKey];
                 await sendMessage(chatId, '⏰ Время ожидания суммы истекло.', { reply_to_message_id: state.messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_sum), state cleared`);
@@ -574,6 +582,7 @@ module.exports = (app) => {
         if (state?.stage === 'waiting_sum' && msg.text) {
           console.log(`Sum received for ${stateKey}: ${msg.text}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          state.userMessages.push(messageId); // Сохраняем message_id суммы
 
           state.sum = msg.text;
 
@@ -591,6 +600,9 @@ module.exports = (app) => {
             try {
               if (userStates[stateKey]?.stage === 'waiting_comment') {
                 await deleteMessageSafe(chatId, commentMsg.data.result.message_id);
+                for (const userMsgId of userStates[stateKey].userMessages) {
+                  await deleteMessageSafe(chatId, userMsgId);
+                }
                 delete userStates[stateKey];
                 await sendMessage(chatId, '⏰ Время ожидания комментария истекло.', { reply_to_message_id: state.messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_comment), state cleared`);
@@ -607,6 +619,7 @@ module.exports = (app) => {
         if (state?.stage === 'waiting_comment' && msg.text) {
           console.log(`Comment received for ${stateKey}: ${msg.text}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
+          state.userMessages.push(messageId); // Сохраняем message_id комментария
 
           state.comment = msg.text;
 
@@ -629,30 +642,27 @@ module.exports = (app) => {
             timestamp: new Date().toISOString()
           };
 
-          // Отправка сообщения о закрытии как ответа на материнское сообщение
+          // Пытаемся получить diskUrl, если не удается, используем photoUrl
+          let diskUrl = null;
+          try {
+            diskUrl = await getGoogleDiskLink(state.row);
+          } catch (e) {
+            console.error(`Failed to get disk link for row ${state.row}:`, e);
+          }
+
+          // Отправка одного сообщения о закрытии
           await sendMessage(
             chatId, 
-            formatCompletionMessage(completionData, state.photoUrl),
+            formatCompletionMessage(completionData, diskUrl || state.photoUrl),
             { reply_to_message_id: state.messageId, disable_web_page_preview: false }
           );
 
           await sendToGAS(completionData);
 
-          setTimeout(async () => {
-            try {
-              const diskUrl = await getGoogleDiskLink(state.row);
-              if (diskUrl) {
-                await sendMessage(
-                  chatId, 
-                  formatCompletionMessage(completionData, diskUrl),
-                  { reply_to_message_id: state.messageId, disable_web_page_preview: false }
-                );
-                console.log(`Sent updated message with disk link for row ${state.row}`);
-              }
-            } catch (e) {
-              console.error(`Error updating disk link for row ${state.row}:`, e);
-            }
-          }, 180000);
+          // Удаляем все пользовательские сообщения
+          for (const userMsgId of state.userMessages) {
+            await deleteMessageSafe(chatId, userMsgId);
+          }
 
           await sendButtonsWithRetry(chatId, state.messageId, []);
 
