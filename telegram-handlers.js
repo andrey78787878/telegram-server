@@ -510,19 +510,18 @@ module.exports = (app) => {
         const chatId = msg.chat.id;
         const text = msg.text || msg.caption;
         const messageId = msg.message_id;
+        const username = msg.from.username ? `@${msg.from.username}` : null;
 
-        // Извлечение row из сообщения, связанного с заявкой
-        let row = null;
+        // Поиск последнего состояния для данного чата и пользователя
         let stateKey = null;
         let state = null;
+        let row = null;
 
-        // Проверяем все состояния, чтобы найти подходящее
         for (const key of Object.keys(userStates)) {
-          const currentState = userStates[key];
-          if (currentState.messageId === msg.reply_to_message?.message_id) {
+          if (key.startsWith(`${chatId}:`) && userStates[key].username === username) {
             stateKey = key;
-            state = currentState;
-            row = currentState.row;
+            state = userStates[key];
+            row = state.row;
             break;
           }
         }
@@ -661,6 +660,20 @@ module.exports = (app) => {
           console.log(`Completion process finished for ${stateKey}, state cleared`);
 
           return res.sendStatus(200);
+        }
+
+        // Обработка некорректных сообщений с кулдауном
+        if ((msg.photo || msg.text) && !state && !text?.startsWith('/')) {
+          const userId = msg.from.id;
+          const lastErrorTime = errorMessageCooldown.get(userId) || 0;
+          const now = Date.now();
+          if (now - lastErrorTime > 60000) { // Кулдаун 1 минута
+            errorMessageCooldown.set(userId, now);
+            console.warn(`No state or row found for message in chat ${chatId}, text: ${text || 'photo'}`);
+            await sendMessage(chatId, '❌ Пожалуйста, отправьте корректные данные для заявки.', {
+              reply_to_message_id: messageId
+            });
+          }
         }
       }
 
