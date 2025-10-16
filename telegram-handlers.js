@@ -13,8 +13,9 @@ const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
 const EXECUTORS = ['@Andrey_Tkach_Dodo', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
-// Хранилище user_id
+// Хранилище user_id и времени последней ошибки
 const userStorage = new Map();
+const errorMessageCooldown = new Map(); // Для ограничения сообщений об ошибке
 
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
@@ -437,7 +438,7 @@ module.exports = (app) => {
 
           const photoMsg = await sendMessage(
             chatId,
-            '📸 Пришлите фото выполненных работ\n\n⚠️ Для отмены нажмите /cancel',
+            `📸 Пришлите фото выполненных работ для заявки #${row}\n\n⚠️ Для отмены нажмите /cancel`,
             { reply_to_message_id: messageId }
           );
 
@@ -458,13 +459,13 @@ module.exports = (app) => {
               if (userStates[stateKey]?.stage === 'waiting_photo') {
                 await deleteMessageSafe(chatId, photoMsg.data.result.message_id);
                 delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания фото истекло.');
-                console.log(`Timeout triggered for ${stateKey}, state cleared`);
+                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: messageId });
+                console.log(`Timeout triggered for ${stateKey} (waiting_photo), state cleared`);
               }
             } catch (e) {
               console.error(`Error handling photo timeout for ${stateKey}:`, e);
             }
-          }, 300000);
+          }, 60000); // 1 минута
 
           return res.sendStatus(200);
         }
@@ -510,9 +511,9 @@ module.exports = (app) => {
         const text = msg.text || msg.caption;
         const messageId = msg.message_id;
 
-        // Извлечение row из сообщения или ответа
-        let row = extractRowFromMessage(text);
-        if (!row && msg.reply_to_message) {
+        // Извлечение row только из reply_to_message
+        let row = null;
+        if (msg.reply_to_message) {
           row = extractRowFromMessage(msg.reply_to_message.text || msg.reply_to_message.caption);
         }
 
@@ -525,13 +526,13 @@ module.exports = (app) => {
         if (text === '/cancel' && state) {
           console.log(`Cancel command received for ${stateKey}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          await sendMessage(chatId, '🚫 Процесс завершения заявки отменен.');
+          await sendMessage(chatId, '🚫 Процесс завершения заявки отменен.', { reply_to_message_id: state.messageId });
           delete userStates[stateKey];
           return res.sendStatus(200);
         }
 
         // Обработка фото
-        if (state?.stage === 'waiting_photo' && msg.photo) {
+        if (state?.stage === 'waiting_photo' && msg.photo && msg.reply_to_message) {
           console.log(`Photo received for ${stateKey}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
@@ -539,16 +540,18 @@ module.exports = (app) => {
           const fileUrl = await getTelegramFileUrl(fileId);
           if (!fileUrl) {
             console.log(`Failed to get file URL for photo in ${stateKey}`);
-            await sendMessage(chatId, '❌ Ошибка получения фото. Попробуйте еще раз.');
+            await sendMessage(chatId, '❌ Ошибка получения фото. Попробуйте еще раз.', { reply_to_message_id: messageId });
             return res.sendStatus(200);
           }
 
           state.photoUrl = fileUrl;
           state.photoDirectUrl = fileUrl;
 
-          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\n⚠️ Для отмены нажмите /cancel', {
-            reply_to_message_id: messageId
-          });
+          const sumMsg = await sendMessage(
+            chatId,
+            `💰 Укажите сумму работ (в сумах) для заявки #${row}\n\n⚠️ Для отмены нажмите /cancel`,
+            { reply_to_message_id: state.messageId }
+          );
           state.stage = 'waiting_sum';
           state.serviceMessages = [sumMsg.data.result.message_id];
 
@@ -559,27 +562,29 @@ module.exports = (app) => {
               if (userStates[stateKey]?.stage === 'waiting_sum') {
                 await deleteMessageSafe(chatId, sumMsg.data.result.message_id);
                 delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания суммы истекло.');
+                await sendMessage(chatId, '⏰ Время ожидания суммы истекло.', { reply_to_message_id: state.messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_sum), state cleared`);
               }
             } catch (e) {
               console.error(`Error handling sum timeout for ${stateKey}:`, e);
             }
-          }, 300000);
+          }, 60000); // 1 минута
 
           return res.sendStatus(200);
         }
 
         // Обработка суммы
-        if (state?.stage === 'waiting_sum' && msg.text) {
+        if (state?.stage === 'waiting_sum' && msg.text && msg.reply_to_message) {
           console.log(`Sum received for ${stateKey}: ${msg.text}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
           state.sum = msg.text;
 
-          const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\n⚠️ Для отмены нажмите /cancel', {
-            reply_to_message_id: messageId
-          });
+          const commentMsg = await sendMessage(
+            chatId,
+            `💬 Напишите комментарий для заявки #${row}\n\n⚠️ Для отмены нажмите /cancel`,
+            { reply_to_message_id: state.messageId }
+          );
           state.stage = 'waiting_comment';
           state.serviceMessages = [commentMsg.data.result.message_id];
 
@@ -590,19 +595,19 @@ module.exports = (app) => {
               if (userStates[stateKey]?.stage === 'waiting_comment') {
                 await deleteMessageSafe(chatId, commentMsg.data.result.message_id);
                 delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания комментария истекло.');
+                await sendMessage(chatId, '⏰ Время ожидания комментария истекло.', { reply_to_message_id: state.messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_comment), state cleared`);
               }
             } catch (e) {
               console.error(`Error handling comment timeout for ${stateKey}:`, e);
             }
-          }, 300000);
+          }, 60000); // 1 минута
 
           return res.sendStatus(200);
         }
 
         // Обработка комментария
-        if (state?.stage === 'waiting_comment' && msg.text) {
+        if (state?.stage === 'waiting_comment' && msg.text && msg.reply_to_message) {
           console.log(`Comment received for ${stateKey}: ${msg.text}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
@@ -627,11 +632,11 @@ module.exports = (app) => {
             timestamp: new Date().toISOString()
           };
 
-          await editMessageSafe(
+          // Отправка сообщения о закрытии как ответа на материнское сообщение
+          await sendMessage(
             chatId, 
-            state.messageId, 
             formatCompletionMessage(completionData, state.photoUrl),
-            { disable_web_page_preview: false }
+            { reply_to_message_id: state.messageId, disable_web_page_preview: false }
           );
 
           await sendToGAS(completionData);
@@ -640,13 +645,12 @@ module.exports = (app) => {
             try {
               const diskUrl = await getGoogleDiskLink(state.row);
               if (diskUrl) {
-                await editMessageSafe(
+                await sendMessage(
                   chatId, 
-                  state.messageId, 
                   formatCompletionMessage(completionData, diskUrl),
-                  { disable_web_page_preview: false }
+                  { reply_to_message_id: state.messageId, disable_web_page_preview: false }
                 );
-                console.log(`Updated message with disk link for row ${state.row}`);
+                console.log(`Sent updated message with disk link for row ${state.row}`);
               }
             } catch (e) {
               console.error(`Error updating disk link for row ${state.row}:`, e);
@@ -661,10 +665,18 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
-        // Если row не найден, уведомляем пользователя
-        if (!row && msg.photo || msg.text) {
-          console.warn(`No row found for message in chat ${chatId}, text: ${text || 'photo'}`);
-          await sendMessage(chatId, '❌ Пожалуйста, отправьте фото/сумму/комментарий в ответ на сообщение с заявкой.');
+        // Обработка некорректных сообщений с кулдауном
+        if ((msg.photo || msg.text) && !state && !text?.startsWith('/')) {
+          const userId = msg.from.id;
+          const lastErrorTime = errorMessageCooldown.get(userId) || 0;
+          const now = Date.now();
+          if (now - lastErrorTime > 60000) { // Кулдаун 1 минута
+            errorMessageCooldown.set(userId, now);
+            console.warn(`No state or row found for message in chat ${chatId}, text: ${text || 'photo'}`);
+            await sendMessage(chatId, '❌ Пожалуйста, отправьте фото/сумму/комментарий в ответ на сообщение с заявкой.', {
+              reply_to_message_id: messageId
+            });
+          }
         }
       }
 
