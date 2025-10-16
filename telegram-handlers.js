@@ -74,6 +74,10 @@ ${data.delayDays > 0 ? `🔴 Просрочка: ${data.delayDays} дн.` : ''}
 }
 
 async function sendMessage(chatId, text, options = {}) {
+  if (!text) {
+    console.error('Attempted to send empty message');
+    return null;
+  }
   let attempts = 0;
   const maxAttempts = 3;
   while (attempts < maxAttempts) {
@@ -102,6 +106,10 @@ async function sendMessage(chatId, text, options = {}) {
 }
 
 async function editMessageSafe(chatId, messageId, text, options = {}) {
+  if (!text) {
+    console.error('Attempted to edit message with empty text');
+    return null;
+  }
   try {
     const response = await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
@@ -124,6 +132,10 @@ async function editMessageSafe(chatId, messageId, text, options = {}) {
 }
 
 async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
+  if (!fallbackText) {
+    console.error('Fallback text is empty in sendButtonsWithRetry');
+    return null;
+  }
   try {
     const response = await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
       chat_id: chatId,
@@ -263,7 +275,7 @@ module.exports = (app) => {
 
         if (!AUTHORIZED_USERS.includes(username)) {
           const accessDeniedMsg = await sendMessage(chatId, '❌ У вас нет доступа.');
-          setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg.data.result.message_id), 30000);
+          setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg?.data?.result?.message_id), 30000);
           return res.sendStatus(200);
         }
 
@@ -271,7 +283,7 @@ module.exports = (app) => {
         if (data.startsWith('accept') || data === 'accept') {
           if (!MANAGERS.includes(username)) {
             const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
             return res.sendStatus(200);
           }
 
@@ -304,7 +316,7 @@ module.exports = (app) => {
 
             setTimeout(async () => {
               try {
-                await deleteMessageSafe(chatId, chooseExecutorMsg.data.result.message_id);
+                await deleteMessageSafe(chatId, chooseExecutorMsg?.data?.result?.message_id);
               } catch (e) {
                 console.error('Error deleting choose executor message:', e);
               }
@@ -340,7 +352,7 @@ module.exports = (app) => {
 
           setTimeout(async () => {
             try {
-              await deleteMessageSafe(chatId, chooseExecutorMsg.data.result.message_id);
+              await deleteMessageSafe(chatId, chooseExecutorMsg?.data?.result?.message_id);
             } catch (e) {
               console.error('Error deleting choose executor message:', e);
             }
@@ -384,7 +396,7 @@ module.exports = (app) => {
 
           await sendButtonsWithRetry(chatId, messageId, actionButtons, `Выберите действие для заявки #${row}:`);
 
-          await sendMessage(
+          const executorMsg = await sendMessage(
             chatId,
             `📢 ${executorUsername}, вам назначена заявка #${row}!`,
             { reply_to_message_id: messageId }
@@ -427,7 +439,7 @@ module.exports = (app) => {
         if (data.startsWith('done:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
             return res.sendStatus(200);
           }
 
@@ -435,6 +447,12 @@ module.exports = (app) => {
           const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
 
           console.log(`Starting completion process for row ${row}, stateKey: ${stateKey}`);
+
+          // Удаляем старое состояние, если оно существует
+          if (userStates[stateKey]) {
+            console.log(`Clearing previous state for ${stateKey}`);
+            delete userStates[stateKey];
+          }
 
           const photoMsg = await sendMessage(
             chatId,
@@ -448,9 +466,10 @@ module.exports = (app) => {
             username,
             messageId,
             originalRequest: parseRequestMessage(msg.text || msg.caption),
-            serviceMessages: [photoMsg.data.result.message_id],
-            userMessages: [], // Для хранения message_id пользовательских сообщений
-            isEmergency
+            serviceMessages: [photoMsg?.data?.result?.message_id].filter(Boolean),
+            userMessages: [],
+            isEmergency,
+            processedMessageIds: new Set() // Для отслеживания обработанных сообщений
           };
 
           console.log(`State set to waiting_photo for ${stateKey}`);
@@ -458,7 +477,7 @@ module.exports = (app) => {
           setTimeout(async () => {
             try {
               if (userStates[stateKey]?.stage === 'waiting_photo') {
-                await deleteMessageSafe(chatId, photoMsg.data.result.message_id);
+                await deleteMessageSafe(chatId, photoMsg?.data?.result?.message_id);
                 for (const userMsgId of userStates[stateKey].userMessages) {
                   await deleteMessageSafe(chatId, userMsgId);
                 }
@@ -478,7 +497,7 @@ module.exports = (app) => {
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg.data.result.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
             return res.sendStatus(200);
           }
 
@@ -502,7 +521,7 @@ module.exports = (app) => {
             timestamp: new Date().toISOString()
           });
 
-          await sendButtonsWithRetry(chatId, messageId, []);
+          await sendButtonsWithRetry(chatId, messageId, [], `Заявка #${row} отменена`);
 
           return res.sendStatus(200);
         }
@@ -532,11 +551,29 @@ module.exports = (app) => {
 
         console.log(`Processing message in chat ${chatId}, row: ${row}, stateKey: ${stateKey}, state: ${JSON.stringify(state)}`);
 
+        // Пропускаем, если сообщение уже обработано
+        if (state && state.processedMessageIds.has(messageId)) {
+          console.log(`Message ${messageId} already processed for ${stateKey}`);
+          return res.sendStatus(200);
+        }
+
         // Обработка фото
         if (state?.stage === 'waiting_photo' && msg.photo) {
           console.log(`Photo received for ${stateKey}`);
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          state.userMessages.push(messageId); // Сохраняем message_id фото
+          if (state.processedMessageIds.has(messageId)) {
+            console.log(`Skipping duplicate photo message ${messageId}`);
+            return res.sendStatus(200);
+          }
+          state.processedMessageIds.add(messageId);
+
+          // Удаляем сервисное сообщение и предыдущие пользовательские сообщения
+          for (const serviceMsgId of state.serviceMessages) {
+            await deleteMessageSafe(chatId, serviceMsgId);
+          }
+          for (const userMsgId of state.userMessages) {
+            await deleteMessageSafe(chatId, userMsgId);
+          }
+          state.userMessages = [messageId]; // Сохраняем только новое message_id фото
 
           const fileId = msg.photo.at(-1).file_id;
           const fileUrl = await getTelegramFileUrl(fileId);
@@ -555,14 +592,17 @@ module.exports = (app) => {
             { reply_to_message_id: state.messageId }
           );
           state.stage = 'waiting_sum';
-          state.serviceMessages = [sumMsg.data.result.message_id];
+          state.serviceMessages = [sumMsg?.data?.result?.message_id].filter(Boolean);
+          state.processedMessageIds.clear(); // Очищаем, чтобы обработать новое сообщение
 
-          console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg.data.result.message_id}`);
+          console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg?.data?.result?.message_id}`);
 
           setTimeout(async () => {
             try {
               if (userStates[stateKey]?.stage === 'waiting_sum') {
-                await deleteMessageSafe(chatId, sumMsg.data.result.message_id);
+                for (const serviceMsgId of userStates[stateKey].serviceMessages) {
+                  await deleteMessageSafe(chatId, serviceMsgId);
+                }
                 for (const userMsgId of userStates[stateKey].userMessages) {
                   await deleteMessageSafe(chatId, userMsgId);
                 }
@@ -581,8 +621,20 @@ module.exports = (app) => {
         // Обработка суммы
         if (state?.stage === 'waiting_sum' && msg.text) {
           console.log(`Sum received for ${stateKey}: ${msg.text}`);
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          state.userMessages.push(messageId); // Сохраняем message_id суммы
+          if (state.processedMessageIds.has(messageId)) {
+            console.log(`Skipping duplicate sum message ${messageId}`);
+            return res.sendStatus(200);
+          }
+          state.processedMessageIds.add(messageId);
+
+          // Удаляем сервисное сообщение и предыдущие пользовательские сообщения
+          for (const serviceMsgId of state.serviceMessages) {
+            await deleteMessageSafe(chatId, serviceMsgId);
+          }
+          for (const userMsgId of state.userMessages) {
+            await deleteMessageSafe(chatId, userMsgId);
+          }
+          state.userMessages = [messageId]; // Сохраняем только новое message_id суммы
 
           state.sum = msg.text;
 
@@ -592,14 +644,17 @@ module.exports = (app) => {
             { reply_to_message_id: state.messageId }
           );
           state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg.data.result.message_id];
+          state.serviceMessages = [commentMsg?.data?.result?.message_id].filter(Boolean);
+          state.processedMessageIds.clear(); // Очищаем, чтобы обработать новое сообщение
 
-          console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg.data.result.message_id}`);
+          console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg?.data?.result?.message_id}`);
 
           setTimeout(async () => {
             try {
               if (userStates[stateKey]?.stage === 'waiting_comment') {
-                await deleteMessageSafe(chatId, commentMsg.data.result.message_id);
+                for (const serviceMsgId of userStates[stateKey].serviceMessages) {
+                  await deleteMessageSafe(chatId, serviceMsgId);
+                }
                 for (const userMsgId of userStates[stateKey].userMessages) {
                   await deleteMessageSafe(chatId, userMsgId);
                 }
@@ -618,8 +673,20 @@ module.exports = (app) => {
         // Обработка комментария
         if (state?.stage === 'waiting_comment' && msg.text) {
           console.log(`Comment received for ${stateKey}: ${msg.text}`);
-          await deleteMessageSafe(chatId, state.serviceMessages[0]);
-          state.userMessages.push(messageId); // Сохраняем message_id комментария
+          if (state.processedMessageIds.has(messageId)) {
+            console.log(`Skipping duplicate comment message ${messageId}`);
+            return res.sendStatus(200);
+          }
+          state.processedMessageIds.add(messageId);
+
+          // Удаляем сервисное сообщение и предыдущие пользовательские сообщения
+          for (const serviceMsgId of state.serviceMessages) {
+            await deleteMessageSafe(chatId, serviceMsgId);
+          }
+          for (const userMsgId of state.userMessages) {
+            await deleteMessageSafe(chatId, userMsgId);
+          }
+          state.userMessages = [messageId]; // Сохраняем только новое message_id комментария
 
           state.comment = msg.text;
 
@@ -659,12 +726,12 @@ module.exports = (app) => {
 
           await sendToGAS(completionData);
 
-          // Удаляем все пользовательские сообщения
+          // Удаляем последнее пользовательское сообщение (комментарий)
           for (const userMsgId of state.userMessages) {
             await deleteMessageSafe(chatId, userMsgId);
           }
 
-          await sendButtonsWithRetry(chatId, state.messageId, []);
+          await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
 
           delete userStates[stateKey];
           console.log(`Completion process finished for ${stateKey}, state cleared`);
