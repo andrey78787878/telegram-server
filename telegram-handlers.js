@@ -73,34 +73,51 @@ ${data.delayDays > 0 ? `🔴 Просрочка: ${data.delayDays} дн.` : ''}
 }
 
 async function sendMessage(chatId, text, options = {}) {
-  try {
-    return await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      ...options
-    });
-  } catch (error) {
-    console.error('Send message error:', error.response?.data);
-    throw error;
+  let attempts = 0;
+  const maxAttempts = 3;
+  while (attempts < maxAttempts) {
+    try {
+      const response = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+        ...options
+      });
+      console.log(`Message sent to ${chatId}: ${text.substring(0, 50)}...`);
+      return response;
+    } catch (error) {
+      if (error.response?.data?.error_code === 429) {
+        const retryAfter = error.response.data.parameters.retry_after || 10;
+        console.warn(`Too Many Requests, retrying after ${retryAfter}s`);
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+        attempts++;
+        continue;
+      }
+      console.error('Send message error:', error.response?.data || error.message);
+      throw error;
+    }
   }
+  throw new Error(`Failed to send message after ${maxAttempts} attempts`);
 }
 
 async function editMessageSafe(chatId, messageId, text, options = {}) {
   try {
-    return await axios.post(`${TELEGRAM_API}/editMessageText`, {
+    const response = await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: messageId,
       text,
       parse_mode: 'HTML',
       ...options
     });
+    console.log(`Message edited in ${chatId}, message_id: ${messageId}`);
+    return response;
   } catch (error) {
     if (error.response?.data?.description?.includes('no text in the message') || 
         error.response?.data?.description?.includes('message to edit not found')) {
+      console.log(`Editing failed, sending new message to ${chatId}`);
       return await sendMessage(chatId, text, options);
     }
-    console.error('Edit message error:', error.response?.data);
+    console.error('Edit message error:', error.response?.data || error.message);
     throw error;
   }
 }
@@ -112,11 +129,14 @@ async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
       message_id: messageId,
       reply_markup: { inline_keyboard: buttons }
     });
+    console.log(`Buttons updated for message ${messageId} in ${chatId}`);
     return response;
   } catch (error) {
     if (error.response?.data?.description?.includes('not modified')) {
+      console.log(`Buttons not modified for message ${messageId}`);
       return { ok: true };
     }
+    console.log(`Button update failed, sending new message with buttons to ${chatId}`);
     return await sendMessage(chatId, fallbackText, {
       reply_markup: { inline_keyboard: buttons }
     });
@@ -125,12 +145,14 @@ async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
 
 async function deleteMessageSafe(chatId, messageId) {
   try {
-    return await axios.post(`${TELEGRAM_API}/deleteMessage`, {
+    const response = await axios.post(`${TELEGRAM_API}/deleteMessage`, {
       chat_id: chatId,
       message_id: messageId
     });
+    console.log(`Message ${messageId} deleted in ${chatId}`);
+    return response;
   } catch (error) {
-    console.error('Delete message error:', error.response?.data);
+    console.error('Delete message error:', error.response?.data || error.message);
     return null;
   }
 }
@@ -138,9 +160,11 @@ async function deleteMessageSafe(chatId, messageId) {
 async function getTelegramFileUrl(fileId) {
   try {
     const { data } = await axios.get(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-    return `${TELEGRAM_FILE_API}/${data.result.file_path}`;
+    const url = `${TELEGRAM_FILE_API}/${data.result.file_path}`;
+    console.log(`File URL retrieved: ${url}`);
+    return url;
   } catch (error) {
-    console.error('Get file URL error:', error.response?.data);
+    console.error('Get file URL error:', error.response?.data || error.message);
     return null;
   }
 }
@@ -160,9 +184,11 @@ async function sendToGAS(data) {
 async function getGoogleDiskLink(row) {
   try {
     const res = await axios.post(`${GAS_WEB_APP_URL}?getDiskLink=true`, { row });
-    return res.data.diskLink || null;
+    const diskLink = res.data.diskLink || null;
+    console.log(`Google Disk link for row ${row}: ${diskLink}`);
+    return diskLink;
   } catch (error) {
-    console.error('Get Google Disk link error:', error.response?.data);
+    console.error('Get Google Disk link error:', error.response?.data || error.message);
     return null;
   }
 }
@@ -180,6 +206,7 @@ module.exports = (app) => {
         const user = body.message.from;
         if (user.username) {
           userStorage.set(`@${user.username}`, user.id);
+          console.log(`Saved user_id for ${user.username}: ${user.id}`);
         }
 
         // Обработка новых сообщений для дублирования аварийных заявок
@@ -189,6 +216,7 @@ module.exports = (app) => {
           const requestData = parseRequestMessage(text);
           const row = extractRowFromMessage(text);
           if (row) {
+            console.log(`Processing emergency request #${row}`);
             for (const manager of MANAGERS) {
               const managerId = userStorage.get(manager);
               if (managerId) {
@@ -405,6 +433,8 @@ module.exports = (app) => {
           const stateKey = `${chatId}:${row}`;
           const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
 
+          console.log(`Starting completion process for row ${row}, stateKey: ${stateKey}`);
+
           const photoMsg = await sendMessage(
             chatId,
             '📸 Пришлите фото выполненных работ\n\n⚠️ Для отмены нажмите /cancel',
@@ -421,17 +451,20 @@ module.exports = (app) => {
             isEmergency
           };
 
+          console.log(`State set to waiting_photo for ${stateKey}`);
+
           setTimeout(async () => {
             try {
-              await deleteMessageSafe(chatId, photoMsg.data.result.message_id);
               if (userStates[stateKey]?.stage === 'waiting_photo') {
+                await deleteMessageSafe(chatId, photoMsg.data.result.message_id);
                 delete userStates[stateKey];
                 await sendMessage(chatId, '⏰ Время ожидания фото истекло.');
+                console.log(`Timeout triggered for ${stateKey}, state cleared`);
               }
             } catch (e) {
-              console.error('Error handling photo timeout:', e);
+              console.error(`Error handling photo timeout for ${stateKey}:`, e);
             }
-          }, 300000); // Увеличен таймаут до 5 минут
+          }, 300000);
 
           return res.sendStatus(200);
         }
@@ -475,12 +508,22 @@ module.exports = (app) => {
         const msg = body.message;
         const chatId = msg.chat.id;
         const text = msg.text || msg.caption;
-        const row = extractRowFromMessage(text) || (msg.reply_to_message ? extractRowFromMessage(msg.reply_to_message.text || msg.reply_to_message.caption) : null);
+        const messageId = msg.message_id;
+
+        // Извлечение row из сообщения или ответа
+        let row = extractRowFromMessage(text);
+        if (!row && msg.reply_to_message) {
+          row = extractRowFromMessage(msg.reply_to_message.text || msg.reply_to_message.caption);
+        }
+
         const stateKey = row ? `${chatId}:${row}` : null;
         const state = stateKey ? userStates[stateKey] : null;
 
+        console.log(`Processing message in chat ${chatId}, row: ${row}, stateKey: ${stateKey}, state: ${JSON.stringify(state)}`);
+
         // Обработка команды /cancel
         if (text === '/cancel' && state) {
+          console.log(`Cancel command received for ${stateKey}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
           await sendMessage(chatId, '🚫 Процесс завершения заявки отменен.');
           delete userStates[stateKey];
@@ -489,11 +532,13 @@ module.exports = (app) => {
 
         // Обработка фото
         if (state?.stage === 'waiting_photo' && msg.photo) {
+          console.log(`Photo received for ${stateKey}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
           const fileId = msg.photo.at(-1).file_id;
           const fileUrl = await getTelegramFileUrl(fileId);
           if (!fileUrl) {
+            console.log(`Failed to get file URL for photo in ${stateKey}`);
             await sendMessage(chatId, '❌ Ошибка получения фото. Попробуйте еще раз.');
             return res.sendStatus(200);
           }
@@ -501,19 +546,24 @@ module.exports = (app) => {
           state.photoUrl = fileUrl;
           state.photoDirectUrl = fileUrl;
 
-          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\n⚠️ Для отмены нажмите /cancel');
+          const sumMsg = await sendMessage(chatId, '💰 Укажите сумму работ (в сумах)\n\n⚠️ Для отмены нажмите /cancel', {
+            reply_to_message_id: messageId
+          });
           state.stage = 'waiting_sum';
           state.serviceMessages = [sumMsg.data.result.message_id];
 
+          console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg.data.result.message_id}`);
+
           setTimeout(async () => {
             try {
-              await deleteMessageSafe(chatId, sumMsg.data.result.message_id);
               if (userStates[stateKey]?.stage === 'waiting_sum') {
+                await deleteMessageSafe(chatId, sumMsg.data.result.message_id);
                 delete userStates[stateKey];
                 await sendMessage(chatId, '⏰ Время ожидания суммы истекло.');
+                console.log(`Timeout triggered for ${stateKey} (waiting_sum), state cleared`);
               }
             } catch (e) {
-              console.error('Error handling sum timeout:', e);
+              console.error(`Error handling sum timeout for ${stateKey}:`, e);
             }
           }, 300000);
 
@@ -522,23 +572,29 @@ module.exports = (app) => {
 
         // Обработка суммы
         if (state?.stage === 'waiting_sum' && msg.text) {
+          console.log(`Sum received for ${stateKey}: ${msg.text}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
           state.sum = msg.text;
 
-          const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\n⚠️ Для отмены нажмите /cancel');
+          const commentMsg = await sendMessage(chatId, '💬 Напишите комментарий\n\n⚠️ Для отмены нажмите /cancel', {
+            reply_to_message_id: messageId
+          });
           state.stage = 'waiting_comment';
           state.serviceMessages = [commentMsg.data.result.message_id];
 
+          console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg.data.result.message_id}`);
+
           setTimeout(async () => {
             try {
-              await deleteMessageSafe(chatId, commentMsg.data.result.message_id);
               if (userStates[stateKey]?.stage === 'waiting_comment') {
+                await deleteMessageSafe(chatId, commentMsg.data.result.message_id);
                 delete userStates[stateKey];
                 await sendMessage(chatId, '⏰ Время ожидания комментария истекло.');
+                console.log(`Timeout triggered for ${stateKey} (waiting_comment), state cleared`);
               }
             } catch (e) {
-              console.error('Error handling comment timeout:', e);
+              console.error(`Error handling comment timeout for ${stateKey}:`, e);
             }
           }, 300000);
 
@@ -547,6 +603,7 @@ module.exports = (app) => {
 
         // Обработка комментария
         if (state?.stage === 'waiting_comment' && msg.text) {
+          console.log(`Comment received for ${stateKey}: ${msg.text}`);
           await deleteMessageSafe(chatId, state.serviceMessages[0]);
 
           state.comment = msg.text;
@@ -589,22 +646,31 @@ module.exports = (app) => {
                   formatCompletionMessage(completionData, diskUrl),
                   { disable_web_page_preview: false }
                 );
+                console.log(`Updated message with disk link for row ${state.row}`);
               }
             } catch (e) {
-              console.error('Error updating disk link:', e);
+              console.error(`Error updating disk link for row ${state.row}:`, e);
             }
           }, 180000);
 
           await sendButtonsWithRetry(chatId, state.messageId, []);
 
           delete userStates[stateKey];
+          console.log(`Completion process finished for ${stateKey}, state cleared`);
+
           return res.sendStatus(200);
+        }
+
+        // Если row не найден, уведомляем пользователя
+        if (!row && msg.photo || msg.text) {
+          console.warn(`No row found for message in chat ${chatId}, text: ${text || 'photo'}`);
+          await sendMessage(chatId, '❌ Пожалуйста, отправьте фото/сумму/комментарий в ответ на сообщение с заявкой.');
         }
       }
 
       return res.sendStatus(200);
     } catch (error) {
-      console.error('Webhook error:', error);
+      console.error('Webhook error:', error.message, error.stack);
       return res.sendStatus(500);
     }
   });
