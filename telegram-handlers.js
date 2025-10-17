@@ -15,7 +15,7 @@ const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id и времени последней ошибки
 const userStorage = new Map();
-const errorMessageCooldown = new Map(); // Для ограничения сообщений об ошибке
+const errorMessageCooldown = new Map();
 
 // Вспомогательные функции
 function extractRowFromCallbackData(callbackData) {
@@ -66,7 +66,7 @@ ${photoLink ? `\n📸 ${photoLink}\n` : ''}
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor}
-${data.delayDays > 0 ? `🔴 Просрочка: ${data.delayDays} дн.` : ''}
+${data.delay > 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
 🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
@@ -469,7 +469,7 @@ module.exports = (app) => {
             serviceMessages: [photoMsg?.data?.result?.message_id].filter(Boolean),
             userMessages: [],
             isEmergency,
-            processedMessageIds: new Set() // Для отслеживания обработанных сообщений
+            processedMessageIds: new Set()
           };
 
           console.log(`State set to waiting_photo for ${stateKey}`);
@@ -482,7 +482,7 @@ module.exports = (app) => {
                   await deleteMessageSafe(chatId, userMsgId);
                 }
                 delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: messageId });
+                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: state.messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_photo), state cleared`);
               }
             } catch (e) {
@@ -573,7 +573,7 @@ module.exports = (app) => {
           for (const userMsgId of state.userMessages) {
             await deleteMessageSafe(chatId, userMsgId);
           }
-          state.userMessages = [messageId]; // Сохраняем только новое message_id фото
+          state.userMessages = [messageId];
 
           const fileId = msg.photo.at(-1).file_id;
           const fileUrl = await getTelegramFileUrl(fileId);
@@ -593,7 +593,7 @@ module.exports = (app) => {
           );
           state.stage = 'waiting_sum';
           state.serviceMessages = [sumMsg?.data?.result?.message_id].filter(Boolean);
-          state.processedMessageIds.clear(); // Очищаем, чтобы обработать новое сообщение
+          state.processedMessageIds.clear();
 
           console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg?.data?.result?.message_id}`);
 
@@ -613,7 +613,7 @@ module.exports = (app) => {
             } catch (e) {
               console.error(`Error handling sum timeout for ${stateKey}:`, e);
             }
-          }, 60000); // 1 минута
+          }, 60000);
 
           return res.sendStatus(200);
         }
@@ -627,14 +627,13 @@ module.exports = (app) => {
           }
           state.processedMessageIds.add(messageId);
 
-          // Удаляем сервисное сообщение и предыдущие пользовательские сообщения
           for (const serviceMsgId of state.serviceMessages) {
             await deleteMessageSafe(chatId, serviceMsgId);
           }
           for (const userMsgId of state.userMessages) {
             await deleteMessageSafe(chatId, userMsgId);
           }
-          state.userMessages = [messageId]; // Сохраняем только новое message_id суммы
+          state.userMessages = [messageId];
 
           state.sum = msg.text;
 
@@ -645,7 +644,7 @@ module.exports = (app) => {
           );
           state.stage = 'waiting_comment';
           state.serviceMessages = [commentMsg?.data?.result?.message_id].filter(Boolean);
-          state.processedMessageIds.clear(); // Очищаем, чтобы обработать новое сообщение
+          state.processedMessageIds.clear();
 
           console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg?.data?.result?.message_id}`);
 
@@ -665,7 +664,7 @@ module.exports = (app) => {
             } catch (e) {
               console.error(`Error handling comment timeout for ${stateKey}:`, e);
             }
-          }, 60000); // 1 минута
+          }, 60000);
 
           return res.sendStatus(200);
         }
@@ -679,14 +678,13 @@ module.exports = (app) => {
           }
           state.processedMessageIds.add(messageId);
 
-          // Удаляем сервисное сообщение и предыдущие пользовательские сообщения
           for (const serviceMsgId of state.serviceMessages) {
             await deleteMessageSafe(chatId, serviceMsgId);
           }
           for (const userMsgId of state.userMessages) {
             await deleteMessageSafe(chatId, userMsgId);
           }
-          state.userMessages = [messageId]; // Сохраняем только новое message_id комментария
+          state.userMessages = [messageId];
 
           state.comment = msg.text;
 
@@ -694,10 +692,10 @@ module.exports = (app) => {
             row: state.row,
             sum: state.sum,
             comment: state.comment,
-            photo: state.photoUrl,
+            photoUrl: state.photoUrl, // Изменено с photo на photoUrl
             executor: state.username,
             originalRequest: state.originalRequest,
-            delayDays: calculateDelayDays(state.originalRequest?.deadline),
+            delay: calculateDelayDays(state.originalRequest?.deadline), // Изменено с delayDays на delay
             status: 'Выполнено',
             isEmergency: state.isEmergency,
             pizzeria: state.originalRequest?.pizzeria,
@@ -706,10 +704,10 @@ module.exports = (app) => {
             initiator: state.originalRequest?.initiator,
             phone: state.originalRequest?.phone,
             category: state.originalRequest?.category,
-            timestamp: new Date().toISOString()
+            factDate: new Date().toISOString(), // Изменено с timestamp на factDate
+            message_id: state.messageId // Добавлено для соответствия fieldMap
           };
 
-          // Пытаемся получить diskUrl, если не удается, используем photoUrl
           let diskUrl = null;
           try {
             diskUrl = await getGoogleDiskLink(state.row);
@@ -717,7 +715,6 @@ module.exports = (app) => {
             console.error(`Failed to get disk link for row ${state.row}:`, e);
           }
 
-          // Отправка одного сообщения о закрытии
           await sendMessage(
             chatId, 
             formatCompletionMessage(completionData, diskUrl || state.photoUrl),
@@ -725,11 +722,6 @@ module.exports = (app) => {
           );
 
           await sendToGAS(completionData);
-
-          // Удаляем последнее пользовательское сообщение (комментарий)
-          for (const userMsgId of state.userMessages) {
-            await deleteMessageSafe(chatId, userMsgId);
-          }
 
           await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
 
@@ -739,12 +731,11 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
-        // Обработка некорректных сообщений с кулдауном
         if ((msg.photo || msg.text) && !state && !text?.startsWith('/')) {
           const userId = msg.from.id;
           const lastErrorTime = errorMessageCooldown.get(userId) || 0;
           const now = Date.now();
-          if (now - lastErrorTime > 60000) { // Кулдаун 1 минута
+          if (now - lastErrorTime > 60000) {
             errorMessageCooldown.set(userId, now);
             console.warn(`No state or row found for message in chat ${chatId}, text: ${text || 'photo'}`);
             await sendMessage(chatId, '❌ Пожалуйста, отправьте корректные данные для заявки.', {
