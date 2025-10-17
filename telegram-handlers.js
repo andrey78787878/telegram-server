@@ -543,32 +543,46 @@ module.exports = (app) => {
         const username = user.username ? `@${user.username}` : null;
         const text = msg.text || msg.caption;
 
+        console.log(`Processing message in chat ${chatId}, messageId: ${messageId}, hasPhoto: ${!!msg.photo}, hasDocument: ${!!msg.document}, replyToMessageId: ${msg.reply_to_message?.message_id || 'none'}, text: ${text}`);
+
         // Поиск состояния
         let stateKey = null;
         let state = null;
         let row = null;
 
-        // Попытка извлечь row из reply_to_message
+        // Попытка извлечь row из reply_to_message или текста
         if (msg.reply_to_message && msg.reply_to_message.text) {
           row = extractRowFromMessage(msg.reply_to_message.text);
         }
         row = row || extractRowFromMessage(text);
 
-        for (const key of Object.keys(userStates)) {
-          if (key.startsWith(`${chatId}:`) && userStates[key].username === username) {
-            stateKey = key;
-            state = userStates[key];
-            row = state.row || row;
-            break;
+        // Поиск состояния по reply_to_message.message_id или row
+        if (msg.reply_to_message && msg.reply_to_message.message_id) {
+          for (const key of Object.keys(userStates)) {
+            if (userStates[key].serviceMessages.includes(msg.reply_to_message.message_id) && userStates[key].username === username) {
+              stateKey = key;
+              state = userStates[key];
+              row = state.row;
+              break;
+            }
           }
         }
 
-        console.log(`Processing message in chat ${chatId}, row: ${row}, stateKey: ${stateKey}, state: ${JSON.stringify(state)}`);
+        // Если состояние не найдено, проверить по row и username
+        if (!stateKey && row) {
+          const possibleStateKey = `${chatId}:${row}`;
+          if (userStates[possibleStateKey] && userStates[possibleStateKey].username === username) {
+            stateKey = possibleStateKey;
+            state = userStates[possibleStateKey];
+          }
+        }
+
+        console.log(`Resolved state: stateKey: ${stateKey}, row: ${row}, state: ${JSON.stringify(state)}`);
 
         if (!state || !row) {
-          console.log(`No state or row found for message in chat ${chatId}, text: ${text}`);
-          if (text && !msg.reply_to_message) {
-            const errorMsg = await sendMessage(chatId, '❌ Пожалуйста, отправьте корректные данные для заявки.');
+          console.log(`No state or row found for message in chat ${chatId}, text: ${text}, replyToMessageId: ${msg.reply_to_message?.message_id || 'none'}`);
+          if ((msg.photo || msg.document || text) && !msg.reply_to_message) {
+            const errorMsg = await sendMessage(chatId, '❌ Пожалуйста, отправьте фото, сумму или комментарий как ответ на сообщение бота.');
             setTimeout(() => deleteMessageSafe(chatId, errorMsg?.data?.result?.message_id), 30000);
           }
           return res.sendStatus(200);
@@ -590,7 +604,7 @@ module.exports = (app) => {
 
         // Обработка фото
         if (state.stage === 'waiting_photo' && (msg.photo || msg.document)) {
-          console.log(`Photo received for ${stateKey}`);
+          console.log(`Photo received for ${stateKey}, fileId: ${msg.photo ? msg.photo[msg.photo.length - 1].file_id : msg.document.file_id}`);
           const fileId = msg.photo ? msg.photo[msg.photo.length - 1].file_id : msg.document.file_id;
           const telegramUrl = await getTelegramFileUrl(fileId);
 
@@ -702,13 +716,3 @@ module.exports = (app) => {
     }
   });
 };
-
-
-### Основные изменения в `server.js`
-1. **Предотвращение повторных нажатий «Выполнено»**:
-   - Добавлена проверка:
-     ```javascript
-     if (userStates[stateKey] && userStates[stateKey].stage === 'waiting_photo') {
-       console.log(`Already waiting for photo for ${stateKey}, ignoring duplicate done`);
-       return res.sendStatus(200);
-     }
