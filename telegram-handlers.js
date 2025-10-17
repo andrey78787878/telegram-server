@@ -183,15 +183,27 @@ async function getTelegramFileUrl(fileId) {
 }
 
 async function sendToGAS(data) {
-  try {
-    console.log('Sending to GAS:', data);
-    const response = await axios.post(GAS_WEB_APP_URL, data);
-    console.log('Data sent to GAS:', response.status);
-    return response.data;
-  } catch (error) {
-    console.error('Error sending to GAS:', error.message);
-    throw error;
+  let attempts = 0;
+  const maxAttempts = 3;
+  while (attempts < maxAttempts) {
+    try {
+      console.log('Sending to GAS:', data);
+      const response = await axios.post(GAS_WEB_APP_URL, data);
+      console.log('Data sent to GAS:', response.status);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 429) {
+        const retryAfter = error.response.data?.retry_after || 10;
+        console.warn(`Too Many Requests to GAS, retrying after ${retryAfter}s`);
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+        attempts++;
+        continue;
+      }
+      console.error('Error sending to GAS:', error.message);
+      throw error;
+    }
   }
+  throw new Error(`Failed to send to GAS after ${maxAttempts} attempts`);
 }
 
 async function getGoogleDiskLink(row) {
@@ -566,7 +578,6 @@ module.exports = (app) => {
           }
           state.processedMessageIds.add(messageId);
 
-          // Удаляем сервисное сообщение и предыдущие пользовательские сообщения
           for (const serviceMsgId of state.serviceMessages) {
             await deleteMessageSafe(chatId, serviceMsgId);
           }
@@ -692,10 +703,10 @@ module.exports = (app) => {
             row: state.row,
             sum: state.sum,
             comment: state.comment,
-            photoUrl: state.photoUrl, // Изменено с photo на photoUrl
+            photoUrl: state.photoUrl,
             executor: state.username,
             originalRequest: state.originalRequest,
-            delay: calculateDelayDays(state.originalRequest?.deadline), // Изменено с delayDays на delay
+            delay: calculateDelayDays(state.originalRequest?.deadline),
             status: 'Выполнено',
             isEmergency: state.isEmergency,
             pizzeria: state.originalRequest?.pizzeria,
@@ -704,8 +715,8 @@ module.exports = (app) => {
             initiator: state.originalRequest?.initiator,
             phone: state.originalRequest?.phone,
             category: state.originalRequest?.category,
-            factDate: new Date().toISOString(), // Изменено с timestamp на factDate
-            message_id: state.messageId // Добавлено для соответствия fieldMap
+            factDate: new Date().toISOString(),
+            message_id: state.messageId
           };
 
           let diskUrl = null;
@@ -722,6 +733,10 @@ module.exports = (app) => {
           );
 
           await sendToGAS(completionData);
+
+          for (const userMsgId of state.userMessages) {
+            await deleteMessageSafe(chatId, userMsgId);
+          }
 
           await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
 
