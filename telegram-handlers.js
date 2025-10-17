@@ -25,7 +25,6 @@ function parseDate(dateStr) {
     console.error(`Invalid date format: ${dateStr}`);
     return null;
   }
-  // Месяц в JavaScript начинается с 0, поэтому вычитаем 1
   return new Date(parseInt(parts[3]), parseInt(parts[2]) - 1, parseInt(parts[1]));
 }
 
@@ -60,7 +59,7 @@ function parseRequestMessage(text) {
 function calculateDelayDays(deadline) {
   if (!deadline) return 0;
   try {
-    const deadlineDate = parseDate(deadline); // Используем parseDate
+    const deadlineDate = parseDate(deadline);
     if (!deadlineDate || isNaN(deadlineDate)) {
       throw new Error(`Invalid date format: ${deadline}`);
     }
@@ -247,31 +246,6 @@ module.exports = (app) => {
         if (user.username) {
           userStorage.set(`@${user.username}`, user.id);
           console.log(`Saved user_id for ${user.username}: ${user.id}`);
-        }
-
-        // Обработка новых сообщений для дублирования аварийных заявок
-        const msg = body.message;
-        const text = msg.text || msg.caption;
-        if (text && (text.includes('🚨') || text.includes('АВАРИЙНАЯ'))) {
-          const requestData = parseRequestMessage(text);
-          const row = extractRowFromMessage(text);
-          if (row) {
-            console.log(`Processing emergency request #${row}`);
-            for (const manager of MANAGERS) {
-              const managerId = userStorage.get(manager);
-              if (managerId) {
-                await sendMessage(
-                  managerId,
-                  `🚨 ПОСТУПИЛА АВАРИЙНАЯ ЗАЯВКА #${row}\n\n` +
-                  `🏢 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
-                  `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
-                  `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
-                  `‼️ ТРЕБУЕТСЯ ВАШЕ ВНИМАНИЕ!`,
-                  { disable_notification: false }
-                ).catch(e => console.error(`Error sending to ${manager}:`, e));
-              }
-            }
-          }
         }
       }
 
@@ -471,11 +445,16 @@ module.exports = (app) => {
           }
 
           const stateKey = `${chatId}:${row}`;
+          // Проверка на повторное нажатие
+          if (userStates[stateKey] && userStates[stateKey].stage === 'waiting_photo') {
+            console.log(`Already waiting for photo for ${stateKey}, ignoring duplicate done`);
+            return res.sendStatus(200);
+          }
+
           const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
 
           console.log(`Starting completion process for row ${row}, stateKey: ${stateKey}`);
 
-          // Удаляем старое состояние, если оно существует
           if (userStates[stateKey]) {
             console.log(`Clearing previous state for ${stateKey}`);
             delete userStates[stateKey];
@@ -503,13 +482,14 @@ module.exports = (app) => {
 
           setTimeout(async () => {
             try {
-              if (userStates[stateKey]?.stage === 'waiting_photo') {
-                await deleteMessageSafe(chatId, photoMsg?.data?.result?.message_id);
-                for (const userMsgId of userStates[stateKey].userMessages) {
+              const currentState = userStates[stateKey];
+              if (currentState?.stage === 'waiting_photo') {
+                await deleteMessageSafe(chatId, currentState.serviceMessages[0]);
+                for (const userMsgId of currentState.userMessages) {
                   await deleteMessageSafe(chatId, userMsgId);
                 }
                 delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: state.messageId });
+                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: currentState.messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_photo), state cleared`);
               }
             } catch (e) {
@@ -562,9 +542,26 @@ module.exports = (app) => {
         const user = msg.from;
         const username = user.username ? `@${user.username}` : null;
         const text = msg.text || msg.caption;
-        const row = extractRowFromMessage(text) || extractRowFromMessage(msg.reply_to_message?.text || msg.reply_to_message?.caption);
-        const stateKey = row ? `${chatId}:${row}` : null;
-        const state = stateKey ? userStates[stateKey] : null;
+
+        // Поиск состояния
+        let stateKey = null;
+        let state = null;
+        let row = null;
+
+        // Попытка извлечь row из reply_to_message
+        if (msg.reply_to_message && msg.reply_to_message.text) {
+          row = extractRowFromMessage(msg.reply_to_message.text);
+        }
+        row = row || extractRowFromMessage(text);
+
+        for (const key of Object.keys(userStates)) {
+          if (key.startsWith(`${chatId}:`) && userStates[key].username === username) {
+            stateKey = key;
+            state = userStates[key];
+            row = state.row || row;
+            break;
+          }
+        }
 
         console.log(`Processing message in chat ${chatId}, row: ${row}, stateKey: ${stateKey}, state: ${JSON.stringify(state)}`);
 
@@ -705,3 +702,13 @@ module.exports = (app) => {
     }
   });
 };
+
+
+### Основные изменения в `server.js`
+1. **Предотвращение повторных нажатий «Выполнено»**:
+   - Добавлена проверка:
+     ```javascript
+     if (userStates[stateKey] && userStates[stateKey].stage === 'waiting_photo') {
+       console.log(`Already waiting for photo for ${stateKey}, ignoring duplicate done`);
+       return res.sendStatus(200);
+     }
