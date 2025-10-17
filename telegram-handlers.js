@@ -10,7 +10,7 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
-const EXECUTORS = ['@Andrey_Tkach_Dodo', '@Olim19', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
+const EXECUTORS = ['@Andrey_Tkach_Dodo', '@olimjon2585', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Хранилище user_id и времени последней ошибки
