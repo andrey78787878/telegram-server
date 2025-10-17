@@ -556,7 +556,7 @@ module.exports = (app) => {
         }
         row = row || extractRowFromMessage(text);
 
-        // Поиск состояния по reply_to_message.message_id или row
+        // Поиск состояния по reply_to_message.message_id
         if (msg.reply_to_message && msg.reply_to_message.message_id) {
           for (const key of Object.keys(userStates)) {
             if (userStates[key].serviceMessages.includes(msg.reply_to_message.message_id) && userStates[key].username === username) {
@@ -568,7 +568,7 @@ module.exports = (app) => {
           }
         }
 
-        // Если состояние не найдено, проверить по row и username
+        // Если состояние не найдено, ищем по row и username
         if (!stateKey && row) {
           const possibleStateKey = `${chatId}:${row}`;
           if (userStates[possibleStateKey] && userStates[possibleStateKey].username === username) {
@@ -577,14 +577,27 @@ module.exports = (app) => {
           }
         }
 
+        // Если row или состояние всё ещё не найдены, ищем последнее состояние для username
+        if (!stateKey) {
+          const userStateKeys = Object.keys(userStates).filter(key => userStates[key].username === username);
+          if (userStateKeys.length > 0) {
+            // Сортируем по времени создания (если есть timestamp) или берём последний
+            const latestStateKey = userStateKeys.sort((a, b) => {
+              const timeA = userStates[a].timestamp || 0;
+              const timeB = userStates[b].timestamp || 0;
+              return timeB - timeA;
+            })[0];
+            stateKey = latestStateKey;
+            state = userStates[latestStateKey];
+            row = state.row;
+          }
+        }
+
         console.log(`Resolved state: stateKey: ${stateKey}, row: ${row}, state: ${JSON.stringify(state)}`);
 
+        // Если состояние не найдено, возвращаем без ошибки
         if (!state || !row) {
           console.log(`No state or row found for message in chat ${chatId}, text: ${text}, replyToMessageId: ${msg.reply_to_message?.message_id || 'none'}`);
-          if ((msg.photo || msg.document || text) && !msg.reply_to_message) {
-            const errorMsg = await sendMessage(chatId, '❌ Пожалуйста, отправьте фото, сумму или комментарий как ответ на сообщение бота.');
-            setTimeout(() => deleteMessageSafe(chatId, errorMsg?.data?.result?.message_id), 30000);
-          }
           return res.sendStatus(200);
         }
 
@@ -601,6 +614,8 @@ module.exports = (app) => {
 
         state.userMessages.push(messageId);
         state.processedMessageIds.add(messageId);
+        // Сохраняем timestamp для сортировки состояний
+        state.timestamp = Date.now();
 
         // Обработка фото
         if (state.stage === 'waiting_photo' && (msg.photo || msg.document)) {
