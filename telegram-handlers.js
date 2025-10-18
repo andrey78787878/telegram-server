@@ -1,3 +1,4 @@
+```javascript
 const axios = require('axios');
 const https = require('https');
 axios.defaults.httpsAgent = new https.Agent({ family: 4, keepAlive: true });
@@ -537,9 +538,21 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
-          // Отправляем финальное уведомление
-          const finalMessage = `✅ Заявка #${row} окончательно закрыта менеджером ${username}!`;
-          await sendMessage(chatId, finalMessage, { reply_to_message_id: state.messageId });
+          // Удаляем сообщение с запросом на подтверждение
+          if (state.pendingMessageId) {
+            await deleteMessageSafe(chatId, state.pendingMessageId);
+          }
+
+          // Формируем финальное сообщение
+          const finalMessage = formatCompletionMessage({
+            ...state,
+            executor: state.username || '@Unknown'
+          }) + `\n\n✅ Заявка #${row} окончательно закрыта менеджером ${username}!`;
+
+          // Отправляем фото с обновлённой подписью
+          await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+            reply_to_message_id: state.messageId
+          });
 
           // Обновляем статус в Google Apps Script
           await sendToGAS({
@@ -557,7 +570,7 @@ module.exports = (app) => {
             factDate: new Date().toISOString()
           });
 
-          // Удаляем кнопки
+          // Удаляем кнопки из исходного сообщения
           await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
 
           console.log(`Completion confirmed for ${stateKey}, state cleared`);
@@ -749,18 +762,24 @@ module.exports = (app) => {
           });
 
           // Отправляем фото с подписью сверху
-          await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+          const photoMsg = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
             reply_to_message_id: state.messageId
           });
 
-          // Уведомление о статусе "Ожидает подтверждения"
-          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера.`;
-          await sendMessage(chatId, pendingMessage, {
+          // Сохраняем message_id фото для возможного использования
+          state.photoMessageId = photoMsg?.data?.result?.message_id;
+
+          // Уведомление о статусе "Ожидает подтверждения" с упоминанием менеджера
+          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера @Andrey_Tkach_Dodo.`;
+          const pendingMsg = await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
             reply_markup: {
               inline_keyboard: [[{ text: '✅ Подтвердить закрытие', callback_data: `confirm:${row}` }]]
             }
           });
+
+          // Сохраняем message_id уведомления для удаления при подтверждении
+          state.pendingMessageId = pendingMsg?.data?.result?.message_id;
 
           const completionData = {
             row: state.row,
@@ -800,3 +819,4 @@ module.exports = (app) => {
     }
   });
 };
+```
