@@ -77,7 +77,7 @@ function formatCompletionMessage(data) {
 ✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
-👤 Исполнитель: ${data.executor}
+👤 Исполнитель: ${data.executor || '@Unknown'}
 ${data.delay > 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
@@ -117,11 +117,11 @@ async function sendMessage(chatId, text, options = {}) {
   throw new Error(`Failed to send message after ${maxAttempts} attempts`);
 }
 
-async function sendPhotoWithCaption(chatId, photoUrl, caption, options = {}) {
+async function sendPhotoWithCaption(chatId, fileId, caption, options = {}) {
   try {
     const response = await axios.post(`${TELEGRAM_API}/sendPhoto`, {
       chat_id: chatId,
-      photo: photoUrl,
+      photo: fileId,
       caption,
       parse_mode: 'HTML',
       show_caption_above_media: true,
@@ -131,7 +131,12 @@ async function sendPhotoWithCaption(chatId, photoUrl, caption, options = {}) {
     return response;
   } catch (error) {
     console.error('Send photo error:', error.response?.data || error.message);
-    throw error;
+    const telegramUrl = await getTelegramFileUrl(fileId);
+    await sendMessage(chatId, `${caption}\n📸 Фото: ${telegramUrl}`, {
+      reply_to_message_id: options.reply_to_message_id,
+      parse_mode: 'HTML'
+    });
+    return null;
   }
 }
 
@@ -667,8 +672,8 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
-        state.userMessages.push(messageId);
         state.processedMessageIds.add(messageId);
+        state.userMessages.push(messageId);
         state.timestamp = Date.now();
 
         // Обработка фото
@@ -682,6 +687,7 @@ module.exports = (app) => {
           }
 
           state.serviceMessages = [];
+          state.fileId = fileId;
           state.photoUrl = telegramUrl;
           state.photoDirectUrl = telegramUrl;
 
@@ -737,10 +743,13 @@ module.exports = (app) => {
           }
 
           const diskUrl = await getGoogleDiskLink(row);
-          const finalMessage = formatCompletionMessage(state);
+          const finalMessage = formatCompletionMessage({
+            ...state,
+            executor: state.username || '@Unknown'
+          });
 
           // Отправляем фото с подписью сверху
-          await sendPhotoWithCaption(chatId, state.photoUrl, finalMessage, {
+          await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
             reply_to_message_id: state.messageId
           });
 
@@ -758,7 +767,7 @@ module.exports = (app) => {
             sum: state.sum,
             comment: state.comment,
             photoUrl: state.photoUrl,
-            executor: state.username,
+            executor: state.username || '@Unknown',
             originalRequest: state.originalRequest,
             delay: calculateDelayDays(state.originalRequest?.deadline),
             status: 'Ожидает подтверждения',
