@@ -72,11 +72,9 @@ function calculateDelayDays(deadline) {
   }
 }
 
-function formatCompletionMessage(data, diskUrl = null) {
-  const photoLink = diskUrl ? diskUrl : (data.photoUrl ? data.photoUrl : null);
+function formatCompletionMessage(data) {
   return `
 ✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта
-${photoLink ? `\n📸 ${photoLink}\n` : ''}
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor}
@@ -117,6 +115,24 @@ async function sendMessage(chatId, text, options = {}) {
     }
   }
   throw new Error(`Failed to send message after ${maxAttempts} attempts`);
+}
+
+async function sendPhotoWithCaption(chatId, photoUrl, caption, options = {}) {
+  try {
+    const response = await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+      chat_id: chatId,
+      photo: photoUrl,
+      caption,
+      parse_mode: 'HTML',
+      show_caption_above_media: true,
+      ...options
+    });
+    console.log(`Photo sent to ${chatId}: ${caption.substring(0, 50)}...`);
+    return response;
+  } catch (error) {
+    console.error('Send photo error:', error.response?.data || error.message);
+    throw error;
+  }
 }
 
 async function editMessageSafe(chatId, messageId, text, options = {}) {
@@ -445,7 +461,6 @@ module.exports = (app) => {
           }
 
           const stateKey = `${chatId}:${row}`;
-          // Проверка на повторное нажатие
           if (userStates[stateKey] && userStates[stateKey].stage === 'waiting_photo') {
             console.log(`Already waiting for photo for ${stateKey}, ignoring duplicate done`);
             return res.sendStatus(200);
@@ -475,7 +490,8 @@ module.exports = (app) => {
             serviceMessages: [photoMsg?.data?.result?.message_id].filter(Boolean),
             userMessages: [],
             isEmergency,
-            processedMessageIds: new Set()
+            processedMessageIds: new Set(),
+            timestamp: Date.now()
           };
 
           console.log(`State set to waiting_photo for ${stateKey}`);
@@ -495,7 +511,52 @@ module.exports = (app) => {
             } catch (e) {
               console.error(`Error handling photo timeout for ${stateKey}:`, e);
             }
-          }, 60000); // 1 минута
+          }, 60000);
+
+          return res.sendStatus(200);
+        }
+
+        // Обработка подтверждения закрытия
+        if (data.startsWith('confirm:')) {
+          if (!MANAGERS.includes(username)) {
+            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут подтверждать закрытие заявок.');
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+            return res.sendStatus(200);
+          }
+
+          const stateKey = `${chatId}:${row}`;
+          const state = userStates[stateKey];
+
+          if (!state || state.stage !== 'pending_confirmation') {
+            await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
+            return res.sendStatus(200);
+          }
+
+          // Отправляем финальное уведомление
+          const finalMessage = `✅ Заявка #${row} окончательно закрыта менеджером ${username}!`;
+          await sendMessage(chatId, finalMessage, { reply_to_message_id: state.messageId });
+
+          // Обновляем статус в Google Apps Script
+          await sendToGAS({
+            row: state.row,
+            status: 'Выполнено',
+            executor: state.username,
+            manager: username,
+            message_id: state.messageId,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline,
+            initiator: state.originalRequest?.initiator,
+            phone: state.originalRequest?.phone,
+            category: state.originalRequest?.category,
+            factDate: new Date().toISOString()
+          });
+
+          // Удаляем кнопки
+          await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
+
+          console.log(`Completion confirmed for ${stateKey}, state cleared`);
+          delete userStates[stateKey];
 
           return res.sendStatus(200);
         }
@@ -550,13 +611,11 @@ module.exports = (app) => {
         let state = null;
         let row = null;
 
-        // Попытка извлечь row из reply_to_message или текста
         if (msg.reply_to_message && msg.reply_to_message.text) {
           row = extractRowFromMessage(msg.reply_to_message.text);
         }
         row = row || extractRowFromMessage(text);
 
-        // Поиск состояния по reply_to_message.message_id
         if (msg.reply_to_message && msg.reply_to_message.message_id) {
           for (const key of Object.keys(userStates)) {
             if (userStates[key].serviceMessages.includes(msg.reply_to_message.message_id) && userStates[key].username === username) {
@@ -568,7 +627,6 @@ module.exports = (app) => {
           }
         }
 
-        // Если состояние не найдено, ищем по row и username
         if (!stateKey && row) {
           const possibleStateKey = `${chatId}:${row}`;
           if (userStates[possibleStateKey] && userStates[possibleStateKey].username === username) {
@@ -577,11 +635,9 @@ module.exports = (app) => {
           }
         }
 
-        // Если row или состояние всё ещё не найдены, ищем последнее состояние для username
         if (!stateKey) {
           const userStateKeys = Object.keys(userStates).filter(key => userStates[key].username === username);
           if (userStateKeys.length > 0) {
-            // Сортируем по времени создания (если есть timestamp) или берём последний
             const latestStateKey = userStateKeys.sort((a, b) => {
               const timeA = userStates[a].timestamp || 0;
               const timeB = userStates[b].timestamp || 0;
@@ -595,7 +651,6 @@ module.exports = (app) => {
 
         console.log(`Resolved state: stateKey: ${stateKey}, row: ${row}, state: ${JSON.stringify(state)}`);
 
-        // Если состояние не найдено, возвращаем без ошибки
         if (!state || !row) {
           console.log(`No state or row found for message in chat ${chatId}, text: ${text}, replyToMessageId: ${msg.reply_to_message?.message_id || 'none'}`);
           return res.sendStatus(200);
@@ -614,7 +669,6 @@ module.exports = (app) => {
 
         state.userMessages.push(messageId);
         state.processedMessageIds.add(messageId);
-        // Сохраняем timestamp для сортировки состояний
         state.timestamp = Date.now();
 
         // Обработка фото
@@ -683,10 +737,20 @@ module.exports = (app) => {
           }
 
           const diskUrl = await getGoogleDiskLink(row);
-          const finalMessage = formatCompletionMessage(state, diskUrl);
+          const finalMessage = formatCompletionMessage(state);
 
-          await sendMessage(chatId, finalMessage, {
+          // Отправляем фото с подписью сверху
+          await sendPhotoWithCaption(chatId, state.photoUrl, finalMessage, {
             reply_to_message_id: state.messageId
+          });
+
+          // Уведомление о статусе "Ожидает подтверждения"
+          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера.`;
+          await sendMessage(chatId, pendingMessage, {
+            reply_to_message_id: state.messageId,
+            reply_markup: {
+              inline_keyboard: [[{ text: '✅ Подтвердить закрытие', callback_data: `confirm:${row}` }]]
+            }
           });
 
           const completionData = {
@@ -697,7 +761,7 @@ module.exports = (app) => {
             executor: state.username,
             originalRequest: state.originalRequest,
             delay: calculateDelayDays(state.originalRequest?.deadline),
-            status: 'Выполнено',
+            status: 'Ожидает подтверждения',
             isEmergency: state.isEmergency,
             pizzeria: state.originalRequest?.pizzeria,
             problem: state.originalRequest?.problem,
@@ -711,14 +775,10 @@ module.exports = (app) => {
 
           await sendToGAS(completionData);
 
-          for (const userMsgId of state.userMessages) {
-            await deleteMessageSafe(chatId, userMsgId);
-          }
-
-          await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
-
-          console.log(`Completion process finished for ${stateKey}, state cleared`);
-          delete userStates[stateKey];
+          state.stage = 'pending_confirmation';
+          state.serviceMessages = [];
+          state.userMessages = [];
+          console.log(`State updated to pending_confirmation for ${stateKey}`);
 
           return res.sendStatus(200);
         }
