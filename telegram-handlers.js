@@ -353,7 +353,235 @@ module.exports = (app) => {
               isEmergency: true,
               pizzeria: requestData?.pizzeria,
               problem: requestData?.problem,
-              deadline: return res.sendStatus(200);
+              deadline: requestData?.deadline,
+              initiator: requestData?.initiator,
+              phone: requestData?.phone,
+              category: requestData?.category,
+              manager: username,
+              timestamp: new Date().toISOString()
+            });
+
+            return res.sendStatus(200);
+          }
+
+          const buttons = EXECUTORS.map(e => [
+            { text: e, callback_data: `executor:${e}:${row}` }
+          ]);
+
+          const chooseExecutorMsg = await sendMessage(chatId, `👷 Выберите исполнителя для заявки #${row}:`, {
+            reply_to_message_id: messageId
+          });
+
+          setTimeout(async () => {
+            try {
+              await deleteMessageSafe(chatId, chooseExecutorMsg?.data?.result?.message_id);
+            } catch (e) {
+              console.error('Error deleting choose executor message:', e);
+            }
+          }, 60000);
+
+          await sendButtonsWithRetry(chatId, messageId, buttons, `Выберите исполнителя для заявки #${row}:`);
+
+          await sendToGAS({
+            row,
+            status: 'Принята в работу',
+            message_id: messageId,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline,
+            initiator: requestData?.initiator,
+            phone: requestData?.phone,
+            category: requestData?.category,
+            manager: username,
+            timestamp: new Date().toISOString()
+          });
+
+          return res.sendStatus(200);
+        }
+
+        // Обработка выбора исполнителя
+        if (data.startsWith('executor:')) {
+          const executorUsername = data.split(':')[1];
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+
+          if (msg.reply_to_message) {
+            await deleteMessageSafe(chatId, msg.reply_to_message.message_id);
+          }
+
+          const actionButtons = [
+            [
+              { text: '✅ Выполнено', callback_data: `done:${row}` },
+              { text: '⏳ Ожидает', callback_data: `wait:${row}` },
+              { text: '❌ Отмена', callback_data: `cancel:${row}` }
+            ]
+          ];
+
+          await sendButtonsWithRetry(chatId, messageId, actionButtons, `Выберите действие для заявки #${row}:`);
+
+          const executorMsg = await sendMessage(
+            chatId,
+            `📢 ${executorUsername}, вам назначена заявка #${row}!`,
+            { reply_to_message_id: messageId }
+          );
+
+          const executorId = userStorage.get(executorUsername);
+          if (executorId) {
+            await sendMessage(
+              executorId,
+              `📌 Вам назначена заявка #${row}\n\n` +
+              `🍕 Пиццерия: ${requestData?.pizzeria || 'не указано'}\n` +
+              `🔧 Проблема: ${requestData?.problem || 'не указано'}\n` +
+              `🕓 Срок: ${requestData?.deadline || 'не указан'}\n\n` +
+              `⚠️ Приступайте к выполнению`,
+              { parse_mode: 'HTML' }
+            ).catch(e => console.error('Error sending to executor:', e));
+          } else {
+            console.warn('❗ Не найден executorId для', executorUsername);
+          }
+
+          await sendToGAS({
+            row,
+            status: 'В работе',
+            executor: executorUsername,
+            message_id: messageId,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline,
+            initiator: requestData?.initiator,
+            phone: requestData?.phone,
+            category: requestData?.category,
+            manager: username,
+            timestamp: new Date().toISOString()
+          });
+
+          return res.sendStatus(200);
+        }
+
+        // Обработка завершения заявки
+        if (data.startsWith('done:')) {
+          if (!EXECUTORS.includes(username)) {
+            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
+            return res.sendStatus(200);
+          }
+
+          const stateKey = `${chatId}:${row}`;
+          if (userStates[stateKey] && userStates[stateKey].stage === 'waiting_photo') {
+            console.log(`Already waiting for photo for ${stateKey}, ignoring duplicate done`);
+            return res.sendStatus(200);
+          }
+
+          const isEmergency = msg.text?.includes('🚨') || msg.caption?.includes('🚨');
+
+          console.log(`Starting completion process for row ${row}, stateKey: ${stateKey}`);
+
+          if (userStates[stateKey]) {
+            console.log(`Clearing previous state for ${stateKey}`);
+            delete userStates[stateKey];
+          }
+
+          const photoMsg = await sendMessage(
+            chatId,
+            `📸 Пришлите фото выполненных работ для заявки #${row}`,
+            { reply_to_message_id: messageId }
+          );
+
+          userStates[stateKey] = {
+            stage: 'waiting_photo',
+            row,
+            username,
+            messageId,
+            originalRequest: parseRequestMessage(msg.text || msg.caption),
+            serviceMessages: [photoMsg?.data?.result?.message_id].filter(Boolean),
+            userMessages: [],
+            isEmergency,
+            processedMessageIds: new Set(),
+            timestamp: Date.now()
+          };
+
+          console.log(`State set to waiting_photo for ${stateKey}`);
+
+          setTimeout(async () => {
+            try {
+              const currentState = userStates[stateKey];
+              if (currentState?.stage === 'waiting_photo') {
+                await deleteMessageSafe(chatId, currentState.serviceMessages[0]);
+                for (const userMsgId of currentState.userMessages) {
+                  await deleteMessageSafe(chatId, userMsgId);
+                }
+                delete userStates[stateKey];
+                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: currentState.messageId });
+                console.log(`Timeout triggered for ${stateKey} (waiting_photo), state cleared`);
+              }
+            } catch (e) {
+              console.error(`Error handling photo timeout for ${stateKey}:`, e);
+            }
+          }, 60000);
+
+          return res.sendStatus(200);
+        }
+
+        // Обработка подтверждения закрытия
+        if (data.startsWith('confirm:')) {
+          if (!MANAGERS.includes(username)) {
+            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут подтверждать закрытие заявок.');
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+            return res.sendStatus(200);
+          }
+
+          const stateKey = `${chatId}:${row}`;
+          const state = userStates[stateKey];
+
+          if (!state || state.stage !== 'pending_confirmation') {
+            await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
+            return res.sendStatus(200);
+          }
+
+          // Удаляем все сервисные сообщения
+          console.log(`Deleting messages: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
+          if (state.pendingMessageId) {
+            await deleteMessageSafe(chatId, state.pendingMessageId);
+          }
+          if (state.photoMessageId) {
+            await deleteMessageSafe(chatId, state.photoMessageId);
+          }
+
+          // Формируем финальное сообщение
+          const finalMessage = `✅ Заявка #${row} окончательно закрыта менеджером ${username}!\n\n` + 
+            formatCompletionMessage({
+              ...state,
+              executor: state.username || '@Unknown'
+            });
+
+          // Отправляем фото с финальной подписью
+          const finalPhotoMsg = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+            reply_to_message_id: state.messageId
+          });
+          console.log(`Final photo message sent, ID: ${finalPhotoMsg?.data?.result?.message_id}`);
+
+          // Обновляем статус в Google Apps Script
+          await sendToGAS({
+            row: state.row,
+            status: 'Выполнено',
+            executor: state.username,
+            manager: username,
+            message_id: state.messageId,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline,
+            initiator: state.originalRequest?.initiator,
+            phone: state.originalRequest?.phone,
+            category: state.originalRequest?.category,
+            factDate: new Date().toISOString()
+          });
+
+          // Удаляем кнопки из исходного сообщения
+          await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
+
+          console.log(`Completion confirmed for ${stateKey}, state cleared`);
+          delete userStates[stateKey];
+
+          return res.sendStatus(200);
         }
 
         // Обработка отклонения заявки
@@ -373,6 +601,7 @@ module.exports = (app) => {
           }
 
           // Удаляем все сервисные сообщения
+          console.log(`Deleting messages for reject: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
           if (state.pendingMessageId) {
             await deleteMessageSafe(chatId, state.pendingMessageId);
           }
@@ -380,58 +609,56 @@ module.exports = (app) => {
             await deleteMessageSafe(chatId, state.photoMessageId);
           }
 
-          // Отправляем сообщение исполнителю
-          const executorId = userStorage.get(state.username);
-          if (executorId) {
-            await sendMessage(
-              executorId,
-              `📌 Заявка #${row} требует доработки. Пожалуйста, отправьте новый комментарий.`,
-              { parse_mode: 'HTML' }
-            );
-          } else {
-            console.warn(`Executor ID not found for ${state.username}`);
-            await sendMessage(chatId, `❌ Не удалось уведомить исполнителя ${state.username}.`);
-          }
-
-          // Отправляем сообщение в чат
-          await sendMessage(
+          // Запрашиваем комментарий к отклонению
+          const rejectCommentMsg = await sendMessage(
             chatId,
-            `❌ Заявка #${row} отклонена менеджером ${username}. Исполнителю отправлен запрос на доработку.`,
-            { reply_to_message_id: state.messageId }
-          );
-
-          // Запрашиваем новый комментарий
-          const commentMsg = await sendMessage(
-            chatId,
-            `💬 ${state.username}, напишите новый комментарий для заявки #${row}`,
+            `💬 ${username}, укажите причину отклонения заявки #${row}`,
             { reply_to_message_id: state.messageId }
           );
 
           // Обновляем состояние
-          state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg?.data?.result?.message_id].filter(Boolean);
+          state.stage = 'waiting_reject_comment';
+          state.serviceMessages = [rejectCommentMsg?.data?.result?.message_id].filter(Boolean);
           state.userMessages = [];
           state.pendingMessageId = null;
           state.photoMessageId = null;
+          state.managerUsername = username;
           state.timestamp = Date.now();
 
-          // Обновляем статус в Google Apps Script
-          await sendToGAS({
-            row: state.row,
-            status: 'Отклонено',
-            executor: state.username,
-            manager: username,
-            message_id: state.messageId,
-            pizzeria: state.originalRequest?.pizzeria,
-            problem: state.originalRequest?.problem,
-            deadline: state.originalRequest?.deadline,
-            initiator: state.originalRequest?.initiator,
-            phone: state.originalRequest?.phone,
-            category: state.originalRequest?.category,
-            factDate: new Date().toISOString()
+          console.log(`State updated to waiting_reject_comment for ${stateKey}`);
+          return res.sendStatus(200);
+        }
+
+        // Обработка отмены заявки
+        if (data.startsWith('cancel:')) {
+          if (!EXECUTORS.includes(username)) {
+            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
+            return res.sendStatus(200);
+          }
+
+          await sendMessage(chatId, '🚫 Заявка отменена', { 
+            reply_to_message_id: messageId 
           });
 
-          console.log(`Rejection processed for ${stateKey}, state set to waiting_comment`);
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+
+          await sendToGAS({ 
+            row: parseInt(data.split(':')[1]), 
+            status: 'Отменено',
+            executor: username,
+            message_id: messageId,
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline,
+            initiator: requestData?.initiator,
+            phone: requestData?.phone,
+            category: requestData?.category,
+            timestamp: new Date().toISOString()
+          });
+
+          await sendButtonsWithRetry(chatId, messageId, [], `Заявка #${row} отменена`);
+
           return res.sendStatus(200);
         }
       }
@@ -591,8 +818,9 @@ module.exports = (app) => {
 
           // Сохраняем message_id фото
           state.photoMessageId = photoMsg?.data?.result?.message_id;
+          console.log(`Photo message sent, ID: ${state.photoMessageId}`);
 
-          // Уведомление о статусе "Ожидает подтверждения" с кнопками "Подтвердить" и "Отклонить"
+          // Уведомление о статусе "Ожидает подтверждения" с кнопками
           const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера @Andrey_Tkach_Dodo.`;
           const pendingMsg = await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
@@ -608,6 +836,7 @@ module.exports = (app) => {
 
           // Сохраняем message_id уведомления
           state.pendingMessageId = pendingMsg?.data?.result?.message_id;
+          console.log(`Pending message sent, ID: ${state.pendingMessageId}`);
 
           const completionData = {
             row: state.row,
@@ -636,6 +865,71 @@ module.exports = (app) => {
           state.userMessages = [];
           console.log(`State updated to pending_confirmation for ${stateKey}`);
 
+          return res.sendStatus(200);
+        }
+
+        // Обработка комментария к отклонению
+        if (state.stage === 'waiting_reject_comment' && text && username === state.managerUsername) {
+          console.log(`Reject comment received for ${stateKey}: ${text}`);
+
+          for (const serviceMsgId of state.serviceMessages) {
+            await deleteMessageSafe(chatId, serviceMsgId);
+          }
+          for (const userMsgId of state.userMessages) {
+            await deleteMessageSafe(chatId, userMsgId);
+          }
+
+          // Отправляем сообщение исполнителю
+          const executorId = userStorage.get(state.username);
+          if (executorId) {
+            await sendMessage(
+              executorId,
+              `📌 Заявка #${row} требует доработки.\nПричина отклонения: ${text}\nПожалуйста, отправьте новый комментарий.`,
+              { parse_mode: 'HTML' }
+            );
+          } else {
+            console.warn(`Executor ID not found for ${state.username}`);
+            await sendMessage(chatId, `❌ Не удалось уведомить исполнителя ${state.username}.`);
+          }
+
+          // Отправляем сообщение в чат
+          await sendMessage(
+            chatId,
+            `❌ Заявка #${row} отклонена менеджером ${username}.\nПричина: ${text}`,
+            { reply_to_message_id: state.messageId }
+          );
+
+          // Запрашиваем новый комментарий от исполнителя
+          const commentMsg = await sendMessage(
+            chatId,
+            `💬 ${state.username}, напишите новый комментарий для заявки #${row}`,
+            { reply_to_message_id: state.messageId }
+          );
+
+          // Обновляем состояние
+          state.stage = 'waiting_comment';
+          state.serviceMessages = [commentMsg?.data?.result?.message_id].filter(Boolean);
+          state.userMessages = [];
+          state.timestamp = Date.now();
+
+          // Обновляем статус в Google Apps Script
+          await sendToGAS({
+            row: state.row,
+            status: 'Отклонено',
+            executor: state.username,
+            manager: username,
+            rejectComment: text,
+            message_id: state.messageId,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline,
+            initiator: state.originalRequest?.initiator,
+            phone: state.originalRequest?.phone,
+            category: state.originalRequest?.category,
+            factDate: new Date().toISOString()
+          });
+
+          console.log(`Rejection processed for ${stateKey}, state set to waiting_comment`);
           return res.sendStatus(200);
         }
       }
