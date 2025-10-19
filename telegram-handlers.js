@@ -15,18 +15,22 @@ const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Маппинг пиццерий к ТУ (массив пользователей)
 const PIZZERIA_TO_TU = {
-  'Ташкент-1': ['@Andrey_tkach_y', '@AnotherUser'],
-  'Ташкент-12': ['@Andrey_tkach_y'],
-  'Ташкент-3': ['@Andrey_Tkach_Dodo'],
-  'Ташкент-2': ['@Andrey_Tkach_Dodo'],
-  'Ташкент-5': ['@Andrey_Tkach_Dodo'],
-  'Ташкент-8': ['@Andrey_Tkach_Dodo'],
-  'Ташкент-10': ['@Andrey_Tkach_Dodo'],
-  'Ташкент-14': ['@Andrey_Tkach_Dodo'],
-  'Ташкент-4': ['@Andrey_tkach_y', '@AnotherUser'],
-  'Ташкент-7': ['@Andrey_tkach_y'],
-  'Ташкент-6': ['@Andrey_tkach_y'],
-  'Ташкент-9': ['@NewUser', '@AnotherUser']
+  'Ташкент-1': ['@zafar555', '@AnotherUser'],
+  'Ташкент-12': ['@zafar555'],
+  'Ташкент-3': ['@azabdukohhorov'],
+  'Ташкент-2': ['@azabdukohhorov'],
+  'Ташкент-5': ['@azabdukohhorov'],
+  'Ташкент-8': ['@azabdukohhorov'],
+  'Ташкент-10': ['@azabdukohhorov'],
+  'Ташкент-14': ['@azabdukohhorov'],
+  'Ташкент-4': ['@Yusuf174', '@AnotherUser'],
+  'Ташкент-7': ['@Yusuf174'],
+  'Ташкент-6': ['@Yusuf174'],
+  'Ташкент-11': ['@Yusuf174'],
+  'ПРЦ': ['@Andrey_Tkach_Dodo'],
+  'Ташкент-9': ['@azabdukohhorov'],
+  'Выездные продажи': ['Andrey_Tkach_Dodo'],
+  'Ташкент-9': ['@Andrey_Tkach_Dodo', '@AnotherUser']
 };
 
 // Хранилище user_id и времени последней ошибки
