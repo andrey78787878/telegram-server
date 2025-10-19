@@ -1,43 +1,12 @@
-```javascript
 const axios = require('axios');
 const https = require('https');
 axios.defaults.httpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const FormData = require('form-data');
 
-// Отладка переменных окружения
-console.log('Checking environment variables in telegram-handlers.js...');
-console.log('BOT_TOKEN:', process.env.BOT_TOKEN ? 'Defined' : 'Undefined');
-console.log('Raw BOT_TOKEN:', JSON.stringify(process.env.BOT_TOKEN));
-
-// Проверка переменной окружения
-const BOT_TOKEN = process.env.BOT_TOKEN ? process.env.BOT_TOKEN.trim() : null;
-if (!BOT_TOKEN) {
-  console.error('BOT_TOKEN is not defined in environment variables');
-  throw new Error('BOT_TOKEN is required');
-}
-
-// Проверка формата BOT_TOKEN
-try {
-  if (!BOT_TOKEN.match(/^\d+:[A-Za-z0-9_-]+$/)) {
-    console.error('Invalid BOT_TOKEN format:', BOT_TOKEN);
-    throw new Error('BOT_TOKEN format is invalid');
-  }
-} catch (error) {
-  console.error('BOT_TOKEN validation error:', error.message);
-  throw error;
-}
-
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || '';
-
-console.log('TELEGRAM_API initialized:', TELEGRAM_API);
-console.log('TELEGRAM_FILE_API initialized:', TELEGRAM_FILE_API);
-console.log('GAS_WEB_APP_URL:', GAS_WEB_APP_URL || 'Not defined');
-
-if (!GAS_WEB_APP_URL) {
-  console.warn('GAS_WEB_APP_URL is not defined, some features may not work');
-}
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
@@ -105,6 +74,7 @@ function calculateDelayDays(deadline) {
 
 function formatCompletionMessage(data) {
   return `
+✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
@@ -131,7 +101,6 @@ async function sendMessage(chatId, text, options = {}) {
         ...options
       });
       console.log(`Message sent to ${chatId}: ${text.substring(0, 50)}...`);
-      console.log(`Telegram API response: ${JSON.stringify(response.data)}`);
       return response;
     } catch (error) {
       if (error.response?.data?.error_code === 429) {
@@ -159,7 +128,6 @@ async function sendPhotoWithCaption(chatId, fileId, caption, options = {}) {
       ...options
     });
     console.log(`Photo sent to ${chatId}: ${caption.substring(0, 50)}...`);
-    console.log(`Telegram API response: ${JSON.stringify(response.data)}`);
     return response;
   } catch (error) {
     console.error('Send photo error:', error.response?.data || error.message);
@@ -224,10 +192,6 @@ async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
 }
 
 async function deleteMessageSafe(chatId, messageId) {
-  if (!messageId) {
-    console.warn(`Attempted to delete message with undefined messageId in ${chatId}`);
-    return null;
-  }
   try {
     const response = await axios.post(`${TELEGRAM_API}/deleteMessage`, {
       chat_id: chatId,
@@ -236,7 +200,7 @@ async function deleteMessageSafe(chatId, messageId) {
     console.log(`Message ${messageId} deleted in ${chatId}`);
     return response;
   } catch (error) {
-    console.error(`Delete message error for messageId ${messageId} in ${chatId}:`, error.response?.data || error.message);
+    console.error('Delete message error:', error.response?.data || error.message);
     return null;
   }
 }
@@ -573,31 +537,9 @@ module.exports = (app) => {
             return res.sendStatus(200);
           }
 
-          // Удаляем все сервисные сообщения
-          console.log(`Attempting to delete messages for ${stateKey}: pendingMessageId=${state.pendingMessageId || 'null'}, photoMessageId=${state.photoMessageId || 'null'}`);
-          if (state.pendingMessageId) {
-            await deleteMessageSafe(chatId, state.pendingMessageId);
-          } else {
-            console.warn(`No pendingMessageId found for ${stateKey}`);
-          }
-          if (state.photoMessageId) {
-            await deleteMessageSafe(chatId, state.photoMessageId);
-          } else {
-            console.warn(`No photoMessageId found for ${stateKey}`);
-          }
-
-          // Формируем финальное сообщение
-          const finalMessage = `✅ Заявка #${row} окончательно закрыта менеджером ${username}!\n\n` + 
-            formatCompletionMessage({
-              ...state,
-              executor: state.username || '@Unknown'
-            });
-
-          // Отправляем фото с финальной подписью
-          const finalPhotoMsg = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
-            reply_to_message_id: state.messageId
-          });
-          console.log(`Final photo message sent for ${stateKey}, ID: ${finalPhotoMsg?.data?.result?.message_id || 'null'}`);
+          // Отправляем финальное уведомление
+          const finalMessage = `✅ Заявка #${row} окончательно закрыта менеджером ${username}!`;
+          await sendMessage(chatId, finalMessage, { reply_to_message_id: state.messageId });
 
           // Обновляем статус в Google Apps Script
           await sendToGAS({
@@ -615,57 +557,12 @@ module.exports = (app) => {
             factDate: new Date().toISOString()
           });
 
-          // Удаляем кнопки из исходного сообщения
+          // Удаляем кнопки
           await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
 
           console.log(`Completion confirmed for ${stateKey}, state cleared`);
           delete userStates[stateKey];
 
-          return res.sendStatus(200);
-        }
-
-        // Обработка отклонения заявки
-        if (data.startsWith('reject:')) {
-          if (!MANAGERS.includes(username)) {
-            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут отклонять заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
-            return res.sendStatus(200);
-          }
-
-          const stateKey = `${chatId}:${row}`;
-          const state = userStates[stateKey];
-
-          if (!state || state.stage !== 'pending_confirmation') {
-            await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
-            return res.sendStatus(200);
-          }
-
-          // Удаляем все сервисные сообщения
-          console.log(`Deleting messages for reject in ${stateKey}: pendingMessageId=${state.pendingMessageId || 'null'}, photoMessageId=${state.photoMessageId || 'null'}`);
-          if (state.pendingMessageId) {
-            await deleteMessageSafe(chatId, state.pendingMessageId);
-          }
-          if (state.photoMessageId) {
-            await deleteMessageSafe(chatId, state.photoMessageId);
-          }
-
-          // Запрашиваем комментарий к отклонению
-          const rejectCommentMsg = await sendMessage(
-            chatId,
-            `💬 ${username}, укажите причину отклонения заявки #${row}`,
-            { reply_to_message_id: state.messageId }
-          );
-
-          // Обновляем состояние
-          state.stage = 'waiting_reject_comment';
-          state.serviceMessages = [rejectCommentMsg?.data?.result?.message_id].filter(Boolean);
-          state.userMessages = [];
-          state.pendingMessageId = null;
-          state.photoMessageId = null;
-          state.managerUsername = username;
-          state.timestamp = Date.now();
-
-          console.log(`State updated to waiting_reject_comment for ${stateKey}, rejectCommentMsg ID: ${rejectCommentMsg?.data?.result?.message_id || 'null'}`);
           return res.sendStatus(200);
         }
 
@@ -786,7 +683,6 @@ module.exports = (app) => {
           const telegramUrl = await getTelegramFileUrl(fileId);
 
           for (const serviceMsgId of state.serviceMessages) {
-            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, serviceMsgId);
           }
 
@@ -803,7 +699,7 @@ module.exports = (app) => {
 
           state.stage = 'waiting_sum';
           state.serviceMessages.push(sumMsg?.data?.result?.message_id);
-          console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg?.data?.result?.message_id || 'null'}`);
+          console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg?.data?.result?.message_id}`);
           return res.sendStatus(200);
         }
 
@@ -813,11 +709,9 @@ module.exports = (app) => {
           state.sum = text;
 
           for (const serviceMsgId of state.serviceMessages) {
-            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, serviceMsgId);
           }
           for (const userMsgId of state.userMessages) {
-            console.log(`Deleting user message ${userMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, userMsgId);
           }
 
@@ -832,7 +726,7 @@ module.exports = (app) => {
 
           state.stage = 'waiting_comment';
           state.serviceMessages.push(commentMsg?.data?.result?.message_id);
-          console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg?.data?.result?.message_id || 'null'}`);
+          console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg?.data?.result?.message_id}`);
           return res.sendStatus(200);
         }
 
@@ -842,54 +736,31 @@ module.exports = (app) => {
           state.comment = text;
 
           for (const serviceMsgId of state.serviceMessages) {
-            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, serviceMsgId);
           }
           for (const userMsgId of state.userMessages) {
-            console.log(`Deleting user message ${userMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, userMsgId);
           }
 
           const diskUrl = await getGoogleDiskLink(row);
-          const tempMessage = formatCompletionMessage({
+          const finalMessage = formatCompletionMessage({
             ...state,
             executor: state.username || '@Unknown'
           });
 
-          // Отправляем фото с временной подписью
-          const photoCaption = `📌 Заявка #${row} ожидает подтверждения\n\n${tempMessage}`;
-          const photoMsg = await sendPhotoWithCaption(chatId, state.fileId, photoCaption, {
+          // Отправляем фото с подписью сверху
+          await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
             reply_to_message_id: state.messageId
           });
 
-          // Сохраняем message_id фото
-          state.photoMessageId = photoMsg?.data?.result?.message_id;
-          console.log(`Photo message sent for ${stateKey}, ID: ${state.photoMessageId || 'null'}`);
-
-          // Уведомление с кнопками "Подтвердить" и "Отклонить"
-          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера @Andrey_Tkach_Dodo.`;
-          const replyMarkup = {
-            inline_keyboard: [
-              [
-                { text: '✅ Подтвердить', callback_data: `confirm:${row}` },
-                { text: '❌ Отклонить', callback_data: `reject:${row}` }
-              ]
-            ]
-          };
-          console.log(`Sending pending message with reply_markup: ${JSON.stringify(replyMarkup)}`);
-          const pendingMsg = await sendMessage(chatId, pendingMessage, {
+          // Уведомление о статусе "Ожидает подтверждения"
+          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера.`;
+          await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
-            reply_markup: replyMarkup
+            reply_markup: {
+              inline_keyboard: [[{ text: '✅ Подтвердить закрытие', callback_data: `confirm:${row}` }]]
+            }
           });
-
-          // Проверяем успешность отправки
-          if (!pendingMsg?.data?.result?.message_id) {
-            console.error(`Failed to send pending message for ${stateKey}: ${JSON.stringify(pendingMsg?.data)}`);
-            await sendMessage(chatId, `❌ Ошибка: не удалось отправить уведомление о подтверждении для заявки #${row}`);
-          } else {
-            state.pendingMessageId = pendingMsg.data.result.message_id;
-            console.log(`Pending message sent for ${stateKey}, ID: ${state.pendingMessageId}`);
-          }
 
           const completionData = {
             row: state.row,
@@ -920,74 +791,6 @@ module.exports = (app) => {
 
           return res.sendStatus(200);
         }
-
-        // Обработка комментария к отклонению
-        if (state.stage === 'waiting_reject_comment' && text && username === state.managerUsername) {
-          console.log(`Reject comment received for ${stateKey}: ${text}`);
-
-          for (const serviceMsgId of state.serviceMessages) {
-            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
-            await deleteMessageSafe(chatId, serviceMsgId);
-          }
-          for (const userMsgId of state.userMessages) {
-            console.log(`Deleting user message ${userMsgId} for ${stateKey}`);
-            await deleteMessageSafe(chatId, userMsgId);
-          }
-
-          // Отправляем сообщение исполнителю
-          const executorId = userStorage.get(state.username);
-          if (executorId) {
-            await sendMessage(
-              executorId,
-              `📌 Заявка #${row} требует доработки.\nПричина отклонения: ${text}\nПожалуйста, отправьте новый комментарий.`,
-              { parse_mode: 'HTML' }
-            );
-            console.log(`Sent reject notification to executor ${state.username} (ID: ${executorId})`);
-          } else {
-            console.warn(`Executor ID not found for ${state.username}`);
-            await sendMessage(chatId, `❌ Не удалось уведомить исполнителя ${state.username}.`);
-          }
-
-          // Отправляем сообщение в чат
-          await sendMessage(
-            chatId,
-            `❌ Заявка #${row} отклонена менеджером ${username}.\nПричина: ${text}`,
-            { reply_to_message_id: state.messageId }
-          );
-
-          // Запрашиваем новый комментарий от исполнителя
-          const commentMsg = await sendMessage(
-            chatId,
-            `💬 ${state.username}, напишите новый комментарий для заявки #${row}`,
-            { reply_to_message_id: state.messageId }
-          );
-
-          // Обновляем состояние
-          state.stage = 'waiting_comment';
-          state.serviceMessages = [commentMsg?.data?.result?.message_id].filter(Boolean);
-          state.userMessages = [];
-          state.timestamp = Date.now();
-
-          // Обновляем статус в Google Apps Script
-          await sendToGAS({
-            row: state.row,
-            status: 'Отклонено',
-            executor: state.username,
-            manager: username,
-            rejectComment: text,
-            message_id: state.messageId,
-            pizzeria: state.originalRequest?.pizzeria,
-            problem: state.originalRequest?.problem,
-            deadline: state.originalRequest?.deadline,
-            initiator: state.originalRequest?.initiator,
-            phone: state.originalRequest?.phone,
-            category: state.originalRequest?.category,
-            factDate: new Date().toISOString()
-          });
-
-          console.log(`Rejection processed for ${stateKey}, state set to waiting_comment, commentMsg ID: ${commentMsg?.data?.result?.message_id || 'null'}`);
-          return res.sendStatus(200);
-        }
       }
 
       return res.sendStatus(200);
@@ -997,4 +800,3 @@ module.exports = (app) => {
     }
   });
 };
-```
