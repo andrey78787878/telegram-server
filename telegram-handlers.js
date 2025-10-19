@@ -4,10 +4,20 @@ const https = require('https');
 axios.defaults.httpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const FormData = require('form-data');
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+// Проверка переменной окружения
+if (!process.env.BOT_TOKEN) {
+  console.error('BOT_TOKEN is not defined in environment variables');
+  throw new Error('BOT_TOKEN is required');
+}
+
+const BOT_TOKEN = process.env.BOT_TOKEN.trim();
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
-const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || '';
+
+if (!GAS_WEB_APP_URL) {
+  console.warn('GAS_WEB_APP_URL is not defined, some features may not work');
+}
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
@@ -101,6 +111,7 @@ async function sendMessage(chatId, text, options = {}) {
         ...options
       });
       console.log(`Message sent to ${chatId}: ${text.substring(0, 50)}...`);
+      console.log(`Telegram API response: ${JSON.stringify(response.data)}`);
       return response;
     } catch (error) {
       if (error.response?.data?.error_code === 429) {
@@ -128,6 +139,7 @@ async function sendPhotoWithCaption(chatId, fileId, caption, options = {}) {
       ...options
     });
     console.log(`Photo sent to ${chatId}: ${caption.substring(0, 50)}...`);
+    console.log(`Telegram API response: ${JSON.stringify(response.data)}`);
     return response;
   } catch (error) {
     console.error('Send photo error:', error.response?.data || error.message);
@@ -204,7 +216,7 @@ async function deleteMessageSafe(chatId, messageId) {
     console.log(`Message ${messageId} deleted in ${chatId}`);
     return response;
   } catch (error) {
-    console.error('Delete message error:', error.response?.data || error.message);
+    console.error(`Delete message error for messageId ${messageId} in ${chatId}:`, error.response?.data || error.message);
     return null;
   }
 }
@@ -542,7 +554,7 @@ module.exports = (app) => {
           }
 
           // Удаляем все сервисные сообщения
-          console.log(`Attempting to delete messages for ${stateKey}: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
+          console.log(`Attempting to delete messages for ${stateKey}: pendingMessageId=${state.pendingMessageId || 'null'}, photoMessageId=${state.photoMessageId || 'null'}`);
           if (state.pendingMessageId) {
             await deleteMessageSafe(chatId, state.pendingMessageId);
           } else {
@@ -565,7 +577,7 @@ module.exports = (app) => {
           const finalPhotoMsg = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
             reply_to_message_id: state.messageId
           });
-          console.log(`Final photo message sent for ${stateKey}, ID: ${finalPhotoMsg?.data?.result?.message_id}`);
+          console.log(`Final photo message sent for ${stateKey}, ID: ${finalPhotoMsg?.data?.result?.message_id || 'null'}`);
 
           // Обновляем статус в Google Apps Script
           await sendToGAS({
@@ -609,7 +621,7 @@ module.exports = (app) => {
           }
 
           // Удаляем все сервисные сообщения
-          console.log(`Deleting messages for reject in ${stateKey}: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
+          console.log(`Deleting messages for reject in ${stateKey}: pendingMessageId=${state.pendingMessageId || 'null'}, photoMessageId=${state.photoMessageId || 'null'}`);
           if (state.pendingMessageId) {
             await deleteMessageSafe(chatId, state.pendingMessageId);
           }
@@ -633,7 +645,7 @@ module.exports = (app) => {
           state.managerUsername = username;
           state.timestamp = Date.now();
 
-          console.log(`State updated to waiting_reject_comment for ${stateKey}, rejectCommentMsg ID: ${rejectCommentMsg?.data?.result?.message_id}`);
+          console.log(`State updated to waiting_reject_comment for ${stateKey}, rejectCommentMsg ID: ${rejectCommentMsg?.data?.result?.message_id || 'null'}`);
           return res.sendStatus(200);
         }
 
@@ -771,7 +783,7 @@ module.exports = (app) => {
 
           state.stage = 'waiting_sum';
           state.serviceMessages.push(sumMsg?.data?.result?.message_id);
-          console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg?.data?.result?.message_id}`);
+          console.log(`State updated to waiting_sum for ${stateKey}, sumMsg ID: ${sumMsg?.data?.result?.message_id || 'null'}`);
           return res.sendStatus(200);
         }
 
@@ -800,7 +812,7 @@ module.exports = (app) => {
 
           state.stage = 'waiting_comment';
           state.serviceMessages.push(commentMsg?.data?.result?.message_id);
-          console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg?.data?.result?.message_id}`);
+          console.log(`State updated to waiting_comment for ${stateKey}, commentMsg ID: ${commentMsg?.data?.result?.message_id || 'null'}`);
           return res.sendStatus(200);
         }
 
@@ -832,7 +844,7 @@ module.exports = (app) => {
 
           // Сохраняем message_id фото
           state.photoMessageId = photoMsg?.data?.result?.message_id;
-          console.log(`Photo message sent for ${stateKey}, ID: ${state.photoMessageId}`);
+          console.log(`Photo message sent for ${stateKey}, ID: ${state.photoMessageId || 'null'}`);
 
           // Уведомление с кнопками "Подтвердить" и "Отклонить"
           const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера @Andrey_Tkach_Dodo.`;
@@ -852,7 +864,7 @@ module.exports = (app) => {
 
           // Проверяем успешность отправки
           if (!pendingMsg?.data?.result?.message_id) {
-            console.error(`Failed to send pending message for ${stateKey}`);
+            console.error(`Failed to send pending message for ${stateKey}: ${JSON.stringify(pendingMsg?.data)}`);
             await sendMessage(chatId, `❌ Ошибка: не удалось отправить уведомление о подтверждении для заявки #${row}`);
           } else {
             state.pendingMessageId = pendingMsg.data.result.message_id;
@@ -953,7 +965,7 @@ module.exports = (app) => {
             factDate: new Date().toISOString()
           });
 
-          console.log(`Rejection processed for ${stateKey}, state set to waiting_comment, commentMsg ID: ${commentMsg?.data?.result?.message_id}`);
+          console.log(`Rejection processed for ${stateKey}, state set to waiting_comment, commentMsg ID: ${commentMsg?.data?.result?.message_id || 'null'}`);
           return res.sendStatus(200);
         }
       }
