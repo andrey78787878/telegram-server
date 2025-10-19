@@ -5,12 +5,12 @@ axios.defaults.httpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const FormData = require('form-data');
 
 // Проверка переменной окружения
-if (!process.env.BOT_TOKEN) {
+const BOT_TOKEN = process.env.BOT_TOKEN ? process.env.BOT_TOKEN.trim() : null;
+if (!BOT_TOKEN) {
   console.error('BOT_TOKEN is not defined in environment variables');
   throw new Error('BOT_TOKEN is required');
 }
 
-const BOT_TOKEN = process.env.BOT_TOKEN.trim();
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || '';
@@ -18,6 +18,18 @@ const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || '';
 if (!GAS_WEB_APP_URL) {
   console.warn('GAS_WEB_APP_URL is not defined, some features may not work');
 }
+
+// Проверка корректности BOT_TOKEN
+try {
+  if (!BOT_TOKEN.match(/^\d+:[A-Za-z0-9_-]+$/)) {
+    throw new Error('BOT_TOKEN format is invalid');
+  }
+} catch (error) {
+  console.error('Invalid BOT_TOKEN:', error.message);
+  throw error;
+}
+
+console.log('TELEGRAM_API initialized:', TELEGRAM_API);
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
@@ -368,7 +380,7 @@ module.exports = (app) => {
               message_id: messageId,
               isEmergency: true,
               pizzeria: requestData?.pizzeria,
-              problem: requestData?.problem,
+              problem: Покажите детали проблемы
               deadline: requestData?.deadline,
               initiator: requestData?.initiator,
               phone: requestData?.phone,
