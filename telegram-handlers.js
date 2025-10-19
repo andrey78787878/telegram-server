@@ -566,6 +566,54 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
+        // Обработка возврата на доработку
+        if (data.startsWith('return:')) {
+          if (!MANAGERS.includes(username)) {
+            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут возвращать заявки на доработку.');
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+            return res.sendStatus(200);
+          }
+
+          const stateKey = `${chatId}:${row}`;
+          const state = userStates[stateKey];
+
+          if (!state || state.stage !== 'pending_confirmation') {
+            await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
+            return res.sendStatus(200);
+          }
+
+          const reasonMsg = await sendMessage(
+            chatId,
+            `📝 Укажите причину возврата заявки #${row} на доработку`,
+            { reply_to_message_id: messageId }
+          );
+
+          state.stage = 'waiting_return_reason';
+          state.serviceMessages = [reasonMsg?.data?.result?.message_id].filter(Boolean);
+          state.userMessages = [];
+          state.manager = username;
+          console.log(`State updated to waiting_return_reason for ${stateKey}`);
+
+          setTimeout(async () => {
+            try {
+              const currentState = userStates[stateKey];
+              if (currentState?.stage === 'waiting_return_reason') {
+                await deleteMessageSafe(chatId, currentState.serviceMessages[0]);
+                for (const userMsgId of currentState.userMessages) {
+                  await deleteMessageSafe(chatId, userMsgId);
+                }
+                delete userStates[stateKey];
+                await sendMessage(chatId, '⏰ Время ожидания причины возврата истекло.', { reply_to_message_id: currentState.messageId });
+                console.log(`Timeout triggered for ${stateKey} (waiting_return_reason), state cleared`);
+              }
+            } catch (e) {
+              console.error(`Error handling return reason timeout for ${stateKey}:`, e);
+            }
+          }, 60000);
+
+          return res.sendStatus(200);
+        }
+
         // Обработка отмены заявки
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
@@ -600,7 +648,7 @@ module.exports = (app) => {
         }
       }
 
-      // Обработка сообщений (фото, сумма, комментарий)
+      // Обработка сообщений (фото, сумма, комментарий, причина возврата)
       if (body.message) {
         const msg = body.message;
         const chatId = msg.chat.id;
@@ -661,7 +709,13 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
-        if (!EXECUTORS.includes(username)) {
+        if (state.stage === 'waiting_return_reason' && !MANAGERS.includes(username)) {
+          const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут указывать причину возврата.');
+          setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+          return res.sendStatus(200);
+        }
+
+        if (!EXECUTORS.includes(username) && state.stage !== 'waiting_return_reason') {
           const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отправлять данные для заявок.');
           setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
           return res.sendStatus(200);
@@ -675,6 +729,99 @@ module.exports = (app) => {
         state.processedMessageIds.add(messageId);
         state.userMessages.push(messageId);
         state.timestamp = Date.now();
+
+        // Обработка причины возврата
+        if (state.stage === 'waiting_return_reason' && text) {
+          console.log(`Return reason received for ${stateKey}: ${text}`);
+          state.returnReason = text;
+
+          for (const serviceMsgId of state.serviceMessages) {
+            await deleteMessageSafe(chatId, serviceMsgId);
+          }
+          for (const userMsgId of state.userMessages) {
+            await deleteMessageSafe(chatId, userMsgId);
+          }
+
+          state.serviceMessages = [];
+          state.userMessages = [];
+
+          // Уведомляем исполнителя о возврате
+          const executorId = userStorage.get(state.username);
+          if (executorId) {
+            await sendMessage(
+              executorId,
+              `📌 Заявка #${row} возвращена на доработку менеджером ${state.manager}\n\n` +
+              `📝 Причина: ${text}\n\n` +
+              `📸 Пожалуйста, пришлите новое фото выполненных работ.`,
+              { parse_mode: 'HTML' }
+            ).catch(e => console.error(`Error sending return notification to ${state.username}:`, e));
+          } else {
+            console.warn(`Executor ID not found for ${state.username}`);
+          }
+
+          // Уведомляем в чате
+          const returnMsg = await sendMessage(
+            chatId,
+            `📌 Заявка #${row} возвращена на доработку менеджером ${state.manager}\n` +
+            `📝 Причина: ${text}`,
+            { reply_to_message_id: state.messageId }
+          );
+
+          // Запрашиваем новое фото
+          const photoMsg = await sendMessage(
+            chatId,
+            `📸 Пришлите новое фото выполненных работ для заявки #${row}`,
+            { reply_to_message_id: state.messageId }
+          );
+
+          // Обновляем статус в GAS
+          await sendToGAS({
+            row: state.row,
+            status: 'Возвращена на доработку',
+            executor: state.username,
+            manager: state.manager,
+            returnReason: text,
+            message_id: state.messageId,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline,
+            initiator: state.originalRequest?.initiator,
+            phone: state.originalRequest?.phone,
+            category: state.originalRequest?.category,
+            timestamp: new Date().toISOString()
+          });
+
+          // Очищаем старые данные
+          delete state.fileId;
+          delete state.photoUrl;
+          delete state.photoDirectUrl;
+          delete state.sum;
+          delete state.comment;
+          delete state.returnReason;
+
+          state.stage = 'waiting_photo';
+          state.serviceMessages = [photoMsg?.data?.result?.message_id].filter(Boolean);
+          console.log(`State updated to waiting_photo for ${stateKey} after return`);
+
+          setTimeout(async () => {
+            try {
+              const currentState = userStates[stateKey];
+              if (currentState?.stage === 'waiting_photo') {
+                await deleteMessageSafe(chatId, currentState.serviceMessages[0]);
+                for (const userMsgId of currentState.userMessages) {
+                  await deleteMessageSafe(chatId, userMsgId);
+                }
+                delete userStates[stateKey];
+                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: currentState.messageId });
+                console.log(`Timeout triggered for ${stateKey} (waiting_photo), state cleared`);
+              }
+            } catch (e) {
+              console.error(`Error handling photo timeout for ${stateKey}:`, e);
+            }
+          }, 60000);
+
+          return res.sendStatus(200);
+        }
 
         // Обработка фото
         if (state.stage === 'waiting_photo' && (msg.photo || msg.document)) {
@@ -749,18 +896,28 @@ module.exports = (app) => {
           });
 
           // Отправляем фото с подписью сверху
-          await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+          const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
             reply_to_message_id: state.messageId
           });
 
-          // Уведомление о статусе "Ожидает подтверждения"
+          // Сохраняем ID сообщения с фото
+          state.photoMessageId = photoResponse?.data?.result?.message_id;
+
+          // Уведомление о статусе "Ожидает подтверждения" с кнопками
           const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера.`;
-          await sendMessage(chatId, pendingMessage, {
+          const pendingMsgResponse = await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
             reply_markup: {
-              inline_keyboard: [[{ text: '✅ Подтвердить закрытие', callback_data: `confirm:${row}` }]]
+              inline_keyboard: [
+                [
+                  { text: '✅ Подтвердить закрытие', callback_data: `confirm:${row}` },
+                  { text: '🔄 Вернуть на доработку', callback_data: `return:${row}` }
+                ]
+              ]
             }
           });
+
+          state.pendingMessageId = pendingMsgResponse?.data?.result?.message_id;
 
           const completionData = {
             row: state.row,
