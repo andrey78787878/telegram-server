@@ -4,6 +4,11 @@ const https = require('https');
 axios.defaults.httpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const FormData = require('form-data');
 
+// Отладка переменных окружения
+console.log('Checking environment variables in telegram-handlers.js...');
+console.log('BOT_TOKEN:', process.env.BOT_TOKEN ? 'Defined' : 'Undefined');
+console.log('Raw BOT_TOKEN:', JSON.stringify(process.env.BOT_TOKEN));
+
 // Проверка переменной окружения
 const BOT_TOKEN = process.env.BOT_TOKEN ? process.env.BOT_TOKEN.trim() : null;
 if (!BOT_TOKEN) {
@@ -11,25 +16,28 @@ if (!BOT_TOKEN) {
   throw new Error('BOT_TOKEN is required');
 }
 
+// Проверка формата BOT_TOKEN
+try {
+  if (!BOT_TOKEN.match(/^\d+:[A-Za-z0-9_-]+$/)) {
+    console.error('Invalid BOT_TOKEN format:', BOT_TOKEN);
+    throw new Error('BOT_TOKEN format is invalid');
+  }
+} catch (error) {
+  console.error('BOT_TOKEN validation error:', error.message);
+  throw error;
+}
+
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || '';
 
+console.log('TELEGRAM_API initialized:', TELEGRAM_API);
+console.log('TELEGRAM_FILE_API initialized:', TELEGRAM_FILE_API);
+console.log('GAS_WEB_APP_URL:', GAS_WEB_APP_URL || 'Not defined');
+
 if (!GAS_WEB_APP_URL) {
   console.warn('GAS_WEB_APP_URL is not defined, some features may not work');
 }
-
-// Проверка корректности BOT_TOKEN
-try {
-  if (!BOT_TOKEN.match(/^\d+:[A-Za-z0-9_-]+$/)) {
-    throw new Error('BOT_TOKEN format is invalid');
-  }
-} catch (error) {
-  console.error('Invalid BOT_TOKEN:', error.message);
-  throw error;
-}
-
-console.log('TELEGRAM_API initialized:', TELEGRAM_API);
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
@@ -380,7 +388,7 @@ module.exports = (app) => {
               message_id: messageId,
               isEmergency: true,
               pizzeria: requestData?.pizzeria,
-              problem: Покажите детали проблемы
+              problem: requestData?.problem,
               deadline: requestData?.deadline,
               initiator: requestData?.initiator,
               phone: requestData?.phone,
