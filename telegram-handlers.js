@@ -192,6 +192,10 @@ async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
 }
 
 async function deleteMessageSafe(chatId, messageId) {
+  if (!messageId) {
+    console.warn(`Attempted to delete message with undefined messageId in ${chatId}`);
+    return null;
+  }
   try {
     const response = await axios.post(`${TELEGRAM_API}/deleteMessage`, {
       chat_id: chatId,
@@ -538,12 +542,16 @@ module.exports = (app) => {
           }
 
           // Удаляем все сервисные сообщения
-          console.log(`Deleting messages: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
+          console.log(`Attempting to delete messages for ${stateKey}: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
           if (state.pendingMessageId) {
             await deleteMessageSafe(chatId, state.pendingMessageId);
+          } else {
+            console.warn(`No pendingMessageId found for ${stateKey}`);
           }
           if (state.photoMessageId) {
             await deleteMessageSafe(chatId, state.photoMessageId);
+          } else {
+            console.warn(`No photoMessageId found for ${stateKey}`);
           }
 
           // Формируем финальное сообщение
@@ -557,7 +565,7 @@ module.exports = (app) => {
           const finalPhotoMsg = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
             reply_to_message_id: state.messageId
           });
-          console.log(`Final photo message sent, ID: ${finalPhotoMsg?.data?.result?.message_id}`);
+          console.log(`Final photo message sent for ${stateKey}, ID: ${finalPhotoMsg?.data?.result?.message_id}`);
 
           // Обновляем статус в Google Apps Script
           await sendToGAS({
@@ -601,7 +609,7 @@ module.exports = (app) => {
           }
 
           // Удаляем все сервисные сообщения
-          console.log(`Deleting messages for reject: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
+          console.log(`Deleting messages for reject in ${stateKey}: pendingMessageId=${state.pendingMessageId}, photoMessageId=${state.photoMessageId}`);
           if (state.pendingMessageId) {
             await deleteMessageSafe(chatId, state.pendingMessageId);
           }
@@ -625,7 +633,7 @@ module.exports = (app) => {
           state.managerUsername = username;
           state.timestamp = Date.now();
 
-          console.log(`State updated to waiting_reject_comment for ${stateKey}`);
+          console.log(`State updated to waiting_reject_comment for ${stateKey}, rejectCommentMsg ID: ${rejectCommentMsg?.data?.result?.message_id}`);
           return res.sendStatus(200);
         }
 
@@ -746,6 +754,7 @@ module.exports = (app) => {
           const telegramUrl = await getTelegramFileUrl(fileId);
 
           for (const serviceMsgId of state.serviceMessages) {
+            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, serviceMsgId);
           }
 
@@ -772,9 +781,11 @@ module.exports = (app) => {
           state.sum = text;
 
           for (const serviceMsgId of state.serviceMessages) {
+            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, serviceMsgId);
           }
           for (const userMsgId of state.userMessages) {
+            console.log(`Deleting user message ${userMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, userMsgId);
           }
 
@@ -799,44 +810,54 @@ module.exports = (app) => {
           state.comment = text;
 
           for (const serviceMsgId of state.serviceMessages) {
+            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, serviceMsgId);
           }
           for (const userMsgId of state.userMessages) {
+            console.log(`Deleting user message ${userMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, userMsgId);
           }
 
           const diskUrl = await getGoogleDiskLink(row);
-          const finalMessage = formatCompletionMessage({
+          const tempMessage = formatCompletionMessage({
             ...state,
             executor: state.username || '@Unknown'
           });
 
-          // Отправляем фото с подписью сверху
-          const photoMsg = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+          // Отправляем фото с временной подписью
+          const photoCaption = `📌 Заявка #${row} ожидает подтверждения\n\n${tempMessage}`;
+          const photoMsg = await sendPhotoWithCaption(chatId, state.fileId, photoCaption, {
             reply_to_message_id: state.messageId
           });
 
           // Сохраняем message_id фото
           state.photoMessageId = photoMsg?.data?.result?.message_id;
-          console.log(`Photo message sent, ID: ${state.photoMessageId}`);
+          console.log(`Photo message sent for ${stateKey}, ID: ${state.photoMessageId}`);
 
-          // Уведомление о статусе "Ожидает подтверждения" с кнопками
+          // Уведомление с кнопками "Подтвердить" и "Отклонить"
           const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера @Andrey_Tkach_Dodo.`;
+          const replyMarkup = {
+            inline_keyboard: [
+              [
+                { text: '✅ Подтвердить', callback_data: `confirm:${row}` },
+                { text: '❌ Отклонить', callback_data: `reject:${row}` }
+              ]
+            ]
+          };
+          console.log(`Sending pending message with reply_markup: ${JSON.stringify(replyMarkup)}`);
           const pendingMsg = await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '✅ Подтвердить', callback_data: `confirm:${row}` },
-                  { text: '❌ Отклонить', callback_data: `reject:${row}` }
-                ]
-              ]
-            }
+            reply_markup: replyMarkup
           });
 
-          // Сохраняем message_id уведомления
-          state.pendingMessageId = pendingMsg?.data?.result?.message_id;
-          console.log(`Pending message sent, ID: ${state.pendingMessageId}`);
+          // Проверяем успешность отправки
+          if (!pendingMsg?.data?.result?.message_id) {
+            console.error(`Failed to send pending message for ${stateKey}`);
+            await sendMessage(chatId, `❌ Ошибка: не удалось отправить уведомление о подтверждении для заявки #${row}`);
+          } else {
+            state.pendingMessageId = pendingMsg.data.result.message_id;
+            console.log(`Pending message sent for ${stateKey}, ID: ${state.pendingMessageId}`);
+          }
 
           const completionData = {
             row: state.row,
@@ -873,9 +894,11 @@ module.exports = (app) => {
           console.log(`Reject comment received for ${stateKey}: ${text}`);
 
           for (const serviceMsgId of state.serviceMessages) {
+            console.log(`Deleting service message ${serviceMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, serviceMsgId);
           }
           for (const userMsgId of state.userMessages) {
+            console.log(`Deleting user message ${userMsgId} for ${stateKey}`);
             await deleteMessageSafe(chatId, userMsgId);
           }
 
@@ -887,6 +910,7 @@ module.exports = (app) => {
               `📌 Заявка #${row} требует доработки.\nПричина отклонения: ${text}\nПожалуйста, отправьте новый комментарий.`,
               { parse_mode: 'HTML' }
             );
+            console.log(`Sent reject notification to executor ${state.username} (ID: ${executorId})`);
           } else {
             console.warn(`Executor ID not found for ${state.username}`);
             await sendMessage(chatId, `❌ Не удалось уведомить исполнителя ${state.username}.`);
@@ -929,7 +953,7 @@ module.exports = (app) => {
             factDate: new Date().toISOString()
           });
 
-          console.log(`Rejection processed for ${stateKey}, state set to waiting_comment`);
+          console.log(`Rejection processed for ${stateKey}, state set to waiting_comment, commentMsg ID: ${commentMsg?.data?.result?.message_id}`);
           return res.sendStatus(200);
         }
       }
