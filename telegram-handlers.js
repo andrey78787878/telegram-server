@@ -13,19 +13,20 @@ const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
 const EXECUTORS = ['@Andrey_Tkach_Dodo', '@olimjon2585', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
-// Маппинг пиццерий к ТУ
+// Маппинг пиццерий к ТУ (массив пользователей)
 const PIZZERIA_TO_TU = {
-  'Ташкент-1': '@Andrey_tkach_y',
-  'Ташкент-12': '@Andrey_tkach_y',
-  'Ташкент-3': '@Andrey_Tkach_Dodo',
-  'Ташкент-2': '@Andrey_Tkach_Dodo',
-  'Ташкент-5': '@Andrey_Tkach_Dodo',
-  'Ташкент-8': '@Andrey_Tkach_Dodo',
-  'Ташкент-10': '@Andrey_Tkach_Dodo',
-  'Ташкент-14': '@Andrey_Tkach_Dodo',
-  'Ташкент-4': '@Andrey_tkach_y',
-  'Ташкент-7': '@Andrey_tkach_y',
-  'Ташкент-6': '@Andrey_tkach_y'
+  'Ташкент-1': ['@Andrey_tkach_y', '@AnotherUser'],
+  'Ташкент-12': ['@Andrey_tkach_y'],
+  'Ташкент-3': ['@Andrey_Tkach_Dodo'],
+  'Ташкент-2': ['@Andrey_Tkach_Dodo'],
+  'Ташкент-5': ['@Andrey_Tkach_Dodo'],
+  'Ташкент-8': ['@Andrey_Tkach_Dodo'],
+  'Ташкент-10': ['@Andrey_Tkach_Dodo'],
+  'Ташкент-14': ['@Andrey_Tkach_Dodo'],
+  'Ташкент-4': ['@Andrey_tkach_y', '@AnotherUser'],
+  'Ташкент-7': ['@Andrey_tkach_y'],
+  'Ташкент-6': ['@Andrey_tkach_y'],
+  'Ташкент-9': ['@NewUser', '@AnotherUser']
 };
 
 // Хранилище user_id и времени последней ошибки
@@ -87,9 +88,10 @@ function calculateDelayDays(deadline) {
   }
 }
 
-function formatCompletionMessage(data, tuUsername) {
+function formatCompletionMessage(data, confirmerUsername, isTU) {
+  const role = isTU ? 'ТУ' : 'менеджером';
   return `
-✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта и подтверждена ТУ ${tuUsername || '@Unknown'}
+✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта и подтверждена ${role} ${confirmerUsername || '@Unknown'}
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
@@ -116,7 +118,6 @@ async function sendMessage(chatId, text, options = {}) {
         ...options
       });
       console.log(`Message sent to ${chatId}: ${text.substring(0, 50)}...`);
-      // Удаляем сообщения об ошибках или таймаутах через 20 секунд
       if (text.includes('❌') || text.includes('⏰')) {
         setTimeout(() => deleteMessageSafe(chatId, response?.data?.result?.message_id), 20000);
       }
@@ -548,7 +549,7 @@ module.exports = (app) => {
         // Обработка подтверждения закрытия
         if (data.startsWith('confirm:')) {
           if (!MANAGERS.includes(username)) {
-            const notManagerMsg = await sendMessage(chatId, '❌ Только ТУ могут подтверждать закрытие заявок.');
+            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут подтверждать закрытие заявок.');
             setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
@@ -564,7 +565,9 @@ module.exports = (app) => {
 
           // Определяем ТУ по пиццерии
           const pizzeria = state.originalRequest?.pizzeria;
-          const tuUsername = pizzeria ? PIZZERIA_TO_TU[pizzeria] || '@Unknown' : '@Unknown';
+          const tuUsernames = pizzeria ? PIZZERIA_TO_TU[pizzeria] || ['@Unknown'] : ['@Unknown'];
+          const isTU = tuUsernames.includes(username);
+          const confirmerUsername = username;
 
           // Удаляем промежуточные сообщения
           if (state.photoMessageId) {
@@ -574,22 +577,48 @@ module.exports = (app) => {
             await deleteMessageSafe(chatId, state.pendingMessageId);
           }
 
+          // Удаляем кнопки из материнской заявки
+          await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
+
           // Отправляем финальное сообщение с фото
           const finalMessage = formatCompletionMessage({
             ...state,
             executor: state.username || '@Unknown'
-          }, tuUsername);
+          }, confirmerUsername, isTU);
 
-          await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+          const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
             reply_to_message_id: state.messageId
           });
+
+          // Уведомляем всех ТУ о подтверждении
+          for (const tu of tuUsernames) {
+            if (tu !== username) {
+              const tuId = userStorage.get(tu);
+              if (tuId) {
+                await sendMessage(
+                  tuId,
+                  `📌 Заявка #${row} подтверждена ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n\n` +
+                  `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
+                  `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
+                  `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
+                  `💰 Сумма: ${state.sum || '0'} сум\n` +
+                  `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
+                  `📸 Фото: ${state.photoUrl || 'не указано'}`,
+                  { parse_mode: 'HTML' }
+                ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
+              } else {
+                console.warn(`TU ID not found for ${tu}`);
+              }
+            }
+          }
 
           // Обновляем статус в Google Apps Script
           await sendToGAS({
             row: state.row,
             status: 'Выполнено',
             executor: state.username,
-            tu: tuUsername,
+            confirmer: confirmerUsername,
+            isTU: isTU,
             message_id: state.messageId,
             pizzeria: state.originalRequest?.pizzeria,
             problem: state.originalRequest?.problem,
@@ -600,7 +629,7 @@ module.exports = (app) => {
             factDate: new Date().toISOString()
           });
 
-          console.log(`Completion confirmed for ${stateKey}, state cleared`);
+          console.log(`Completion confirmed for ${stateKey} by ${confirmerUsername}, state cleared`);
           delete userStates[stateKey];
 
           return res.sendStatus(200);
@@ -609,7 +638,7 @@ module.exports = (app) => {
         // Обработка возврата на доработку
         if (data.startsWith('return:')) {
           if (!MANAGERS.includes(username)) {
-            const notManagerMsg = await sendMessage(chatId, '❌ Только ТУ могут возвращать заявки на доработку.');
+            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут возвращать заявки на доработку.');
             setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
@@ -751,7 +780,7 @@ module.exports = (app) => {
         }
 
         if (state.stage === 'waiting_return_reason' && !MANAGERS.includes(username)) {
-          const notManagerMsg = await sendMessage(chatId, '❌ Только ТУ могут указывать причину возврата.');
+          const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут указывать причину возврата.');
           setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 20000);
           return res.sendStatus(200);
         }
@@ -794,34 +823,55 @@ module.exports = (app) => {
 
           // Определяем ТУ по пиццерии
           const pizzeria = state.originalRequest?.pizzeria;
-          const tuUsername = pizzeria ? PIZZERIA_TO_TU[pizzeria] || '@Unknown' : '@Unknown';
+          const tuUsernames = pizzeria ? PIZZERIA_TO_TU[pizzeria] || ['@Unknown'] : ['@Unknown'];
+          const isTU = tuUsernames.includes(username);
+          const confirmerUsername = username;
 
           // Уведомляем исполнителя о возврате
           const executorId = userStorage.get(state.username);
           if (executorId) {
             await sendMessage(
               executorId,
-              `📌 Заявка #${row} возвращена на доработку ТУ ${tuUsername}\n\n` +
+              `📌 Заявка #${row} возвращена на доработку ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n\n` +
               `📝 Причина: ${text}\n\n` +
-              `📸 Пожалуйста, пришлите новое фото выполненных работ.`,
+              `Устраните замечания к заявке и согласуйте еще раз.`,
               { parse_mode: 'HTML' }
             ).catch(e => console.error(`Error sending return notification to ${state.username}:`, e));
           } else {
             console.warn(`Executor ID not found for ${state.username}`);
           }
 
+          // Уведомляем только ТУ из маппинга
+          for (const tu of tuUsernames) {
+            if (tu !== username) {
+              const tuId = userStorage.get(tu);
+              if (tuId) {
+                await sendMessage(
+                  tuId,
+                  `📌 Заявка #${row} возвращена на доработку ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n\n` +
+                  `📝 Причина: ${text}\n` +
+                  `👤 Исполнитель: ${state.username || '@Unknown'}\n\n` +
+                  `⚠️ Контролируйте выполнение`,
+                  { parse_mode: 'HTML' }
+                ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
+              } else {
+                console.warn(`TU ID not found for ${tu}`);
+              }
+            }
+          }
+
           // Уведомляем в чате
           const returnMsg = await sendMessage(
             chatId,
-            `📌 Заявка #${row} возвращена на доработку ТУ ${tuUsername}\n` +
+            `📌 Заявка #${row} возвращена на доработку ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n` +
             `📝 Причина: ${text}`,
             { reply_to_message_id: state.messageId }
           );
 
-          // Запрашиваем новое фото
-          const photoMsg = await sendMessage(
+          // Запрашиваем новое выполнение
+          const retryMsg = await sendMessage(
             chatId,
-            `📸 Пришлите новое фото выполненных работ для заявки #${row}`,
+            `📋 Устраните замечания к заявке #${row} и согласуйте еще раз.`,
             { reply_to_message_id: state.messageId }
           );
 
@@ -830,7 +880,8 @@ module.exports = (app) => {
             row: state.row,
             status: 'Возвращена на доработку',
             executor: state.username,
-            tu: tuUsername,
+            confirmer: confirmerUsername,
+            isTU: isTU,
             returnReason: text,
             message_id: state.messageId,
             pizzeria: state.originalRequest?.pizzeria,
@@ -853,7 +904,7 @@ module.exports = (app) => {
           delete state.pendingMessageId;
 
           state.stage = 'waiting_photo';
-          state.serviceMessages = [photoMsg?.data?.result?.message_id].filter(Boolean);
+          state.serviceMessages = [retryMsg?.data?.result?.message_id].filter(Boolean);
           console.log(`State updated to waiting_photo for ${stateKey} after return`);
 
           setTimeout(async () => {
@@ -865,7 +916,7 @@ module.exports = (app) => {
                   await deleteMessageSafe(chatId, userMsgId);
                 }
                 delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания фото истекло.', { reply_to_message_id: currentState.messageId });
+                await sendMessage(chatId, '⏰ Время ожидания устранения замечаний истекло.', { reply_to_message_id: currentState.messageId });
                 console.log(`Timeout triggered for ${stateKey} (waiting_photo), state cleared`);
               }
             } catch (e) {
@@ -944,13 +995,14 @@ module.exports = (app) => {
 
           // Определяем ТУ по пиццерии
           const pizzeria = state.originalRequest?.pizzeria;
-          const tuUsername = pizzeria ? PIZZERIA_TO_TU[pizzeria] || '@Unknown' : '@Unknown';
+          const tuUsernames = pizzeria ? PIZZERIA_TO_TU[pizzeria] || ['@Unknown'] : ['@Unknown'];
+          const tuUsername = tuUsernames[0];
 
           const diskUrl = await getGoogleDiskLink(row);
           const preliminaryMessage = formatCompletionMessage({
             ...state,
             executor: state.username || '@Unknown'
-          }, tuUsername);
+          }, tuUsername, true);
 
           // Отправляем фото с предварительной подписью
           const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, preliminaryMessage, {
@@ -961,7 +1013,7 @@ module.exports = (app) => {
           state.photoMessageId = photoResponse?.data?.result?.message_id;
 
           // Уведомление о статусе "Ожидает подтверждения" с кнопками
-          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения ТУ ${tuUsername}.`;
+          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения ТУ ${tuUsernames.join(', ')}.`;
           const pendingMsgResponse = await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
             reply_markup: {
@@ -975,6 +1027,27 @@ module.exports = (app) => {
           });
 
           state.pendingMessageId = pendingMsgResponse?.data?.result?.message_id;
+
+          // Уведомляем всех ТУ
+          for (const tu of tuUsernames) {
+            const tuId = userStorage.get(tu);
+            if (tuId) {
+              await sendMessage(
+                tuId,
+                `📌 Заявка #${row} ожидает вашего подтверждения\n\n` +
+                `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
+                `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
+                `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
+                `💰 Сумма: ${state.sum || '0'} сум\n` +
+                `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
+                `📸 Фото: ${state.photoUrl || 'не указано'}\n\n` +
+                `⚠️ Подтвердите или верните на доработку`,
+                { parse_mode: 'HTML' }
+              ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
+            } else {
+              console.warn(`TU ID not found for ${tu}`);
+            }
+          }
 
           const completionData = {
             row: state.row,
@@ -994,29 +1067,10 @@ module.exports = (app) => {
             category: state.originalRequest?.category,
             factDate: new Date().toISOString(),
             message_id: state.messageId,
-            tu: tuUsername
+            tu: tuUsernames.join(', ')
           };
 
           await sendToGAS(completionData);
-
-          // Уведомляем ТУ
-          const tuId = userStorage.get(tuUsername);
-          if (tuId) {
-            await sendMessage(
-              tuId,
-              `📌 Заявка #${row} ожидает вашего подтверждения\n\n` +
-              `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
-              `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
-              `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
-              `💰 Сумма: ${state.sum || '0'} сум\n` +
-              `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
-              `📸 Фото: ${state.photoUrl || 'не указано'}\n\n` +
-              `⚠️ Подтвердите или верните на доработку`,
-              { parse_mode: 'HTML' }
-            ).catch(e => console.error(`Error sending to TU ${tuUsername}:`, e));
-          } else {
-            console.warn(`TU ID not found for ${tuUsername}`);
-          }
 
           state.stage = 'pending_confirmation';
           state.serviceMessages = [];
