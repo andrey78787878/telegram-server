@@ -13,6 +13,21 @@ const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
 const EXECUTORS = ['@Andrey_Tkach_Dodo', '@olimjon2585', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
+// Маппинг пиццерий к ТУ
+const PIZZERIA_TO_TU = {
+  'Ташкент-1': '@Andrey_tkach_y',
+  'Ташкент-12': '@Andrey_tkach_y',
+  'Ташкент-3': '@Andrey_Tkach_Dodo',
+  'Ташкент-2': '@Andrey_Tkach_Dodo',
+  'Ташкент-5': '@Andrey_Tkach_Dodo',
+  'Ташкент-8': '@Andrey_Tkach_Dodo',
+  'Ташкент-10': '@Andrey_Tkach_Dodo',
+  'Ташкент-14': '@Andrey_Tkach_Dodo',
+  'Ташкент-4': '@Andrey_tkach_y',
+  'Ташкент-7': '@Andrey_tkach_y',
+  'Ташкент-6': '@Andrey_tkach_y'
+};
+
 // Хранилище user_id и времени последней ошибки
 const userStorage = new Map();
 const errorMessageCooldown = new Map();
@@ -72,9 +87,9 @@ function calculateDelayDays(deadline) {
   }
 }
 
-function formatCompletionMessage(data) {
+function formatCompletionMessage(data, tuUsername) {
   return `
-✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта
+✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта и подтверждена ТУ ${tuUsername || '@Unknown'}
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
@@ -101,6 +116,10 @@ async function sendMessage(chatId, text, options = {}) {
         ...options
       });
       console.log(`Message sent to ${chatId}: ${text.substring(0, 50)}...`);
+      // Удаляем сообщения об ошибках или таймаутах через 20 секунд
+      if (text.includes('❌') || text.includes('⏰')) {
+        setTimeout(() => deleteMessageSafe(chatId, response?.data?.result?.message_id), 20000);
+      }
       return response;
     } catch (error) {
       if (error.response?.data?.error_code === 429) {
@@ -132,11 +151,11 @@ async function sendPhotoWithCaption(chatId, fileId, caption, options = {}) {
   } catch (error) {
     console.error('Send photo error:', error.response?.data || error.message);
     const telegramUrl = await getTelegramFileUrl(fileId);
-    await sendMessage(chatId, `${caption}\n📸 Фото: ${telegramUrl}`, {
+    const response = await sendMessage(chatId, `${caption}\n📸 Фото: ${telegramUrl}`, {
       reply_to_message_id: options.reply_to_message_id,
       parse_mode: 'HTML'
     });
-    return null;
+    return response;
   }
 }
 
@@ -192,6 +211,10 @@ async function sendButtonsWithRetry(chatId, messageId, buttons, fallbackText) {
 }
 
 async function deleteMessageSafe(chatId, messageId) {
+  if (!messageId) {
+    console.log('No messageId provided for deletion');
+    return null;
+  }
   try {
     const response = await axios.post(`${TELEGRAM_API}/deleteMessage`, {
       chat_id: chatId,
@@ -291,13 +314,14 @@ module.exports = (app) => {
         const row = extractRowFromCallbackData(data) || extractRowFromMessage(msg.text || msg.caption);
         if (!row || isNaN(row)) {
           console.error('Не удалось извлечь номер заявки');
-          await sendMessage(chatId, '❌ Ошибка: не найден номер заявки');
+          const errorMsg = await sendMessage(chatId, '❌ Ошибка: не найден номер заявки');
+          setTimeout(() => deleteMessageSafe(chatId, errorMsg?.data?.result?.message_id), 20000);
           return res.sendStatus(200);
         }
 
         if (!AUTHORIZED_USERS.includes(username)) {
           const accessDeniedMsg = await sendMessage(chatId, '❌ У вас нет доступа.');
-          setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg?.data?.result?.message_id), 30000);
+          setTimeout(() => deleteMessageSafe(chatId, accessDeniedMsg?.data?.result?.message_id), 20000);
           return res.sendStatus(200);
         }
 
@@ -305,7 +329,7 @@ module.exports = (app) => {
         if (data.startsWith('accept') || data === 'accept') {
           if (!MANAGERS.includes(username)) {
             const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут назначать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
@@ -461,7 +485,7 @@ module.exports = (app) => {
         if (data.startsWith('done:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут завершать заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
@@ -524,8 +548,8 @@ module.exports = (app) => {
         // Обработка подтверждения закрытия
         if (data.startsWith('confirm:')) {
           if (!MANAGERS.includes(username)) {
-            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут подтверждать закрытие заявок.');
-            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+            const notManagerMsg = await sendMessage(chatId, '❌ Только ТУ могут подтверждать закрытие заявок.');
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
@@ -533,20 +557,39 @@ module.exports = (app) => {
           const state = userStates[stateKey];
 
           if (!state || state.stage !== 'pending_confirmation') {
-            await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
+            const errorMsg = await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
+            setTimeout(() => deleteMessageSafe(chatId, errorMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
-          // Отправляем финальное уведомление
-          const finalMessage = `✅ Заявка #${row} окончательно закрыта менеджером ${username}!`;
-          await sendMessage(chatId, finalMessage, { reply_to_message_id: state.messageId });
+          // Определяем ТУ по пиццерии
+          const pizzeria = state.originalRequest?.pizzeria;
+          const tuUsername = pizzeria ? PIZZERIA_TO_TU[pizzeria] || '@Unknown' : '@Unknown';
+
+          // Удаляем промежуточные сообщения
+          if (state.photoMessageId) {
+            await deleteMessageSafe(chatId, state.photoMessageId);
+          }
+          if (state.pendingMessageId) {
+            await deleteMessageSafe(chatId, state.pendingMessageId);
+          }
+
+          // Отправляем финальное сообщение с фото
+          const finalMessage = formatCompletionMessage({
+            ...state,
+            executor: state.username || '@Unknown'
+          }, tuUsername);
+
+          await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+            reply_to_message_id: state.messageId
+          });
 
           // Обновляем статус в Google Apps Script
           await sendToGAS({
             row: state.row,
             status: 'Выполнено',
             executor: state.username,
-            manager: username,
+            tu: tuUsername,
             message_id: state.messageId,
             pizzeria: state.originalRequest?.pizzeria,
             problem: state.originalRequest?.problem,
@@ -557,9 +600,6 @@ module.exports = (app) => {
             factDate: new Date().toISOString()
           });
 
-          // Удаляем кнопки
-          await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
-
           console.log(`Completion confirmed for ${stateKey}, state cleared`);
           delete userStates[stateKey];
 
@@ -569,8 +609,8 @@ module.exports = (app) => {
         // Обработка возврата на доработку
         if (data.startsWith('return:')) {
           if (!MANAGERS.includes(username)) {
-            const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут возвращать заявки на доработку.');
-            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+            const notManagerMsg = await sendMessage(chatId, '❌ Только ТУ могут возвращать заявки на доработку.');
+            setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
@@ -578,7 +618,8 @@ module.exports = (app) => {
           const state = userStates[stateKey];
 
           if (!state || state.stage !== 'pending_confirmation') {
-            await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
+            const errorMsg = await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
+            setTimeout(() => deleteMessageSafe(chatId, errorMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
@@ -618,7 +659,7 @@ module.exports = (app) => {
         if (data.startsWith('cancel:')) {
           if (!EXECUTORS.includes(username)) {
             const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отменять заявки.');
-            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
@@ -710,14 +751,14 @@ module.exports = (app) => {
         }
 
         if (state.stage === 'waiting_return_reason' && !MANAGERS.includes(username)) {
-          const notManagerMsg = await sendMessage(chatId, '❌ Только менеджеры могут указывать причину возврата.');
-          setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 30000);
+          const notManagerMsg = await sendMessage(chatId, '❌ Только ТУ могут указывать причину возврата.');
+          setTimeout(() => deleteMessageSafe(chatId, notManagerMsg?.data?.result?.message_id), 20000);
           return res.sendStatus(200);
         }
 
         if (!EXECUTORS.includes(username) && state.stage !== 'waiting_return_reason') {
           const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут отправлять данные для заявок.');
-          setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 30000);
+          setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 20000);
           return res.sendStatus(200);
         }
 
@@ -741,16 +782,26 @@ module.exports = (app) => {
           for (const userMsgId of state.userMessages) {
             await deleteMessageSafe(chatId, userMsgId);
           }
+          if (state.pendingMessageId) {
+            await deleteMessageSafe(chatId, state.pendingMessageId);
+          }
+          if (state.photoMessageId) {
+            await deleteMessageSafe(chatId, state.photoMessageId);
+          }
 
           state.serviceMessages = [];
           state.userMessages = [];
+
+          // Определяем ТУ по пиццерии
+          const pizzeria = state.originalRequest?.pizzeria;
+          const tuUsername = pizzeria ? PIZZERIA_TO_TU[pizzeria] || '@Unknown' : '@Unknown';
 
           // Уведомляем исполнителя о возврате
           const executorId = userStorage.get(state.username);
           if (executorId) {
             await sendMessage(
               executorId,
-              `📌 Заявка #${row} возвращена на доработку менеджером ${state.manager}\n\n` +
+              `📌 Заявка #${row} возвращена на доработку ТУ ${tuUsername}\n\n` +
               `📝 Причина: ${text}\n\n` +
               `📸 Пожалуйста, пришлите новое фото выполненных работ.`,
               { parse_mode: 'HTML' }
@@ -762,7 +813,7 @@ module.exports = (app) => {
           // Уведомляем в чате
           const returnMsg = await sendMessage(
             chatId,
-            `📌 Заявка #${row} возвращена на доработку менеджером ${state.manager}\n` +
+            `📌 Заявка #${row} возвращена на доработку ТУ ${tuUsername}\n` +
             `📝 Причина: ${text}`,
             { reply_to_message_id: state.messageId }
           );
@@ -779,7 +830,7 @@ module.exports = (app) => {
             row: state.row,
             status: 'Возвращена на доработку',
             executor: state.username,
-            manager: state.manager,
+            tu: tuUsername,
             returnReason: text,
             message_id: state.messageId,
             pizzeria: state.originalRequest?.pizzeria,
@@ -798,6 +849,8 @@ module.exports = (app) => {
           delete state.sum;
           delete state.comment;
           delete state.returnReason;
+          delete state.photoMessageId;
+          delete state.pendingMessageId;
 
           state.stage = 'waiting_photo';
           state.serviceMessages = [photoMsg?.data?.result?.message_id].filter(Boolean);
@@ -889,14 +942,18 @@ module.exports = (app) => {
             await deleteMessageSafe(chatId, userMsgId);
           }
 
+          // Определяем ТУ по пиццерии
+          const pizzeria = state.originalRequest?.pizzeria;
+          const tuUsername = pizzeria ? PIZZERIA_TO_TU[pizzeria] || '@Unknown' : '@Unknown';
+
           const diskUrl = await getGoogleDiskLink(row);
-          const finalMessage = formatCompletionMessage({
+          const preliminaryMessage = formatCompletionMessage({
             ...state,
             executor: state.username || '@Unknown'
-          });
+          }, tuUsername);
 
-          // Отправляем фото с подписью сверху
-          const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+          // Отправляем фото с предварительной подписью
+          const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, preliminaryMessage, {
             reply_to_message_id: state.messageId
           });
 
@@ -904,7 +961,7 @@ module.exports = (app) => {
           state.photoMessageId = photoResponse?.data?.result?.message_id;
 
           // Уведомление о статусе "Ожидает подтверждения" с кнопками
-          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения менеджера.`;
+          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения ТУ ${tuUsername}.`;
           const pendingMsgResponse = await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
             reply_markup: {
@@ -936,10 +993,30 @@ module.exports = (app) => {
             phone: state.originalRequest?.phone,
             category: state.originalRequest?.category,
             factDate: new Date().toISOString(),
-            message_id: state.messageId
+            message_id: state.messageId,
+            tu: tuUsername
           };
 
           await sendToGAS(completionData);
+
+          // Уведомляем ТУ
+          const tuId = userStorage.get(tuUsername);
+          if (tuId) {
+            await sendMessage(
+              tuId,
+              `📌 Заявка #${row} ожидает вашего подтверждения\n\n` +
+              `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
+              `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
+              `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
+              `💰 Сумма: ${state.sum || '0'} сум\n` +
+              `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
+              `📸 Фото: ${state.photoUrl || 'не указано'}\n\n` +
+              `⚠️ Подтвердите или верните на доработку`,
+              { parse_mode: 'HTML' }
+            ).catch(e => console.error(`Error sending to TU ${tuUsername}:`, e));
+          } else {
+            console.warn(`TU ID not found for ${tuUsername}`);
+          }
 
           state.stage = 'pending_confirmation';
           state.serviceMessages = [];
