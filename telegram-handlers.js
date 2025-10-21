@@ -9,11 +9,11 @@ const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
-const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87', '@azabdukohhorov', '@Yusuf174', '@zafar555' ];
+const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87', '@azabdukohhorov', '@Yusuf174', '@zafar555'];
 const EXECUTORS = ['@Andrey_Tkach_Dodo', '@olimjon2585', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
-// Маппинг пиццерий к ТУ (массив пользователей)
+// Маппинг пиццерий к ТУ
 const PIZZERIA_TO_TU = {
   'Ташкент-1': ['@zafar555'],
   'Ташкент-12': ['@zafar555'],
@@ -29,9 +29,8 @@ const PIZZERIA_TO_TU = {
   'Ташкент-6': ['@Yusuf174'],
   'Ташкент-11': ['@Yusuf174'],
   'ПРЦ': ['@Andrey_Tkach_Dodo'],
-  'Ташкент-9': ['@azabdukohhorov'],
-  'Выездные продажи': ['Andrey_Tkach_Dodo'],
-  'Ташкент-9': ['@Andrey_Tkach_Dodo', '@AnotherUser']
+  'Ташкент-9': ['@azabdukohhorov', '@Andrey_Tkach_Dodo'],
+  'Выездные продажи': ['@Andrey_Tkach_Dodo']
 };
 
 // Хранилище user_id и времени последней ошибки
@@ -67,7 +66,7 @@ function parseRequestMessage(text) {
   const lines = text.split('\n');
   lines.forEach(line => {
     if (line.includes('Пиццерия:')) result.pizzeria = line.split(':')[1].trim();
-    if (line.includes('Классификация:')) result.category = line.split(':')[1].trim();
+    if (line.includes('Классификация:')) result.classification = line.split(':')[1].trim();
     if (line.includes('Категория:')) result.category = line.split(':')[1].trim();
     if (line.includes('Проблема:')) result.problem = line.split(':')[1].trim();
     if (line.includes('Инициатор:')) result.initiator = line.split(':')[1].trim();
@@ -97,6 +96,19 @@ function formatCompletionMessage(data, confirmerUsername, isTU) {
   const role = isTU ? 'ТУ' : 'менеджером';
   return `
 ✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} закрыта и подтверждена ${role} ${confirmerUsername || '@Unknown'}
+💬 Комментарий: ${data.comment || 'нет комментария'}
+💰 Сумма: ${data.sum || '0'} сум
+👤 Исполнитель: ${data.executor || '@Unknown'}
+${data.delay > 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
+━━━━━━━━━━━━
+🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
+🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
+  `.trim();
+}
+
+function formatPendingMessage(data) {
+  return `
+✅ Заявка #${data.row} ${data.isEmergency ? '🚨 (АВАРИЙНАЯ)' : ''} выполнена и отправлена на согласование ТУ ${data.tu || '@Unknown'}
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
@@ -282,6 +294,36 @@ async function getGoogleDiskLink(row) {
   }
 }
 
+async function getUserRequests(username) {
+  try {
+    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { executor: username });
+    return res.data.requests || [];
+  } catch (error) {
+    console.error('Error fetching user requests:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+async function getRequestsByPizzeria(pizzeria, username) {
+  try {
+    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { pizzeria, executor: username });
+    return res.data.requests || [];
+  } catch (error) {
+    console.error(`Error fetching requests for pizzeria ${pizzeria}:`, error.response?.data || error.message);
+    return [];
+  }
+}
+
+async function getAllInProgressRequests() {
+  try {
+    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { status: 'В работе' });
+    return res.data.requests || [];
+  } catch (error) {
+    console.error('Error fetching in-progress requests:', error.response?.data || error.message);
+    return [];
+  }
+}
+
 // Хранилище состояний с уникальными ключами
 const userStates = {};
 
@@ -297,6 +339,112 @@ module.exports = (app) => {
           userStorage.set(`@${user.username}`, user.id);
           console.log(`Saved user_id for ${user.username}: ${user.id}`);
         }
+      }
+
+      // Обработка команд в ЛС
+      if (body.message?.chat?.type === 'private' && body.message?.text) {
+        const chatId = body.message.chat.id;
+        const username = body.message.from.username ? `@${body.message.from.username}` : null;
+        const text = body.message.text;
+
+        if (!AUTHORIZED_USERS.includes(username)) {
+          await sendMessage(chatId, '❌ У вас нет доступа.');
+          return res.sendStatus(200);
+        }
+
+        // Команда /my
+        if (text === '/my') {
+          const requests = await getUserRequests(username);
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 У вас нет активных заявок.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Ваши заявки:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        // Команда /пиццерии
+        if (text === '/пиццерии') {
+          const pizzerias = Object.keys(PIZZERIA_TO_TU);
+          const buttons = pizzerias.map(pizzeria => [{
+            text: pizzeria,
+            callback_data: `pizzeria:${pizzeria}:${username}`
+          }]);
+
+          await sendMessage(chatId, '🍕 Выберите пиццерию:', {
+            reply_markup: { inline_keyboard: buttons }
+          });
+          return res.sendStatus(200);
+        }
+
+        // Команда /vse (для менеджеров)
+        if (text === '/vse' && MANAGERS.includes(username)) {
+          const requests = await getAllInProgressRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет заявок в работе.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Все заявки в работе:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+      }
+
+      // Обработка callback_query для выбора пиццерии
+      if (body.callback_query?.data?.startsWith('pizzeria:')) {
+        const callbackQuery = body.callback_query;
+        const chatId = callbackQuery.message.chat.id;
+        const username = callbackQuery.from.username ? `@${callbackQuery.from.username}` : null;
+        const data = callbackQuery.data;
+        const parts = data.split(':');
+        const pizzeria = parts[1];
+        const targetUsername = parts[2];
+
+        if (!AUTHORIZED_USERS.includes(username)) {
+          await sendMessage(chatId, '❌ У вас нет доступа.');
+          return res.sendStatus(200);
+        }
+
+        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+          callback_query_id: callbackQuery.id
+        }).catch(e => console.error('Answer callback error:', e));
+
+        const isManager = MANAGERS.includes(username);
+        const requests = await getRequestsByPizzeria(pizzeria, isManager ? null : targetUsername);
+
+        if (!requests.length) {
+          await sendMessage(chatId, `📋 Нет заявок для пиццерии ${pizzeria}.`);
+          return res.sendStatus(200);
+        }
+
+        const message = requests.map(req => 
+          `📌 Заявка #${req.row}\n` +
+          `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+          `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+          `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+          `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+          `📊 Статус: ${req.status || 'не указан'}`
+        ).join('\n\n');
+
+        await sendMessage(chatId, `📋 Заявки для пиццерии ${pizzeria}:\n\n${message}`);
+        return res.sendStatus(200);
       }
 
       // Обработка callback_query
@@ -832,7 +980,16 @@ module.exports = (app) => {
           const isTU = tuUsernames.includes(username);
           const confirmerUsername = username;
 
-          // Уведомляем исполнителя о возврате
+          // Уведомляем исполнителя в чате
+          const returnMsg = await sendMessage(
+            chatId,
+            `📌 Заявка #${row} возвращена на доработку ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n` +
+            `📝 Причина: ${text}\n` +
+            `👤 Исполнитель: ${state.username || '@Unknown'}, устраните замечания.`,
+            { reply_to_message_id: state.messageId }
+          );
+
+          // Уведомляем исполнителя в ЛС
           const executorId = userStorage.get(state.username);
           if (executorId) {
             await sendMessage(
@@ -865,21 +1022,6 @@ module.exports = (app) => {
             }
           }
 
-          // Уведомляем в чате
-          const returnMsg = await sendMessage(
-            chatId,
-            `📌 Заявка #${row} возвращена на доработку ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n` +
-            `📝 Причина: ${text}`,
-            { reply_to_message_id: state.messageId }
-          );
-
-          // Запрашиваем новое выполнение
-          const retryMsg = await sendMessage(
-            chatId,
-            `📋 Устраните замечания к заявке #${row} и согласуйте еще раз.`,
-            { reply_to_message_id: state.messageId }
-          );
-
           // Обновляем статус в GAS
           await sendToGAS({
             row: state.row,
@@ -909,7 +1051,7 @@ module.exports = (app) => {
           delete state.pendingMessageId;
 
           state.stage = 'waiting_photo';
-          state.serviceMessages = [retryMsg?.data?.result?.message_id].filter(Boolean);
+          state.serviceMessages = [returnMsg?.data?.result?.message_id].filter(Boolean);
           console.log(`State updated to waiting_photo for ${stateKey} after return`);
 
           setTimeout(async () => {
@@ -1001,13 +1143,14 @@ module.exports = (app) => {
           // Определяем ТУ по пиццерии
           const pizzeria = state.originalRequest?.pizzeria;
           const tuUsernames = pizzeria ? PIZZERIA_TO_TU[pizzeria] || ['@Unknown'] : ['@Unknown'];
-          const tuUsername = tuUsernames[0];
+          const tu = tuUsernames.join(', ');
 
           const diskUrl = await getGoogleDiskLink(row);
-          const preliminaryMessage = formatCompletionMessage({
+          const preliminaryMessage = formatPendingMessage({
             ...state,
-            executor: state.username || '@Unknown'
-          }, tuUsername, true);
+            executor: state.username || '@Unknown',
+            tu
+          });
 
           // Отправляем фото с предварительной подписью
           const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, preliminaryMessage, {
@@ -1018,7 +1161,7 @@ module.exports = (app) => {
           state.photoMessageId = photoResponse?.data?.result?.message_id;
 
           // Уведомление о статусе "Ожидает подтверждения" с кнопками
-          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения ТУ ${tuUsernames.join(', ')}.`;
+          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения ТУ ${tu}.`;
           const pendingMsgResponse = await sendMessage(chatId, pendingMessage, {
             reply_to_message_id: state.messageId,
             reply_markup: {
@@ -1034,8 +1177,8 @@ module.exports = (app) => {
           state.pendingMessageId = pendingMsgResponse?.data?.result?.message_id;
 
           // Уведомляем всех ТУ
-          for (const tu of tuUsernames) {
-            const tuId = userStorage.get(tu);
+          for (const tuUsername of tuUsernames) {
+            const tuId = userStorage.get(tuUsername);
             if (tuId) {
               await sendMessage(
                 tuId,
@@ -1048,9 +1191,9 @@ module.exports = (app) => {
                 `📸 Фото: ${state.photoUrl || 'не указано'}\n\n` +
                 `⚠️ Подтвердите или верните на доработку`,
                 { parse_mode: 'HTML' }
-              ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
+              ).catch(e => console.error(`Error sending to TU ${tuUsername}:`, e));
             } else {
-              console.warn(`TU ID not found for ${tu}`);
+              console.warn(`TU ID not found for ${tuUsername}`);
             }
           }
 
@@ -1072,7 +1215,7 @@ module.exports = (app) => {
             category: state.originalRequest?.category,
             factDate: new Date().toISOString(),
             message_id: state.messageId,
-            tu: tuUsernames.join(', ')
+            tu
           };
 
           await sendToGAS(completionData);
