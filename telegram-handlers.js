@@ -68,13 +68,13 @@ function parseRequestMessage(text) {
   const result = {};
   const lines = text.split('\n');
   lines.forEach(line => {
-    if (line.includes('Пиццерия:')) result.pizzeria = line.split(':')[1].trim();
-    if (line.includes('Классификация:')) result.classification = line.split(':')[1].trim();
-    if (line.includes('Категория:')) result.category = line.split(':')[1].trim();
-    if (line.includes('Проблема:')) result.problem = line.split(':')[1].trim();
-    if (line.includes('Инициатор:')) result.initiator = line.split(':')[1].trim();
-    if (line.includes('Телефон:')) result.phone = line.split(':')[1].trim();
-    if (line.includes('Срок:')) result.deadline = line.split(':')[1].trim();
+    if (line.includes('Пиццерия:')) result.pizzeria = line.split(':')[1]?.trim();
+    if (line.includes('Классификация:')) result.classification = line.split(':')[1]?.trim();
+    if (line.includes('Категория:')) result.category = line.split(':')[1]?.trim();
+    if (line.includes('Проблема:')) result.problem = line.split(':')[1]?.trim();
+    if (line.includes('Инициатор:')) result.initiator = line.split(':')[1]?.trim();
+    if (line.includes('Телефон:')) result.phone = line.split(':')[1]?.trim();
+    if (line.includes('Срок:')) result.deadline = line.split(':')[1]?.trim();
   });
   return result;
 }
@@ -1069,6 +1069,40 @@ module.exports = (app) => {
 
           return res.sendStatus(200);
         }
+
+        // Обработка ожидания заявки
+        if (data.startsWith('wait:')) {
+          if (!EXECUTORS.includes(username)) {
+            const notExecutorMsg = await sendMessage(chatId, '❌ Только исполнители могут переводить заявки в ожидание.');
+            setTimeout(() => deleteMessageSafe(chatId, notExecutorMsg?.data?.result?.message_id), 20000);
+            return res.sendStatus(200);
+          }
+
+          const requestData = parseRequestMessage(msg.text || msg.caption);
+
+          await sendMessage(chatId, `⏳ Заявка #${row} переведена в статус "Ожидает"`, {
+            reply_to_message_id: messageId
+          });
+
+          await sendToGAS({
+            row,
+            status: 'Ожидает',
+            executor: username,
+            message_id: messageId,
+            isEmergency: requestData.classification === 'Аварийная',
+            pizzeria: requestData?.pizzeria,
+            problem: requestData?.problem,
+            deadline: requestData?.deadline,
+            initiator: requestData?.initiator,
+            phone: requestData?.phone,
+            category: requestData?.category,
+            timestamp: new Date().toISOString()
+          });
+
+          await sendButtonsWithRetry(chatId, messageId, [], `Заявка #${row} переведена в ожидание`);
+
+          return res.sendStatus(200);
+        }
       }
 
       // Обработка сообщений (фото, сумма, комментарий, причина возврата)
@@ -1364,5 +1398,65 @@ module.exports = (app) => {
           state.pendingMessageId = pendingMsg?.data?.result?.message_id;
           state.photoMessageId = pendingMsg?.data?.result?.message_id;
 
+          // Уведомляем ТУ в ЛС
           for (const tu of tuUsernames) {
-            const tuId =
+            const tuId = userStorage.get(tu);
+            if (tuId) {
+              await sendMessage(
+                tuId,
+                `📌 Заявка #${row} ожидает вашего подтверждения\n\n` +
+                `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
+                `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
+                `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
+                `💰 Сумма: ${state.sum || '0'} сум\n` +
+                `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
+                `📸 Фото: ${state.photoUrl || 'не указано'}\n\n` +
+                `⚠️ Подтвердите или верните на доработку`,
+                {
+                  parse_mode: 'HTML',
+                  reply_markup: {
+                    inline_keyboard: [
+                      [
+                        { text: '✅ Подтвердить', callback_data: `confirm:${row}` },
+                        { text: '🔄 Вернуть', callback_data: `return:${row}` }
+                      ]
+                    ]
+                  }
+                }
+              ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
+            } else {
+              console.warn(`TU ID not found for ${tu}`);
+            }
+          }
+
+          // Обновляем статус в GAS
+          await sendToGAS({
+            row: state.row,
+            status: 'Ожидает подтверждения',
+            executor: state.username,
+            message_id: state.messageId,
+            isEmergency: state.isEmergency,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline,
+            initiator: state.originalRequest?.initiator,
+            phone: state.originalRequest?.phone,
+            category: state.originalRequest?.category,
+            sum: state.sum,
+            comment: state.comment,
+            photoUrl: state.photoUrl,
+            timestamp: new Date().toISOString()
+          });
+
+          console.log(`State updated to pending_confirmation for ${stateKey}`);
+          return res.sendStatus(200);
+        }
+      }
+
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error('Webhook error:', error.message, error.stack);
+      return res.sendStatus(500);
+    }
+  });
+};
