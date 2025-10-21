@@ -9,13 +9,13 @@ const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
 
 // Права пользователей
-const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87'];
+const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87', '@azabdukohhorov', '@Yusuf174', '@zafar555' ];
 const EXECUTORS = ['@Andrey_Tkach_Dodo', '@olimjon2585', '@Davr_85', '@Oblayor_04_09', '@IkromovichV', '@EvelinaB87'];
 const AUTHORIZED_USERS = [...new Set([...MANAGERS, ...EXECUTORS])];
 
 // Маппинг пиццерий к ТУ (массив пользователей)
 const PIZZERIA_TO_TU = {
-  'Ташкент-1': ['@zafar555', '@AnotherUser'],
+  'Ташкент-1': ['@zafar555'],
   'Ташкент-12': ['@zafar555'],
   'Ташкент-3': ['@azabdukohhorov'],
   'Ташкент-2': ['@azabdukohhorov'],
@@ -23,7 +23,8 @@ const PIZZERIA_TO_TU = {
   'Ташкент-8': ['@azabdukohhorov'],
   'Ташкент-10': ['@azabdukohhorov'],
   'Ташкент-14': ['@azabdukohhorov'],
-  'Ташкент-4': ['@Yusuf174', '@AnotherUser'],
+  'Ташкент-13': ['@azabdukohhorov'],
+  'Ташкент-4': ['@Yusuf174'],
   'Ташкент-7': ['@Yusuf174'],
   'Ташкент-6': ['@Yusuf174'],
   'Ташкент-11': ['@Yusuf174'],
