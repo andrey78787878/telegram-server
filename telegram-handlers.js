@@ -353,7 +353,7 @@ module.exports = (app) => {
         }
 
         // Команда /my
-        if (text === '/my') {
+        if (text === '/мои') {
           const requests = await getUserRequests(username);
           if (!requests.length) {
             await sendMessage(chatId, '📋 У вас нет активных заявок.');
@@ -387,7 +387,7 @@ module.exports = (app) => {
         }
 
         // Команда /vse (для менеджеров)
-        if (text === '/vse' && MANAGERS.includes(username)) {
+        if (text === '/все' && MANAGERS.includes(username)) {
           const requests = await getAllInProgressRequests();
           if (!requests.length) {
             await sendMessage(chatId, '📋 Нет заявок в работе.');
