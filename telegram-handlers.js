@@ -1,7 +1,10 @@
+const express = require('express');
 const axios = require('axios');
 const https = require('https');
 axios.defaults.httpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const FormData = require('form-data');
+const dotenv = require('dotenv');
+dotenv.config();
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
@@ -85,7 +88,7 @@ function calculateDelayDays(deadline) {
     }
     const today = new Date();
     const diffTime = today - deadlineDate;
-    return Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   } catch (e) {
     console.error('Error calculating delay:', e);
     return 0;
@@ -99,7 +102,7 @@ function formatCompletionMessage(data, confirmerUsername, isTU) {
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
-${data.delay > 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
+${data.delay !== 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
 🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
@@ -112,7 +115,7 @@ function formatPendingMessage(data) {
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
-${data.delay > 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
+${data.delay !== 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
 🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
@@ -295,18 +298,22 @@ async function getGoogleDiskLink(row) {
 }
 
 async function getUserRequests(username) {
+  console.log(`Fetching requests for executor: ${username}`);
   try {
     const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { executor: username });
+    console.log(`GAS response for /my:`, JSON.stringify(res.data, null, 2));
     return res.data.requests || [];
   } catch (error) {
-    console.error('Error fetching user requests:', error.response?.data || error.message);
+    console.error(`Error fetching user requests for ${username}:`, error.response?.data || error.message);
     return [];
   }
 }
 
 async function getRequestsByPizzeria(pizzeria, username) {
+  console.log(`Fetching requests for pizzeria: ${pizzeria}, executor: ${username || 'all'}`);
   try {
     const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { pizzeria, executor: username });
+    console.log(`GAS response for /pizzeria:`, JSON.stringify(res.data, null, 2));
     return res.data.requests || [];
   } catch (error) {
     console.error(`Error fetching requests for pizzeria ${pizzeria}:`, error.response?.data || error.message);
@@ -315,11 +322,37 @@ async function getRequestsByPizzeria(pizzeria, username) {
 }
 
 async function getAllInProgressRequests() {
+  console.log(`Fetching all in-progress requests`);
   try {
     const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { status: 'В работе' });
+    console.log(`GAS response for /all:`, JSON.stringify(res.data, null, 2));
     return res.data.requests || [];
   } catch (error) {
     console.error('Error fetching in-progress requests:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+async function getUnassignedRequests() {
+  console.log(`Fetching unassigned requests`);
+  try {
+    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { executor: '' });
+    console.log(`GAS response for /unassigned:`, JSON.stringify(res.data, null, 2));
+    return res.data.requests || [];
+  } catch (error) {
+    console.error('Error fetching unassigned requests:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+async function getOverdueRequests() {
+  console.log(`Fetching overdue requests`);
+  try {
+    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { delay: 'negative' });
+    console.log(`GAS response for /overdue:`, JSON.stringify(res.data, null, 2));
+    return res.data.requests || [];
+  } catch (error) {
+    console.error('Error fetching overdue requests:', error.response?.data || error.message);
     return [];
   }
 }
@@ -352,7 +385,27 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
-        // Команда /my
+        // Команда /start
+        if (text === '/start') {
+          const buttons = [
+            [{ text: '📋 Мои заявки', callback_data: 'cmd:my' }],
+            [{ text: '🍕 По пиццериям', callback_data: 'cmd:pizzeria' }]
+          ];
+          if (MANAGERS.includes(username)) {
+            buttons.push(
+              [{ text: '📊 Все заявки в работе', callback_data: 'cmd:all' }],
+              [{ text: '👤 Без исполнителя', callback_data: 'cmd:unassigned' }],
+              [{ text: '⏰ Просроченные', callback_data: 'cmd:overdue' }]
+            );
+          }
+
+          await sendMessage(chatId, '📋 Выберите действие:', {
+            reply_markup: { inline_keyboard: buttons }
+          });
+          return res.sendStatus(200);
+        }
+
+        // Команда /мои
         if (text === '/мои') {
           const requests = await getUserRequests(username);
           if (!requests.length) {
@@ -386,7 +439,7 @@ module.exports = (app) => {
           return res.sendStatus(200);
         }
 
-        // Команда /vse (для менеджеров)
+        // Команда /все (для менеджеров)
         if (text === '/все' && MANAGERS.includes(username)) {
           const requests = await getAllInProgressRequests();
           if (!requests.length) {
@@ -405,6 +458,157 @@ module.exports = (app) => {
           await sendMessage(chatId, `📋 Все заявки в работе:\n\n${message}`);
           return res.sendStatus(200);
         }
+
+        // Команда /без_исполнителя (для менеджеров)
+        if (text === '/без_исполнителя' && MANAGERS.includes(username)) {
+          const requests = await getUnassignedRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет заявок без исполнителя.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Заявки без исполнителя:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        // Команда /просроченные (для менеджеров)
+        if (text === '/просроченные' && MANAGERS.includes(username)) {
+          const requests = await getOverdueRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет просроченных заявок.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `🔴 Просрочка: ${req.delay} дн.`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Просроченные заявки:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+      }
+
+      // Обработка callback_query для команд меню
+      if (body.callback_query?.data?.startsWith('cmd:')) {
+        const callbackQuery = body.callback_query;
+        const chatId = callbackQuery.message.chat.id;
+        const username = callbackQuery.from.username ? `@${callbackQuery.from.username}` : null;
+        const data = callbackQuery.data;
+        const command = data.split(':')[1];
+
+        if (!AUTHORIZED_USERS.includes(username)) {
+          await sendMessage(chatId, '❌ У вас нет доступа.');
+          return res.sendStatus(200);
+        }
+
+        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+          callback_query_id: callbackQuery.id
+        }).catch(e => console.error('Answer callback error:', e));
+
+        if (command === 'my') {
+          const requests = await getUserRequests(username);
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 У вас нет активных заявок.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Ваши заявки:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        if (command === 'pizzeria') {
+          const pizzerias = Object.keys(PIZZERIA_TO_TU);
+          const buttons = pizzerias.map(pizzeria => [{
+            text: pizzeria,
+            callback_data: `pizzeria:${pizzeria}:${username}`
+          }]);
+
+          await sendMessage(chatId, '🍕 Выберите пиццерию:', {
+            reply_markup: { inline_keyboard: buttons }
+          });
+          return res.sendStatus(200);
+        }
+
+        if (command === 'all' && MANAGERS.includes(username)) {
+          const requests = await getAllInProgressRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет заявок в работе.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Все заявки в работе:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        if (command === 'unassigned' && MANAGERS.includes(username)) {
+          const requests = await getUnassignedRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет заявок без исполнителя.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Заявки без исполнителя:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        if (command === 'overdue' && MANAGERS.includes(username)) {
+          const requests = await getOverdueRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет просроченных заявок.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `🔴 Просрочка: ${req.delay} дн.`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Просроченные заявки:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        return res.sendStatus(200);
       }
 
       // Обработка callback_query для выбора пиццерии
@@ -453,6 +657,7 @@ module.exports = (app) => {
         const user = callback_query.from;
         if (user.username) {
           userStorage.set(`@${user.username}`, user.id);
+          console.log(`Saved user_id for ${user.username}: ${user.id}`);
         }
 
         const msg = callback_query.message;
