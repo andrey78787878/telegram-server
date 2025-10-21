@@ -285,18 +285,6 @@ async function sendToGAS(data) {
   throw new Error(`Failed to send to GAS after ${maxAttempts} attempts`);
 }
 
-async function getGoogleDiskLink(row) {
-  try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getDiskLink=true`, { row });
-    const diskLink = res.data.diskLink || null;
-    console.log(`Google Disk link for row ${row}: ${diskLink}`);
-    return diskLink;
-  } catch (error) {
-    console.error('Get Google Disk link error:', error.response?.data || error.message);
-    return null;
-  }
-}
-
 async function getUserRequests(username) {
   console.log(`Fetching requests for executor: ${username}`);
   try {
@@ -769,6 +757,7 @@ module.exports = (app) => {
             row,
             status: 'Принята в работу',
             message_id: messageId,
+            isEmergency: false,
             pizzeria: requestData?.pizzeria,
             problem: requestData?.problem,
             deadline: requestData?.deadline,
@@ -827,6 +816,7 @@ module.exports = (app) => {
             status: 'В работе',
             executor: executorUsername,
             message_id: messageId,
+            isEmergency: requestData.classification === 'Аварийная',
             pizzeria: requestData?.pizzeria,
             problem: requestData?.problem,
             deadline: requestData?.deadline,
@@ -978,13 +968,17 @@ module.exports = (app) => {
             confirmer: confirmerUsername,
             isTU: isTU,
             message_id: state.messageId,
+            isEmergency: state.isEmergency,
             pizzeria: state.originalRequest?.pizzeria,
             problem: state.originalRequest?.problem,
             deadline: state.originalRequest?.deadline,
             initiator: state.originalRequest?.initiator,
             phone: state.originalRequest?.phone,
             category: state.originalRequest?.category,
-            factDate: new Date().toISOString()
+            factDate: new Date().toISOString(),
+            sum: state.sum,
+            comment: state.comment,
+            photoUrl: state.photoUrl
           });
 
           console.log(`Completion confirmed for ${stateKey} by ${confirmerUsername}, state cleared`);
@@ -1061,6 +1055,7 @@ module.exports = (app) => {
             status: 'Отменено',
             executor: username,
             message_id: messageId,
+            isEmergency: requestData.classification === 'Аварийная',
             pizzeria: requestData?.pizzeria,
             problem: requestData?.problem,
             deadline: requestData?.deadline,
@@ -1236,6 +1231,7 @@ module.exports = (app) => {
             isTU: isTU,
             returnReason: text,
             message_id: state.messageId,
+            isEmergency: state.isEmergency,
             pizzeria: state.originalRequest?.pizzeria,
             problem: state.originalRequest?.problem,
             deadline: state.originalRequest?.deadline,
@@ -1309,21 +1305,17 @@ module.exports = (app) => {
         // Обработка суммы
         if (state.stage === 'waiting_sum' && text && !isNaN(parseFloat(text))) {
           console.log(`Sum received for ${stateKey}: ${text}`);
-          state.sum = text;
+          state.sum = parseFloat(text);
 
           for (const serviceMsgId of state.serviceMessages) {
             await deleteMessageSafe(chatId, serviceMsgId);
           }
-          for (const userMsgId of state.userMessages) {
-            await deleteMessageSafe(chatId, userMsgId);
-          }
 
           state.serviceMessages = [];
-          state.userMessages = [];
 
           const commentMsg = await sendMessage(
             chatId,
-            `💬 Напишите комментарий для заявки #${row}`,
+            `💬 Укажите комментарий для заявки #${row} (или напишите "нет")`,
             { reply_to_message_id: state.messageId }
           );
 
@@ -1336,108 +1328,41 @@ module.exports = (app) => {
         // Обработка комментария
         if (state.stage === 'waiting_comment' && text) {
           console.log(`Comment received for ${stateKey}: ${text}`);
-          state.comment = text;
+          state.comment = text === 'нет' ? '' : text;
 
           for (const serviceMsgId of state.serviceMessages) {
             await deleteMessageSafe(chatId, serviceMsgId);
           }
-          for (const userMsgId of state.userMessages) {
-            await deleteMessageSafe(chatId, userMsgId);
-          }
 
-          // Определяем ТУ по пиццерии
+          state.serviceMessages = [];
+
           const pizzeria = state.originalRequest?.pizzeria;
           const tuUsernames = pizzeria ? PIZZERIA_TO_TU[pizzeria] || ['@Unknown'] : ['@Unknown'];
-          const tu = tuUsernames.join(', ');
+          const delay = calculateDelayDays(state.originalRequest?.deadline);
 
-          const diskUrl = await getGoogleDiskLink(row);
-          const preliminaryMessage = formatPendingMessage({
+          const pendingMessage = formatPendingMessage({
             ...state,
-            executor: state.username || '@Unknown',
-            tu
+            tu: tuUsernames[0],
+            delay
           });
 
-          // Отправляем фото с предварительной подписью
-          const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, preliminaryMessage, {
-            reply_to_message_id: state.messageId
-          });
+          const buttons = [
+            [
+              { text: '✅ Подтвердить', callback_data: `confirm:${row}` },
+              { text: '🔄 Вернуть', callback_data: `return:${row}` }
+            ]
+          ];
 
-          // Сохраняем ID сообщения с фото
-          state.photoMessageId = photoResponse?.data?.result?.message_id;
-
-          // Уведомление о статусе "Ожидает подтверждения" с кнопками
-          const pendingMessage = `🕒 Заявка #${row} ожидает подтверждения ТУ ${tu}.`;
-          const pendingMsgResponse = await sendMessage(chatId, pendingMessage, {
-            reply_to_message_id: state.messageId,
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '✅ Подтвердить закрытие', callback_data: `confirm:${row}` },
-                  { text: '🔄 Вернуть на доработку', callback_data: `return:${row}` }
-                ]
-              ]
-            }
-          });
-
-          state.pendingMessageId = pendingMsgResponse?.data?.result?.message_id;
-
-          // Уведомляем всех ТУ
-          for (const tuUsername of tuUsernames) {
-            const tuId = userStorage.get(tuUsername);
-            if (tuId) {
-              await sendMessage(
-                tuId,
-                `📌 Заявка #${row} ожидает вашего подтверждения\n\n` +
-                `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
-                `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
-                `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
-                `💰 Сумма: ${state.sum || '0'} сум\n` +
-                `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
-                `📸 Фото: ${state.photoUrl || 'не указано'}\n\n` +
-                `⚠️ Подтвердите или верните на доработку`,
-                { parse_mode: 'HTML' }
-              ).catch(e => console.error(`Error sending to TU ${tuUsername}:`, e));
-            } else {
-              console.warn(`TU ID not found for ${tuUsername}`);
-            }
-          }
-
-          const completionData = {
-            row: state.row,
-            sum: state.sum,
-            comment: state.comment,
-            photoUrl: state.photoUrl,
-            executor: state.username || '@Unknown',
-            originalRequest: state.originalRequest,
-            delay: calculateDelayDays(state.originalRequest?.deadline),
-            status: 'Ожидает подтверждения',
-            isEmergency: state.isEmergency,
-            pizzeria: state.originalRequest?.pizzeria,
-            problem: state.originalRequest?.problem,
-            deadline: state.originalRequest?.deadline,
-            initiator: state.originalRequest?.initiator,
-            phone: state.originalRequest?.phone,
-            category: state.originalRequest?.category,
-            factDate: new Date().toISOString(),
-            message_id: state.messageId,
-            tu
-          };
-
-          await sendToGAS(completionData);
+          const pendingMsg = await sendPhotoWithCaption(
+            chatId,
+            state.fileId,
+            pendingMessage,
+            { reply_to_message_id: state.messageId }
+          );
 
           state.stage = 'pending_confirmation';
-          state.serviceMessages = [];
-          state.userMessages = [];
-          console.log(`State updated to pending_confirmation for ${stateKey}`);
+          state.pendingMessageId = pendingMsg?.data?.result?.message_id;
+          state.photoMessageId = pendingMsg?.data?.result?.message_id;
 
-          return res.sendStatus(200);
-        }
-      }
-
-      return res.sendStatus(200);
-    } catch (error) {
-      console.error('Webhook error:', error);
-      return res.sendStatus(500);
-    }
-  });
-};
+          for (const tu of tuUsernames) {
+            const tuId =
