@@ -1,4 +1,3 @@
-```javascript
 const express = require('express');
 const axios = require('axios');
 const https = require('https');
@@ -343,18 +342,6 @@ async function getOverdueRequests() {
   } catch (error) {
     console.error('Error fetching overdue requests:', error.response?.data || error.message);
     return [];
-  }
-}
-
-async function getRequestByRow(row) {
-  console.log(`Fetching request for row: ${row}`);
-  try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { row });
-    console.log(`GAS response for row ${row}:`, JSON.stringify(res.data, null, 2));
-    return res.data.requests?.[0] || null;
-  } catch (error) {
-    console.error(`Error fetching request for row ${row}:`, error.response?.data || error.message);
-    return null;
   }
 }
 
@@ -918,106 +905,84 @@ module.exports = (app) => {
           const stateKey = `${chatId}:${row}`;
           const state = userStates[stateKey];
 
-          // Проверяем статус в GAS
-          const request = await getRequestByRow(row);
-          if (!request || request.status !== 'Ожидает подтверждения') {
-            const errorMsg = await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
-            setTimeout(() => deleteMessageSafe(chatId, errorMsg?.data?.result?.message_id), 20000);
-            return res.sendStatus(200);
-          }
-
           if (!state || state.stage !== 'pending_confirmation') {
             const errorMsg = await sendMessage(chatId, '❌ Заявка уже закрыта или не ожидает подтверждения.');
             setTimeout(() => deleteMessageSafe(chatId, errorMsg?.data?.result?.message_id), 20000);
             return res.sendStatus(200);
           }
 
-          // Добавляем флаг блокировки
-          if (state.isProcessing) {
-            const processingMsg = await sendMessage(chatId, '❌ Заявка уже обрабатывается другим пользователем.');
-            setTimeout(() => deleteMessageSafe(chatId, processingMsg?.data?.result?.message_id), 20000);
-            return res.sendStatus(200);
+          // Определяем ТУ по пиццерии
+          const pizzeria = state.originalRequest?.pizzeria;
+          const tuUsernames = pizzeria ? PIZZERIA_TO_TU[pizzeria] || ['@Unknown'] : ['@Unknown'];
+          const isTU = tuUsernames.includes(username);
+          const confirmerUsername = username;
+
+          // Удаляем промежуточные сообщения
+          if (state.photoMessageId) {
+            await deleteMessageSafe(chatId, state.photoMessageId);
           }
-          state.isProcessing = true; // Устанавливаем блокировку
+          if (state.pendingMessageId) {
+            await deleteMessageSafe(chatId, state.pendingMessageId);
+          }
 
-          try {
-            // Определяем ТУ по пиццерии
-            const pizzeria = state.originalRequest?.pizzeria;
-            const tuUsernames = pizzeria ? PIZZERIA_TO_TU[pizzeria] || ['@Unknown'] : ['@Unknown'];
-            const isTU = tuUsernames.includes(username);
-            const confirmerUsername = username;
+          // Удаляем кнопки из материнской заявки
+          await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
 
-            // Удаляем промежуточные сообщения
-            if (state.photoMessageId) {
-              await deleteMessageSafe(chatId, state.photoMessageId);
-            }
-            if (state.pendingMessageId) {
-              await deleteMessageSafe(chatId, state.pendingMessageId);
-            }
+          // Отправляем финальное сообщение с фото
+          const finalMessage = formatCompletionMessage({
+            ...state,
+            executor: state.username || '@Unknown'
+          }, confirmerUsername, isTU);
 
-            // Удаляем кнопки из материнской заявки
-            await sendButtonsWithRetry(chatId, state.messageId, [], `Заявка #${row} закрыта`);
+          const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
+            reply_to_message_id: state.messageId
+          });
 
-            // Отправляем финальное сообщение с фото
-            const finalMessage = formatCompletionMessage({
-              ...state,
-              executor: state.username || '@Unknown'
-            }, confirmerUsername, isTU);
-
-            const photoResponse = await sendPhotoWithCaption(chatId, state.fileId, finalMessage, {
-              reply_to_message_id: state.messageId
-            });
-
-            // Уведомляем всех ТУ о подтверждении
-            for (const tu of tuUsernames) {
-              if (tu !== username) {
-                const tuId = userStorage.get(tu);
-                if (tuId) {
-                  await sendMessage(
-                    tuId,
-                    `📌 Заявка #${row} подтверждена ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n\n` +
-                    `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
-                    `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
-                    `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
-                    `💰 Сумма: ${state.sum || '0'} сум\n` +
-                    `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
-                    `📸 Фото: ${state.photoUrl || 'не указано'}`,
-                    { parse_mode: 'HTML' }
-                  ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
-                } else {
-                  console.warn(`TU ID not found for ${tu}`);
-                }
+          // Уведомляем всех ТУ о подтверждении
+          for (const tu of tuUsernames) {
+            if (tu !== username) {
+              const tuId = userStorage.get(tu);
+              if (tuId) {
+                await sendMessage(
+                  tuId,
+                  `📌 Заявка #${row} подтверждена ${isTU ? 'ТУ' : 'менеджером'} ${confirmerUsername}\n\n` +
+                  `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
+                  `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
+                  `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
+                  `💰 Сумма: ${state.sum || '0'} сум\n` +
+                  `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
+                  `📸 Фото: ${state.photoUrl || 'не указано'}`,
+                  { parse_mode: 'HTML' }
+                ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
+              } else {
+                console.warn(`TU ID not found for ${tu}`);
               }
             }
-
-            // Обновляем статус в Google Apps Script
-            await sendToGAS({
-              row: state.row,
-              status: 'Выполнено',
-              executor: state.username,
-              confirmer: confirmerUsername,
-              isTU: isTU,
-              message_id: state.messageId,
-              isEmergency: state.isEmergency,
-              pizzeria: state.originalRequest?.pizzeria,
-              problem: state.originalRequest?.problem,
-              deadline: state.originalRequest?.deadline,
-              initiator: state.originalRequest?.initiator,
-              phone: state.originalRequest?.phone,
-              category: state.originalRequest?.category,
-              factDate: new Date().toISOString(),
-              sum: state.sum,
-              comment: state.comment,
-              photoUrl: state.photoUrl
-            });
-
-            console.log(`Completion confirmed for ${stateKey} by ${confirmerUsername}, state cleared`);
-            delete userStates[stateKey];
-          } catch (e) {
-            console.error(`Error processing confirm for ${stateKey}:`, e);
-            state.isProcessing = false; // Снимаем блокировку при ошибке
-            throw e;
           }
+
+          // Обновляем статус в Google Apps Script
+          await sendToGAS({
+            row: state.row,
+            status: 'Выполнено',
+            executor: state.username,
+            confirmer: confirmerUsername,
+            isTU: isTU,
+            message_id: state.messageId,
+            isEmergency: state.isEmergency,
+            pizzeria: state.originalRequest?.pizzeria,
+            problem: state.originalRequest?.problem,
+            deadline: state.originalRequest?.deadline,
+            initiator: state.originalRequest?.initiator,
+            phone: state.originalRequest?.phone,
+            category: state.originalRequest?.category,
+            factDate: new Date().toISOString(),
+            sum: state.sum,
+            comment: state.comment,
+            photoUrl: state.photoUrl
+          });
+
+          console.log(`Completion confirmed for ${stateKey} by ${confirmerUsername}, state cleared`);
+          delete userStates[stateKey];
 
           return res.sendStatus(200);
         }
@@ -1177,13 +1142,6 @@ module.exports = (app) => {
           if (userStates[possibleStateKey] && userStates[possibleStateKey].username === username) {
             stateKey = possibleStateKey;
             state = userStates[possibleStateKey];
-            // Проверяем, что состояние актуально (например, не старше 1 часа)
-            if (Date.now() - state.timestamp > 3600000) { // 1 час
-              console.log(`State ${stateKey} is outdated, clearing`);
-              delete userStates[stateKey];
-              await sendMessage(chatId, '❌ Состояние заявки устарело. Начните процесс заново.');
-              return res.sendStatus(200);
-            }
           }
         }
 
@@ -1491,45 +1449,6 @@ module.exports = (app) => {
           });
 
           console.log(`State updated to pending_confirmation for ${stateKey}`);
-
-          // Добавляем таймаут для pending_confirmation (5 минут)
-          setTimeout(async () => {
-            try {
-              const currentState = userStates[stateKey];
-              if (currentState?.stage === 'pending_confirmation') {
-                await deleteMessageSafe(chatId, currentState.pendingMessageId);
-                for (const userMsgId of currentState.userMessages) {
-                  await deleteMessageSafe(chatId, userMsgId);
-                }
-                delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания подтверждения истекло.', {
-                  reply_to_message_id: currentState.messageId
-                });
-                console.log(`Timeout triggered for ${stateKey} (pending_confirmation), state cleared`);
-                // Обновляем статус в GAS
-                await sendToGAS({
-                  row: currentState.row,
-                  status: 'Ожидает подтверждения (таймаут)',
-                  executor: currentState.username,
-                  message_id: currentState.messageId,
-                  isEmergency: currentState.isEmergency,
-                  pizzeria: currentState.originalRequest?.pizzeria,
-                  problem: currentState.originalRequest?.problem,
-                  deadline: currentState.originalRequest?.deadline,
-                  initiator: currentState.originalRequest?.initiator,
-                  phone: currentState.originalRequest?.phone,
-                  category: currentState.originalRequest?.category,
-                  sum: currentState.sum,
-                  comment: currentState.comment,
-                  photoUrl: currentState.photoUrl,
-                  timestamp: new Date().toISOString()
-                });
-              }
-            } catch (e) {
-              console.error(`Error handling confirmation timeout for ${stateKey}:`, e);
-            }
-          }, 300000); // 5 минут
-
           return res.sendStatus(200);
         }
       }
@@ -1541,4 +1460,3 @@ module.exports = (app) => {
     }
   });
 };
-```
