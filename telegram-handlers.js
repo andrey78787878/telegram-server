@@ -1,4 +1,3 @@
-```javascript
 const express = require('express');
 const axios = require('axios');
 const https = require('https');
@@ -11,6 +10,12 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TELEGRAM_FILE_API = `https://api.telegram.org/file/bot${BOT_TOKEN}`;
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+
+// Проверка GAS_WEB_APP_URL
+if (!GAS_WEB_APP_URL) {
+  console.error('ERROR: GAS_WEB_APP_URL is not defined in .env');
+  process.exit(1);
+}
 
 // Права пользователей
 const MANAGERS = ['@Andrey_Tkach_Dodo', '@Davr_85', '@EvelinaB87', '@azabdukohhorov', '@Yusuf174', '@zafar555'];
@@ -103,7 +108,7 @@ function formatCompletionMessage(data, confirmerUsername, isTU) {
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
-${data.delay !== 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
+${data.delay !== '' && data.delay !== 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
 🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
@@ -116,7 +121,7 @@ function formatPendingMessage(data) {
 💬 Комментарий: ${data.comment || 'нет комментария'}
 💰 Сумма: ${data.sum || '0'} сум
 👤 Исполнитель: ${data.executor || '@Unknown'}
-${data.delay !== 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
+${data.delay !== '' && data.delay !== 0 ? `🔴 Просрочка: ${data.delay} дн.` : ''}
 ━━━━━━━━━━━━
 🏢 Пиццерия: ${data.originalRequest?.pizzeria || 'не указано'}
 🔧 Проблема: ${data.originalRequest?.problem || 'не указано'}
@@ -262,14 +267,17 @@ async function getTelegramFileUrl(fileId) {
   }
 }
 
-async function sendToGAS(data) {
+async function sendToGAS(data, isGetRequest = false) {
   let attempts = 0;
   const maxAttempts = 3;
+  const url = isGetRequest ? `${GAS_WEB_APP_URL}?getRequests=true&nocache=${Date.now()}` : `${GAS_WEB_APP_URL}?nocache=${Date.now()}`;
   while (attempts < maxAttempts) {
     try {
-      console.log('Sending to GAS:', JSON.stringify(data, null, 2));
-      const response = await axios.post(GAS_WEB_APP_URL, data);
-      console.log('Data sent to GAS:', response.status, 'Response:', JSON.stringify(response.data));
+      console.log(`Sending to GAS: URL=${url}, Data=`, JSON.stringify(data, null, 2));
+      const response = await axios.post(url, data, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+      console.log(`Data sent to GAS: Status=${response.status}, Response=`, JSON.stringify(response.data, null, 2));
       return response.data;
     } catch (error) {
       if (error.response?.status === 429) {
@@ -279,7 +287,7 @@ async function sendToGAS(data) {
         attempts++;
         continue;
       }
-      console.error('Error sending to GAS:', error.message, 'Response:', error.response?.data);
+      console.error('Error sending to GAS:', error.message, 'Response:', JSON.stringify(error.response?.data, null, 2));
       throw error;
     }
   }
@@ -289,9 +297,13 @@ async function sendToGAS(data) {
 async function getUserRequests(username) {
   console.log(`Fetching requests for executor: ${username}`);
   try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { executor: username });
-    console.log(`GAS response for /my:`, JSON.stringify(res.data, null, 2));
-    return res.data.requests || [];
+    const res = await sendToGAS({ executor: username }, true);
+    console.log(`GAS response for /my:`, JSON.stringify(res, null, 2));
+    if (!res.requests) {
+      console.warn(`No requests field in GAS response for ${username}`);
+      return [];
+    }
+    return res.requests;
   } catch (error) {
     console.error(`Error fetching user requests for ${username}:`, error.response?.data || error.message);
     return [];
@@ -301,9 +313,13 @@ async function getUserRequests(username) {
 async function getRequestsByPizzeria(pizzeria, username) {
   console.log(`Fetching requests for pizzeria: ${pizzeria}, executor: ${username || 'all'}`);
   try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { pizzeria, executor: username });
-    console.log(`GAS response for /pizzeria:`, JSON.stringify(res.data, null, 2));
-    return res.data.requests || [];
+    const res = await sendToGAS({ pizzeria, executor: username }, true);
+    console.log(`GAS response for /pizzeria:`, JSON.stringify(res, null, 2));
+    if (!res.requests) {
+      console.warn(`No requests field in GAS response for pizzeria ${pizzeria}`);
+      return [];
+    }
+    return res.requests;
   } catch (error) {
     console.error(`Error fetching requests for pizzeria ${pizzeria}:`, error.response?.data || error.message);
     return [];
@@ -313,9 +329,13 @@ async function getRequestsByPizzeria(pizzeria, username) {
 async function getAllInProgressRequests() {
   console.log(`Fetching all in-progress requests`);
   try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { status: 'В работе' });
-    console.log(`GAS response for /all:`, JSON.stringify(res.data, null, 2));
-    return res.data.requests || [];
+    const res = await sendToGAS({ status: 'В работе' }, true);
+    console.log(`GAS response for /all:`, JSON.stringify(res, null, 2));
+    if (!res.requests) {
+      console.warn(`No requests field in GAS response for in-progress requests`);
+      return [];
+    }
+    return res.requests;
   } catch (error) {
     console.error('Error fetching in-progress requests:', error.response?.data || error.message);
     return [];
@@ -325,9 +345,13 @@ async function getAllInProgressRequests() {
 async function getUnassignedRequests() {
   console.log(`Fetching unassigned requests`);
   try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { executor: '' });
-    console.log(`GAS response for /unassigned:`, JSON.stringify(res.data, null, 2));
-    return res.data.requests || [];
+    const res = await sendToGAS({ executor: '' }, true);
+    console.log(`GAS response for /unassigned:`, JSON.stringify(res, null, 2));
+    if (!res.requests) {
+      console.warn(`No requests field in GAS response for unassigned requests`);
+      return [];
+    }
+    return res.requests;
   } catch (error) {
     console.error('Error fetching unassigned requests:', error.response?.data || error.message);
     return [];
@@ -337,11 +361,31 @@ async function getUnassignedRequests() {
 async function getOverdueRequests() {
   console.log(`Fetching overdue requests`);
   try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { delay: 'negative' });
-    console.log(`GAS response for /overdue:`, JSON.stringify(res.data, null, 2));
-    return res.data.requests || [];
+    const res = await sendToGAS({ delay: 'negative' }, true);
+    console.log(`GAS response for /overdue:`, JSON.stringify(res, null, 2));
+    if (!res.requests) {
+      console.warn(`No requests field in GAS response for overdue requests`);
+      return [];
+    }
+    return res.requests;
   } catch (error) {
     console.error('Error fetching overdue requests:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+async function getAllRequests() {
+  console.log(`Fetching all requests`);
+  try {
+    const res = await sendToGAS({}, true);
+    console.log(`GAS response for /all_requests:`, JSON.stringify(res, null, 2));
+    if (!res.requests) {
+      console.warn(`No requests field in GAS response for all requests`);
+      return [];
+    }
+    return res.requests;
+  } catch (error) {
+    console.error('Error fetching all requests:', error.response?.data || error.message);
     return [];
   }
 }
@@ -349,9 +393,13 @@ async function getOverdueRequests() {
 async function getRequestByRow(row) {
   console.log(`Fetching request for row: ${row}`);
   try {
-    const res = await axios.post(`${GAS_WEB_APP_URL}?getRequests=true`, { row });
-    console.log(`GAS response for row ${row}:`, JSON.stringify(res.data, null, 2));
-    return res.data.requests?.[0] || null;
+    const res = await sendToGAS({ row }, true);
+    console.log(`GAS response for row ${row}:`, JSON.stringify(res, null, 2));
+    if (!res.requests) {
+      console.warn(`No requests field in GAS response for row ${row}`);
+      return null;
+    }
+    return res.requests[0] || null;
   } catch (error) {
     console.error(`Error fetching request for row ${row}:`, error.response?.data || error.message);
     return null;
@@ -396,7 +444,8 @@ module.exports = (app) => {
             buttons.push(
               [{ text: '📊 Все заявки в работе', callback_data: 'cmd:all' }],
               [{ text: '👤 Без исполнителя', callback_data: 'cmd:unassigned' }],
-              [{ text: '⏰ Просроченные', callback_data: 'cmd:overdue' }]
+              [{ text: '⏰ Просроченные', callback_data: 'cmd:overdue' }],
+              [{ text: '📜 Все заявки', callback_data: 'cmd:all_requests' }]
             );
           }
 
@@ -419,7 +468,12 @@ module.exports = (app) => {
             `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `🕓 Срок: ${req.deadline || 'не указан'}\n` +
-            `📊 Статус: ${req.status || 'не указан'}`
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Ваши заявки:\n\n${message}`);
@@ -453,7 +507,12 @@ module.exports = (app) => {
             `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
-            `🕓 Срок: ${req.deadline || 'не указан'}`
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Все заявки в работе:\n\n${message}`);
@@ -473,7 +532,11 @@ module.exports = (app) => {
             `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `🕓 Срок: ${req.deadline || 'не указан'}\n` +
-            `📊 Статус: ${req.status || 'не указан'}`
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Заявки без исполнителя:\n\n${message}`);
@@ -494,10 +557,45 @@ module.exports = (app) => {
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
             `🕓 Срок: ${req.deadline || 'не указан'}\n` +
-            `🔴 Просрочка: ${req.delay} дн.`
+            `🔴 Просрочка: ${req.delay} дн.\n` +
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Просроченные заявки:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        // Команда /все_заявки (для менеджеров)
+        if (text === '/все_заявки' && MANAGERS.includes(username)) {
+          const requests = await getAllRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет заявок в таблице.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `🔴 Просрочка: ${req.delay !== '' ? `${req.delay} дн.` : 'не рассчитана'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}\n` +
+            `📸 Фото: ${req.photo || 'не указано'}\n` +
+            `📸 Фото выполненных работ: ${req.photoCompleted || 'не указано'}\n` +
+            `📸 Фото Google: ${req.googlePhoto || 'не указано'}\n` +
+            `💬 Комментарий: ${req.comment || 'не указано'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Все заявки:\n\n${message}`);
           return res.sendStatus(200);
         }
       }
@@ -531,7 +629,12 @@ module.exports = (app) => {
             `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `🕓 Срок: ${req.deadline || 'не указан'}\n` +
-            `📊 Статус: ${req.status || 'не указан'}`
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Ваши заявки:\n\n${message}`);
@@ -563,7 +666,12 @@ module.exports = (app) => {
             `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
-            `🕓 Срок: ${req.deadline || 'не указан'}`
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Все заявки в работе:\n\n${message}`);
@@ -582,7 +690,11 @@ module.exports = (app) => {
             `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `🕓 Срок: ${req.deadline || 'не указан'}\n` +
-            `📊 Статус: ${req.status || 'не указан'}`
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Заявки без исполнителя:\n\n${message}`);
@@ -602,10 +714,44 @@ module.exports = (app) => {
             `🔧 Проблема: ${req.problem || 'не указано'}\n` +
             `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
             `🕓 Срок: ${req.deadline || 'не указан'}\n` +
-            `🔴 Просрочка: ${req.delay} дн.`
+            `🔴 Просрочка: ${req.delay} дн.\n` +
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}`
           ).join('\n\n');
 
           await sendMessage(chatId, `📋 Просроченные заявки:\n\n${message}`);
+          return res.sendStatus(200);
+        }
+
+        if (command === 'all_requests' && MANAGERS.includes(username)) {
+          const requests = await getAllRequests();
+          if (!requests.length) {
+            await sendMessage(chatId, '📋 Нет заявок в таблице.');
+            return res.sendStatus(200);
+          }
+
+          const message = requests.map(req => 
+            `📌 Заявка #${req.row}\n` +
+            `🏢 Пиццерия: ${req.pizzeria || 'не указано'}\n` +
+            `🔧 Проблема: ${req.problem || 'не указано'}\n` +
+            `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
+            `🕓 Срок: ${req.deadline || 'не указан'}\n` +
+            `📊 Статус: ${req.status || 'не указан'}\n` +
+            `🔴 Просрочка: ${req.delay !== '' ? `${req.delay} дн.` : 'не рассчитана'}\n` +
+            `📋 Категория: ${req.category || 'не указано'}\n` +
+            `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+            `📞 Телефон: ${req.phone || 'не указано'}\n` +
+            `🚨 Классификация: ${req.classification || 'не указано'}\n` +
+            `📸 Фото: ${req.photo || 'не указано'}\n` +
+            `📸 Фото выполненных работ: ${req.photoCompleted || 'не указано'}\n` +
+            `📸 Фото Google: ${req.googlePhoto || 'не указано'}\n` +
+            `💬 Комментарий: ${req.comment || 'не указано'}`
+          ).join('\n\n');
+
+          await sendMessage(chatId, `📋 Все заявки:\n\n${message}`);
           return res.sendStatus(200);
         }
 
@@ -645,7 +791,11 @@ module.exports = (app) => {
           `🔧 Проблема: ${req.problem || 'не указано'}\n` +
           `👤 Исполнитель: ${req.executor || 'не назначен'}\n` +
           `🕓 Срок: ${req.deadline || 'не указан'}\n` +
-          `📊 Статус: ${req.status || 'не указан'}`
+          `📊 Статус: ${req.status || 'не указан'}\n` +
+          `📋 Категория: ${req.category || 'не указано'}\n` +
+          `👤 Инициатор: ${req.initiator || 'не указано'}\n` +
+          `📞 Телефон: ${req.phone || 'не указано'}\n` +
+          `🚨 Классификация: ${req.classification || 'не указано'}`
         ).join('\n\n');
 
         await sendMessage(chatId, `📋 Заявки для пиццерии ${pizzeria}:\n\n${message}`);
@@ -743,7 +893,7 @@ module.exports = (app) => {
               category: requestData?.category,
               manager: username,
               timestamp: new Date().toISOString()
-            });
+            }, false);
 
             return res.sendStatus(200);
           }
@@ -779,7 +929,7 @@ module.exports = (app) => {
             category: requestData?.category,
             manager: username,
             timestamp: new Date().toISOString()
-          });
+          }, false);
 
           return res.sendStatus(200);
         }
@@ -838,7 +988,7 @@ module.exports = (app) => {
             category: requestData?.category,
             manager: username,
             timestamp: new Date().toISOString()
-          });
+          }, false);
 
           return res.sendStatus(200);
         }
@@ -1008,8 +1158,8 @@ module.exports = (app) => {
               factDate: new Date().toISOString(),
               sum: state.sum,
               comment: state.comment,
-              photoUrl: state.photoUrl
-            });
+              photoCompleted: state.photoUrl
+            }, false);
 
             console.log(`Completion confirmed for ${stateKey} by ${confirmerUsername}, state cleared`);
             delete userStates[stateKey];
@@ -1098,7 +1248,7 @@ module.exports = (app) => {
             phone: requestData?.phone,
             category: requestData?.category,
             timestamp: new Date().toISOString()
-          });
+          }, false);
 
           await sendButtonsWithRetry(chatId, messageId, [], `Заявка #${row} отменена`);
 
@@ -1132,7 +1282,7 @@ module.exports = (app) => {
             phone: requestData?.phone,
             category: requestData?.category,
             timestamp: new Date().toISOString()
-          });
+          }, false);
 
           await sendButtonsWithRetry(chatId, messageId, [], `Заявка #${row} переведена в ожидание`);
 
@@ -1248,7 +1398,6 @@ module.exports = (app) => {
           }
 
           state.serviceMessages = [];
-          state.userMessages = [];
 
           // Определяем ТУ по пиццерии
           const pizzeria = state.originalRequest?.pizzeria;
@@ -1315,7 +1464,7 @@ module.exports = (app) => {
             phone: state.originalRequest?.phone,
             category: state.originalRequest?.category,
             timestamp: new Date().toISOString()
-          });
+          }, false);
 
           // Очищаем старые данные
           delete state.fileId;
@@ -1440,105 +1589,3 @@ module.exports = (app) => {
           state.pendingMessageId = pendingMsg?.data?.result?.message_id;
           state.photoMessageId = pendingMsg?.data?.result?.message_id;
 
-          // Уведомляем ТУ в ЛС
-          for (const tu of tuUsernames) {
-            const tuId = userStorage.get(tu);
-            if (tuId) {
-              await sendMessage(
-                tuId,
-                `📌 Заявка #${row} ожидает вашего подтверждения\n\n` +
-                `🍕 Пиццерия: ${state.originalRequest?.pizzeria || 'не указано'}\n` +
-                `🔧 Проблема: ${state.originalRequest?.problem || 'не указано'}\n` +
-                `💬 Комментарий: ${state.comment || 'нет комментария'}\n` +
-                `💰 Сумма: ${state.sum || '0'} сум\n` +
-                `👤 Исполнитель: ${state.username || '@Unknown'}\n` +
-                `📸 Фото: ${state.photoUrl || 'не указано'}\n\n` +
-                `⚠️ Подтвердите или верните на доработку`,
-                {
-                  parse_mode: 'HTML',
-                  reply_markup: {
-                    inline_keyboard: [
-                      [
-                        { text: '✅ Подтвердить', callback_data: `confirm:${row}` },
-                        { text: '🔄 Вернуть', callback_data: `return:${row}` }
-                      ]
-                    ]
-                  }
-                }
-              ).catch(e => console.error(`Error sending to TU ${tu}:`, e));
-            } else {
-              console.warn(`TU ID not found for ${tu}`);
-            }
-          }
-
-          // Обновляем статус в GAS
-          await sendToGAS({
-            row: state.row,
-            status: 'Ожидает подтверждения',
-            executor: state.username,
-            message_id: state.messageId,
-            isEmergency: state.isEmergency,
-            pizzeria: state.originalRequest?.pizzeria,
-            problem: state.originalRequest?.problem,
-            deadline: state.originalRequest?.deadline,
-            initiator: state.originalRequest?.initiator,
-            phone: state.originalRequest?.phone,
-            category: state.originalRequest?.category,
-            sum: state.sum,
-            comment: state.comment,
-            photoUrl: state.photoUrl,
-            timestamp: new Date().toISOString()
-          });
-
-          console.log(`State updated to pending_confirmation for ${stateKey}`);
-
-          // Добавляем таймаут для pending_confirmation (5 минут)
-          setTimeout(async () => {
-            try {
-              const currentState = userStates[stateKey];
-              if (currentState?.stage === 'pending_confirmation') {
-                await deleteMessageSafe(chatId, currentState.pendingMessageId);
-                for (const userMsgId of currentState.userMessages) {
-                  await deleteMessageSafe(chatId, userMsgId);
-                }
-                delete userStates[stateKey];
-                await sendMessage(chatId, '⏰ Время ожидания подтверждения истекло.', {
-                  reply_to_message_id: currentState.messageId
-                });
-                console.log(`Timeout triggered for ${stateKey} (pending_confirmation), state cleared`);
-                // Обновляем статус в GAS
-                await sendToGAS({
-                  row: currentState.row,
-                  status: 'Ожидает подтверждения (таймаут)',
-                  executor: currentState.username,
-                  message_id: currentState.messageId,
-                  isEmergency: currentState.isEmergency,
-                  pizzeria: currentState.originalRequest?.pizzeria,
-                  problem: currentState.originalRequest?.problem,
-                  deadline: currentState.originalRequest?.deadline,
-                  initiator: currentState.originalRequest?.initiator,
-                  phone: currentState.originalRequest?.phone,
-                  category: currentState.originalRequest?.category,
-                  sum: currentState.sum,
-                  comment: currentState.comment,
-                  photoUrl: currentState.photoUrl,
-                  timestamp: new Date().toISOString()
-                });
-              }
-            } catch (e) {
-              console.error(`Error handling confirmation timeout for ${stateKey}:`, e);
-            }
-          }, 300000); // 5 минут
-
-          return res.sendStatus(200);
-        }
-      }
-
-      return res.sendStatus(200);
-    } catch (error) {
-      console.error('Webhook error:', error.message, error.stack);
-      return res.sendStatus(500);
-    }
-  });
-};
-```
