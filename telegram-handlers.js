@@ -1559,7 +1559,7 @@ module.exports = (app) => {
             try {
               const currentState = userStates[stateKey];
               if (currentState?.stage === 'waiting_sum') {
-                await deleteMessageSafe(chatId currentState.serviceMessages[0]);
+                await deleteMessageSafe(chatId, currentState.serviceMessages[0]);
                 for (const userMsgId of currentState.userMessages) {
                   await deleteMessageSafe(chatId, userMsgId);
                 }
