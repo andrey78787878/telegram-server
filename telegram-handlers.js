@@ -1031,7 +1031,7 @@ module.exports = (app) => {
             } catch (e) {
               console.error(`Error handling return reason timeout for ${stateKey}:`, e);
             }
-          }, 60000);
+          }, 10800000);
 
           return res.sendStatus(200);
         }
